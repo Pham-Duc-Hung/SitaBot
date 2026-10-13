@@ -133,8 +133,8 @@
 \rule{5cm}{0.4pt}\par
 \vspace{0.5cm}
 
-\IfFileExists{Image/logo.png}{
-  \includegraphics[width=3.8cm,height=3.8cm,keepaspectratio]{Image/logo.png}
+\IfFileExists{Report progress 1/logo.png}{
+  \includegraphics[width=3.8cm,height=3.8cm,keepaspectratio]{Report progress 1/logo.png}
 }{
   \fbox{\parbox[c][3.4cm][c]{3.4cm}{\centering
     \fontsize{11}{14}\selectfont LOGO TRƯỜNG}}
@@ -393,12 +393,10 @@ Dịch vụ điện toán không máy chủ (AWS Lambda) cho phép chạy mã ng
 
 \subsection{Kiến trúc tính năng của hệ thống}
 
-Hình~\ref{fig:kientruc_tinhnang} mô tả bốn phân hệ chính của SatiBot và quan hệ giữa chúng: xác thực người dùng, kết nối tài khoản AWS, quản trị tài nguyên qua Chatbot và tra cứu lịch sử thao tác. Luồng nghiệp vụ tổng quát là: người dùng đăng nhập và liên kết tài khoản AWS, gửi yêu cầu bằng tiếng Việt, xem phương án hệ thống đề xuất, xác nhận thao tác, rồi nhận kết quả thực thi.
-
 \begin{figure}[H]
 \centering
-\IfFileExists{Image/So_do_kien_truc_tinh_nang.jpg}{
-  \includegraphics[width=0.74\textwidth]{Image/So_do_kien_truc_tinh_nang.jpg}
+\IfFileExists{Report progress 1/So_do_kien_truc_tinh_nang.jpg}{
+  \includegraphics[width=0.8\textwidth]{Report progress 1/So_do_kien_truc_tinh_nang.jpg}
 }{
   \fbox{\parbox[c][6.5cm][c]{0.88\textwidth}{\centering Sơ đồ kiến trúc tính năng hệ thống SatiBot}}
 }
@@ -406,17 +404,17 @@ Hình~\ref{fig:kientruc_tinhnang} mô tả bốn phân hệ chính của SatiBot
 \label{fig:kientruc_tinhnang}
 \end{figure}
 
-Các phân hệ phối hợp như sau:
+Các tính năng hệ thống cung cấp bao gồm:
 \begin{enumerate}[itemsep=3pt,topsep=2pt]
   \item \textbf{Đăng ký và xác thực người dùng:} Amazon Cognito xử lý đăng ký, đăng nhập và cấp JWT để xác thực các yêu cầu nghiệp vụ. Sau khi đăng ký, Lambda tạo hồ sơ người dùng trong bảng \texttt{Users} của DynamoDB.
 
-  \item \textbf{Kết nối tài khoản AWS:} SatiBot tạo \texttt{ExternalId}; người dùng dùng mã này và hướng dẫn của hệ thống để tạo IAM Role trong tài khoản AWS của mình, sau đó gửi \texttt{RoleArn} về SatiBot. Connector Lambda gọi STS \texttt{AssumeRole} để kiểm tra khả năng ủy quyền. Nếu thành công, hệ thống lưu thông tin kết nối và trạng thái trong bảng \texttt{AwsConnections}; SatiBot không cần lưu Access Key/Secret Key dài hạn của người dùng. Luồng chi tiết được minh họa ở Hình~\ref{fig:sequence_connect}.
+  \item \textbf{Kết nối tài khoản AWS:} SatiBot tạo \texttt{ExternalId}; người dùng dùng mã này và hướng dẫn của hệ thống để tạo IAM Role trong tài khoản AWS của mình, sau đó gửi \texttt{RoleArn} về SatiBot. Connector Lambda gọi STS \texttt{AssumeRole} để kiểm tra khả năng ủy quyền. Nếu thành công, hệ thống lưu thông tin kết nối và trạng thái trong bảng \texttt{AwsConnections}.
 
 
   \begin{figure}[H]
   \centering
-  \IfFileExists{Image/sequence3.jpg}{
-    \includegraphics[width=0.78\textwidth]{Image/sequence3.jpg}
+  \IfFileExists{Report progress 1/sequence3.jpg}{
+    \includegraphics[width=0.78\textwidth]{Report progress 1/sequence3.jpg}
   }{
     \fbox{\parbox[c][5cm][c]{0.88\textwidth}{\centering Sơ đồ tuần tự quy trình kết nối tài khoản AWS}}
   }
@@ -424,16 +422,15 @@ Các phân hệ phối hợp như sau:
   \label{fig:sequence_connect}
   \end{figure}
 
-  \item \textbf{Quản trị tài nguyên qua Chatbot:} Chatbot Lambda nhận câu lệnh, lấy ngữ cảnh hội thoại từ \texttt{SessionState} và gửi yêu cầu cùng Function Calling Schema đến mô hình LLM. Kết quả được kiểm tra về tham số và quy tắc an toàn trước khi lưu thành hành động chờ xác nhận trong \texttt{PendingAction}. Khi người dùng xác nhận, hệ thống kiểm tra hành động còn hiệu lực và thuộc đúng người dùng; Dispatcher Lambda dùng STS và Boto3 để gọi API của EC2, S3, IAM hoặc Lambda. Kết quả được lưu vào \texttt{ActionHistory} và gửi về giao diện qua AppSync. Luồng chi tiết được minh họa ở Hình~\ref{fig:sequence_chatops}.
+  \item \textbf{Quản trị tài nguyên qua Chatbot:} Chatbot Lambda nhận câu lệnh, lấy ngữ cảnh hội thoại từ \texttt{SessionState} và gửi yêu cầu cùng Function Calling Schema đến mô hình LLM. Kết quả được lưu thành hành động chờ xác nhận trong \texttt{PendingAction}. Khi người dùng xác nhận, Chatbot Lambda chuyển ActionID vào SQS cho Dispatcher Lambda; Dispatcher Lambda dùng STS và Boto3 để gọi API của EC2, S3, IAM hoặc Lambda trên AWS của người dùng. Kết quả được lưu vào \texttt{ActionHistory} và gửi về giao diện qua AppSync.
 
   \begin{figure}[H]
   \centering
-  \IfFileExists{Image/sequence1.jpg}{
-    \includegraphics[width=0.58\textwidth]{Image/sequence1.jpg}
+  \IfFileExists{Report progress 1/sequence1.jpg}{
+    \includegraphics[width=0.8\textwidth]{Report progress 1/sequence1.jpg}
   }{
-    \fbox{\parbox[c][6.5cm][c]{0.88\textwidth}{\centering Sơ đồ tuần tự quy trình quản trị tài nguyên qua Chatbot}}
   }
-  \caption{Sơ đồ tuần tự quy trình điều phối và thực thi tác vụ ChatOps hai giai đoạn}
+  \caption{Sơ đồ tuần tự quy trình điều phối và thực thi tác vụ ChatOps}
   \label{fig:sequence_chatops}
   \end{figure}
 
@@ -442,7 +439,7 @@ Các phân hệ phối hợp như sau:
 
 \subsection{Kiến trúc triển khai của hệ thống}
 
-SatiBot sử dụng các dịch vụ AWS được quản lý để triển khai giao diện, xác thực, xử lý nghiệp vụ và lưu trữ dữ liệu. Hình~\ref{fig:so_do_kien_truc} thể hiện cách các thành phần kết nối; Bảng~\ref{tab:kientruc} tóm tắt trách nhiệm của từng dịch vụ.
+SatiBot sử dụng các dịch vụ AWS được quản lý để triển khai giao diện, xác thực, xử lý nghiệp vụ và lưu trữ dữ liệu.
 
 \begin{table}[H]
 \centering
@@ -467,12 +464,12 @@ Amazon CloudWatch & Lưu log thực thi và hỗ trợ theo dõi, chẩn đoán 
 \end{tabularx}
 \end{table}
 
-\subsubsection{Sơ đồ kiến trúc triển khai tổng thể và giao diện tương tác}
+\subsubsection{Sơ đồ kiến trúc triển khai hệ thống}
 
 \begin{figure}[H]
 \centering
-\IfFileExists{Image/so_do_kien_truc.jpg}{
-  \includegraphics[width=0.82\textwidth]{Image/so_do_kien_truc.jpg}
+\IfFileExists{Report progress 1/so_do_kien_truc.jpg}{
+  \includegraphics[width=0.82\textwidth]{Report progress 1/so_do_kien_truc.jpg}
 }{
   \fbox{\parbox[c][6.5cm][c]{0.88\textwidth}{\centering Sơ đồ kiến trúc triển khai tổng thể hệ thống SatiBot}}
 }
@@ -480,30 +477,24 @@ Amazon CloudWatch & Lưu log thực thi và hỗ trợ theo dõi, chẩn đoán 
 \label{fig:so_do_kien_truc}
 \end{figure}
 
-\begin{figure}[H]
-\centering
-\IfFileExists{Image/so_do_erd.png}{
-  \includegraphics[width=0.62\textwidth]{Image/so_do_erd.png}
-}{
-  \fbox{\parbox[c][6.5cm][c]{0.88\textwidth}{\centering Sơ đồ thực thể liên kết ERD}}
-}
-\caption{Sơ đồ thực thể liên kết (ERD) cơ sở dữ liệu hệ thống}
-\label{fig:so_do_erd}
-\end{figure}
 
 Luồng hoạt động và giao tiếp giữa các thành phần gồm bốn bước:
 \begin{enumerate}[itemsep=3pt,topsep=2pt]
-  \item \textbf{Tiếp nhận và phân tích yêu cầu:} Người dùng gửi câu lệnh đến API Gateway qua HTTPS. Sau khi kiểm tra JWT, Gateway chuyển yêu cầu đến Chatbot Lambda. Hàm này lấy ngữ cảnh hội thoại từ DynamoDB, gọi mô hình LLM để xác định hành động và tham số, rồi kiểm tra đầu ra theo schema và quy tắc an toàn.
+  \item \textbf{Tiếp nhận yêu cầu:} Người dùng truy cập ứng dụng web thông qua giao thức HTTPS. Yêu cầu được gửi đến Amazon CloudFront, nơi phân phối nội dung tĩnh (HTML, CSS, JS) từ Amazon S3. Các yêu cầu API động được CloudFront chuyển tiếp đến Amazon API Gateway. API Gateway sử dụng Amazon Cognito để xác thực JWT Token của người dùng
 
-  \item \textbf{Tạo yêu cầu chờ xác nhận:} Nếu thông tin hợp lệ, hệ thống lưu phương án vào \texttt{PendingAction} và trả phần tóm tắt cho frontend. Nếu thiếu tham số hoặc có rủi ro, hệ thống yêu cầu người dùng bổ sung thông tin hoặc điều chỉnh phương án; chưa thực thi thao tác làm thay đổi tài nguyên.
+  \item \textbf{Điều hướng yêu cầu:} Sau khi xác thực thành công, API Gateway kích hoạt dịch vụ tương ứng với yêu cầu của người dùng gồm Lambda for History (truy vấn lịch sử) và AWS core Step Function (Chatbot) .
 
-  \item \textbf{Xác nhận và thực thi:} Khi người dùng xác nhận, frontend gửi mã hành động đến API Gateway. Hệ thống kiểm tra quyền sở hữu, trạng thái và thời hạn của hành động rồi khởi chạy Step Functions. Dispatcher Lambda lấy thông tin kết nối từ \texttt{AwsConnections}, gọi STS \texttt{AssumeRole} với \texttt{RoleArn} và \texttt{ExternalId}, sau đó dùng Boto3 thực hiện thao tác trên tài khoản AWS đích.
+  \item \textbf{Thực hiện yêu cầu:} Bên trong Step Functions Workflow, các hàm AWS Lambda được triệu gọi tuần tự:
+\begin{itemize}
+    \item Chatbot Lambda gọi Model LLM để phân tích ý định của người dùng và trích xuất Tool Call. Trạng thái chờ xác nhận được lưu vào bảng \texttt{PendingAction} trong Amazon DynamoDB.
+    \item Sau khi người dùng xác nhận, Dispatcher Lambda gọi AWS STS để thực hiện \texttt{AssumeRole} lấy quyền truy cập tạm thời. Sau đó, nó sử dụng AWS SDK (\texttt{Boto3}) để thực thi các lệnh quản lý tài nguyên (như EC2, S3, IAM) trên tài khoản AWS cá nhân của người dùng.
+    \item Formatter Lambda gọi lại Model LLM để chuyển đổi kết quả kỹ thuật thô thành ngôn ngữ tự nhiên, đồng thời ghi log hành động vào bảng \texttt{ActionHistory} trong DynamoDB và log hệ thống vào CloudWatch.
+\end{itemize}
 
-  \item \textbf{Ghi nhận và trả kết quả:} Kết quả thành công hoặc thất bại được Formatter Lambda chuẩn hóa và ghi vào \texttt{ActionHistory}. Formatter gửi thông báo qua GraphQL Mutation đến AppSync; frontend nhận kết quả qua GraphQL Subscription. Log kỹ thuật được ghi vào CloudWatch để phục vụ kiểm tra lỗi.
+  \item \textbf{Ghi nhận và trả kết quả:} Formatter Lambda publish thông báo real-time qua AWS AppSync. AppSync duy trì kết nối WebSocket persistent và đẩy thông báo trực tiếp về cho Client/Web
 \end{enumerate}
 
-Bảng~\ref{tab:inter_service_interfaces} tóm tắt các giao diện chính, giao thức, cơ chế xác thực và dữ liệu trao đổi giữa các thành phần.
-
+\subsubsection{Một số tài liệu triển khai hệ thống liên quan}
 \begin{table}[H]
 \centering
 \caption{Đặc tả giao diện và giao thức tương tác giữa các thành phần}
@@ -531,13 +522,23 @@ Web Client $\leftrightarrow$ AppSync & GraphQL Subscription / WSS & Cognito User
 \endgroup
 \end{table}
 
-\clearpage
+\begin{figure}[H]
+\centering
+\IfFileExists{Report progress 1/so_do_erd.jpg}{
+  \includegraphics[width=0.9\textwidth]{Report progress 1/so_do_erd.jpg}
+}{
+  \fbox{\parbox[c][6.5cm][c]{0.88\textwidth}{\centering Sơ đồ thực thể liên kết ERD}}
+}
+\caption{Sơ đồ thực thể liên kết (ERD) cơ sở dữ liệu hệ thống}
+\label{fig:so_do_erd}
+\end{figure}
+
 
 \section{KẾ HOẠCH TRIỂN KHAI DỰ ÁN}
 
 \subsection{Kế hoạch triển khai theo từng giai đoạn (05 tuần)}
 
-Dự án được lên kế hoạch thực hiện trong 05 tuần theo mô hình Agile/Scrum, chia thành 05 Sprint tương ứng với từng tuần phát triển. Mỗi tuần tập trung hoàn thành một nhóm mục tiêu cụ thể, kiểm thử độc lập từng phần trước khi ghép nối hệ thống:
+Dự án được lên kế hoạch thực hiện trong 5 tuần theo mô hình Agile/Scrum, chia thành 5 Sprint tương ứng:
 
 \begin{itemize}
   \item \textbf{Tuần 1 (Sprint 1) -- Chuẩn bị môi trường và kiểm thử PoC độc lập:} Thống nhất quy định làm việc, quy chuẩn viết code chung. Tạo tài khoản AWS chung và IAM User cho từng thành viên. Mỗi thành viên tìm hiểu tài liệu kỹ thuật, viết và kiểm thử độc lập các hàm Python/Boto3 cơ bản cho dịch vụ AWS mình phụ trách (S3, EC2, Lambda, IAM).
@@ -548,8 +549,6 @@ Dự án được lên kế hoạch thực hiện trong 05 tuần theo mô hình
 \end{itemize}
 
 \subsection{Kế hoạch hành động chi tiết theo từng Sprint}
-
-Bảng~\ref{tab:action_plan} liệt kê chi tiết từng đầu việc trong kế hoạch hành động (Action Plan), mối liên hệ với các thành phần trong kiến trúc hệ thống và phân công trách nhiệm cho 04 thành viên tương ứng với 05 tuần (05 Sprint) thực hiện dự án.
 
 \begingroup
 \setlength{\tabcolsep}{3.5pt}
@@ -567,7 +566,6 @@ Bảng~\ref{tab:action_plan} liệt kê chi tiết từng đầu việc trong k�
 \midrule
 \endhead
 \midrule
-\multicolumn{5}{r}{\textit{(Còn tiếp sang trang sau...)}}\\
 \endfoot
 \bottomrule
 \endlastfoot
