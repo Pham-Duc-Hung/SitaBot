@@ -1,0 +1,11 @@
+name: Deploy SatiBot Infrastructure
+
+on:
+  push:
+    branches:
+      - main  # Chạy pipeline này khi có code mới push vào nhánh main
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
