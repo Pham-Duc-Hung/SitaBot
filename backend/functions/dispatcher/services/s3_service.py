@@ -66,6 +66,37 @@ def _create_bucket(client, bucket_name, region):
         },
     }
 
+def _create_presigned_download(
+    client,
+    bucket_name,
+    object_key,
+    expires_in,
+):
+    """
+    Tạo URL tải object S3 có thời hạn.
+
+    Hàm này không làm bucket hoặc object trở thành public.
+    """
+    url = client.generate_presigned_url(
+        ClientMethod="get_object",
+        Params={
+            "Bucket": bucket_name,
+            "Key": object_key,
+        },
+        ExpiresIn=expires_in,
+    )
+
+    return {
+        "ok": True,
+        "service": "s3",
+        "action": "create_presigned_download",
+        "data": {
+            "bucket_name": bucket_name,
+            "object_key": object_key,
+            "expires_in": expires_in,
+            "url": url,
+        },
+    }
 
 def execute(credentials, params):
     """
@@ -89,7 +120,12 @@ def execute(credentials, params):
     action = params.get("action")
     region = params.get("region", "us-east-2")
 
-    if action != "create_bucket":
+    supported_actions = {
+        "create_bucket",
+        "create_presigned_download",
+    }
+
+    if action not in supported_actions:
         return {
             "ok": False,
             "service": "s3",
@@ -113,9 +149,52 @@ def execute(credentials, params):
             },
         }
 
+    if action == "create_presigned_download":
+        object_key = params.get("object_key")
+        expires_in = params.get("expires_in", 900)
+
+        if not object_key:
+            return {
+                "ok": False,
+                "service": "s3",
+                "action": action,
+                "error": {
+                    "code": "MissingObjectKey",
+                    "message": "Thiếu tham số object_key.",
+                },
+            }
+
+        if (
+            not isinstance(expires_in, int)
+            or isinstance(expires_in, bool)
+            or expires_in <= 0
+        ):
+            return {
+                "ok": False,
+                "service": "s3",
+                "action": action,
+                "error": {
+                    "code": "InvalidExpiration",
+                    "message": "expires_in phải là số nguyên dương.",
+                },
+            }
+
     try:
         client = _create_s3_client(credentials, region)
-        return _create_bucket(client, bucket_name, region)
+
+        if action == "create_bucket":
+            return _create_bucket(
+                client,
+                bucket_name,
+                region,
+            )
+
+        return _create_presigned_download(
+            client,
+            bucket_name,
+            object_key,
+            expires_in,
+        )
 
     except ClientError as error:
         error_details = error.response.get("Error", {})

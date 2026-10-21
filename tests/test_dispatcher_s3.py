@@ -201,3 +201,141 @@ def test_uses_temporary_sts_credentials(mock_boto3_client):
 
     assert result["ok"] is True
 
+
+
+
+@patch("backend.functions.dispatcher.services.s3_service.boto3.client")
+def test_create_presigned_download_url(mock_boto3_client):
+    mock_s3_client = Mock()
+    mock_boto3_client.return_value = mock_s3_client
+
+    mock_s3_client.generate_presigned_url.return_value = (
+        "https://example.com/signed-download-url"
+    )
+
+    params = {
+        "action": "create_presigned_download",
+        "bucket_name": "sitabot-hung-test-a1b2c3",
+        "object_key": "documents/report.pdf",
+        "expires_in": 900,
+        "region": "us-east-2",
+    }
+
+    result = execute(credentials=None, params=params)
+
+    mock_boto3_client.assert_called_once_with(
+        "s3",
+        region_name="us-east-2",
+    )
+
+    mock_s3_client.generate_presigned_url.assert_called_once_with(
+        ClientMethod="get_object",
+        Params={
+            "Bucket": "sitabot-hung-test-a1b2c3",
+            "Key": "documents/report.pdf",
+        },
+        ExpiresIn=900,
+    )
+
+    assert result == {
+        "ok": True,
+        "service": "s3",
+        "action": "create_presigned_download",
+        "data": {
+            "bucket_name": "sitabot-hung-test-a1b2c3",
+            "object_key": "documents/report.pdf",
+            "expires_in": 900,
+            "url": "https://example.com/signed-download-url",
+        },
+    }
+
+
+
+
+@patch("backend.functions.dispatcher.services.s3_service.boto3.client")
+def test_presigned_download_requires_object_key(mock_boto3_client):
+    params = {
+        "action": "create_presigned_download",
+        "bucket_name": "sitabot-hung-test-a1b2c3",
+        "expires_in": 900,
+        "region": "us-east-2",
+    }
+
+    result = execute(credentials=None, params=params)
+
+    assert result == {
+        "ok": False,
+        "service": "s3",
+        "action": "create_presigned_download",
+        "error": {
+            "code": "MissingObjectKey",
+            "message": "Thiếu tham số object_key.",
+        },
+    }
+
+    # Thiếu dữ liệu thì không được tạo AWS client
+    mock_boto3_client.assert_not_called()
+
+
+@patch("backend.functions.dispatcher.services.s3_service.boto3.client")
+def test_presigned_download_rejects_invalid_expiration(
+    mock_boto3_client,
+):
+    params = {
+        "action": "create_presigned_download",
+        "bucket_name": "sitabot-hung-test-a1b2c3",
+        "object_key": "documents/report.pdf",
+        "expires_in": 0,
+        "region": "us-east-2",
+    }
+
+    result = execute(credentials=None, params=params)
+
+    assert result == {
+        "ok": False,
+        "service": "s3",
+        "action": "create_presigned_download",
+        "error": {
+            "code": "InvalidExpiration",
+            "message": "expires_in phải là số nguyên dương.",
+        },
+    }
+
+    mock_boto3_client.assert_not_called()
+
+
+@patch("backend.functions.dispatcher.services.s3_service.boto3.client")
+def test_handles_presigned_download_aws_error(mock_boto3_client):
+    mock_s3_client = Mock()
+    mock_boto3_client.return_value = mock_s3_client
+
+    mock_s3_client.generate_presigned_url.side_effect = ClientError(
+        error_response={
+            "Error": {
+                "Code": "AccessDenied",
+                "Message": "Access denied to the requested object.",
+            }
+        },
+        operation_name="GetObject",
+    )
+
+    params = {
+        "action": "create_presigned_download",
+        "bucket_name": "sitabot-hung-test-a1b2c3",
+        "object_key": "private/report.pdf",
+        "expires_in": 900,
+        "region": "us-east-2",
+    }
+
+    result = execute(credentials=None, params=params)
+
+    assert result == {
+        "ok": False,
+        "service": "s3",
+        "action": "create_presigned_download",
+        "error": {
+            "code": "AccessDenied",
+            "message": "Access denied to the requested object.",
+        },
+    }
+
