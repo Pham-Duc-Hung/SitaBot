@@ -339,3 +339,79 @@ def test_handles_presigned_download_aws_error(mock_boto3_client):
         },
     }
 
+
+
+
+@patch("backend.functions.dispatcher.services.s3_service.boto3.client")
+def test_block_public_access_for_existing_bucket(mock_boto3_client):
+    mock_s3_client = Mock()
+    mock_boto3_client.return_value = mock_s3_client
+
+    params = {
+        "action": "block_public_access",
+        "bucket_name": "sitabot-hung-existing-bucket",
+        "region": "us-east-2",
+    }
+
+    result = execute(credentials=None, params=params)
+
+    mock_boto3_client.assert_called_once_with(
+        "s3",
+        region_name="us-east-2",
+    )
+
+    mock_s3_client.put_public_access_block.assert_called_once_with(
+        Bucket="sitabot-hung-existing-bucket",
+        PublicAccessBlockConfiguration={
+            "BlockPublicAcls": True,
+            "IgnorePublicAcls": True,
+            "BlockPublicPolicy": True,
+            "RestrictPublicBuckets": True,
+        },
+    )
+
+    assert result == {
+        "ok": True,
+        "service": "s3",
+        "action": "block_public_access",
+        "data": {
+            "bucket_name": "sitabot-hung-existing-bucket",
+            "public_access_blocked": True,
+        },
+    }
+
+
+@patch("backend.functions.dispatcher.services.s3_service.boto3.client")
+def test_handles_block_public_access_denied(mock_boto3_client):
+    mock_s3_client = Mock()
+    mock_boto3_client.return_value = mock_s3_client
+
+    mock_s3_client.put_public_access_block.side_effect = ClientError(
+        error_response={
+            "Error": {
+                "Code": "AccessDenied",
+                "Message": "User is not authorized to block public access.",
+            }
+        },
+        operation_name="PutPublicAccessBlock",
+    )
+
+    params = {
+        "action": "block_public_access",
+        "bucket_name": "sitabot-hung-existing-bucket",
+        "region": "us-east-2",
+    }
+
+    result = execute(credentials=None, params=params)
+
+    assert result == {
+        "ok": False,
+        "service": "s3",
+        "action": "block_public_access",
+        "error": {
+            "code": "AccessDenied",
+            "message": (
+                "User is not authorized to block public access."
+            ),
+        },
+    }

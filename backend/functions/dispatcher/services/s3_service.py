@@ -27,6 +27,19 @@ def _create_s3_client(credentials, region):
 
     return boto3.client("s3", **client_options)
 
+def _apply_public_access_block(client, bucket_name):
+    """
+    Chặn toàn bộ hình thức cấp quyền public cho bucket.
+    """
+    client.put_public_access_block(
+        Bucket=bucket_name,
+        PublicAccessBlockConfiguration={
+            "BlockPublicAcls": True,
+            "IgnorePublicAcls": True,
+            "BlockPublicPolicy": True,
+            "RestrictPublicBuckets": True,
+        },
+    )
 
 def _create_bucket(client, bucket_name, region):
     """
@@ -45,15 +58,7 @@ def _create_bucket(client, bucket_name, region):
 
     client.create_bucket(**create_options)
 
-    client.put_public_access_block(
-        Bucket=bucket_name,
-        PublicAccessBlockConfiguration={
-            "BlockPublicAcls": True,
-            "IgnorePublicAcls": True,
-            "BlockPublicPolicy": True,
-            "RestrictPublicBuckets": True,
-        },
-    )
+    _apply_public_access_block(client, bucket_name)
 
     return {
         "ok": True,
@@ -62,6 +67,22 @@ def _create_bucket(client, bucket_name, region):
         "data": {
             "bucket_name": bucket_name,
             "region": region,
+            "public_access_blocked": True,
+        },
+    }
+
+def _block_public_access(client, bucket_name):
+    """
+    Bật Block Public Access cho một bucket đã tồn tại.
+    """
+    _apply_public_access_block(client, bucket_name)
+
+    return {
+        "ok": True,
+        "service": "s3",
+        "action": "block_public_access",
+        "data": {
+            "bucket_name": bucket_name,
             "public_access_blocked": True,
         },
     }
@@ -123,6 +144,7 @@ def execute(credentials, params):
     supported_actions = {
         "create_bucket",
         "create_presigned_download",
+        "block_public_access",
     }
 
     if action not in supported_actions:
@@ -187,6 +209,12 @@ def execute(credentials, params):
                 client,
                 bucket_name,
                 region,
+            )
+
+        if action == "block_public_access":
+            return _block_public_access(
+                client,
+                bucket_name,
             )
 
         return _create_presigned_download(
