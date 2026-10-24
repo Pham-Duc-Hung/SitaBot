@@ -297,6 +297,11 @@ def test_create_presigned_download_url(mock_boto3_client):
         config=ANY,
     )
 
+    mock_s3_client.head_object.assert_called_once_with(
+        Bucket="sitabot-hung-test-a1b2c3",
+        Key="documents/report.pdf",
+    )
+
     mock_s3_client.generate_presigned_url.assert_called_once_with(
         ClientMethod="get_object",
         Params={
@@ -366,11 +371,113 @@ def test_presigned_download_rejects_invalid_expiration(
         "action": "create_presigned_download",
         "error": {
             "code": "InvalidExpiration",
-            "message": "expires_in phải là số nguyên dương.",
+            "message": (
+                "expires_in phải là số nguyên từ 1 đến 604800 giây "
+                "(tối đa 7 ngày)."
+            ),
         },
     }
 
     mock_boto3_client.assert_not_called()
+
+
+@patch("backend.functions.dispatcher.services.s3_service.boto3.client")
+def test_presigned_download_rejects_expiration_over_seven_days(
+    mock_boto3_client,
+):
+    result = execute(
+        credentials=None,
+        params={
+            "action": "create_presigned_download",
+            "bucket_name": "sitabot-hung-test-a1b2c3",
+            "object_key": "documents/report.pdf",
+            "expires_in": 604801,
+            "region": "us-east-2",
+        },
+    )
+
+    assert result["ok"] is False
+    assert result["error"]["code"] == "InvalidExpiration"
+    mock_boto3_client.assert_not_called()
+
+
+@patch("backend.functions.dispatcher.services.s3_service.boto3.client")
+def test_presigned_download_rejects_missing_object(mock_boto3_client):
+    mock_s3_client = Mock()
+    mock_boto3_client.return_value = mock_s3_client
+    mock_s3_client.head_object.side_effect = ClientError(
+        error_response={
+            "Error": {
+                "Code": "404",
+                "Message": "Not Found",
+            }
+        },
+        operation_name="HeadObject",
+    )
+
+    result = execute(
+        credentials=None,
+        params={
+            "action": "create_presigned_download",
+            "bucket_name": "sitabot-hung-test-a1b2c3",
+            "object_key": "documents/missing.pdf",
+            "expires_in": 900,
+            "region": "us-east-2",
+        },
+    )
+
+    assert result == {
+        "ok": False,
+        "service": "s3",
+        "action": "create_presigned_download",
+        "error": {
+            "code": "ObjectNotFound",
+            "message": (
+                "Không tìm thấy object 'documents/missing.pdf' trong bucket "
+                "'sitabot-hung-test-a1b2c3'."
+            ),
+        },
+    }
+    mock_s3_client.generate_presigned_url.assert_not_called()
+
+
+@patch("backend.functions.dispatcher.services.s3_service.boto3.client")
+def test_presigned_download_preserves_head_object_access_denied(
+    mock_boto3_client,
+):
+    mock_s3_client = Mock()
+    mock_boto3_client.return_value = mock_s3_client
+    mock_s3_client.head_object.side_effect = ClientError(
+        error_response={
+            "Error": {
+                "Code": "AccessDenied",
+                "Message": "Not allowed to read this object.",
+            }
+        },
+        operation_name="HeadObject",
+    )
+
+    result = execute(
+        credentials=None,
+        params={
+            "action": "create_presigned_download",
+            "bucket_name": "sitabot-hung-test-a1b2c3",
+            "object_key": "documents/private.pdf",
+            "expires_in": 900,
+            "region": "us-east-2",
+        },
+    )
+
+    assert result == {
+        "ok": False,
+        "service": "s3",
+        "action": "create_presigned_download",
+        "error": {
+            "code": "AccessDenied",
+            "message": "Not allowed to read this object.",
+        },
+    }
+    mock_s3_client.generate_presigned_url.assert_not_called()
 
 
 @patch("backend.functions.dispatcher.services.s3_service.boto3.client")

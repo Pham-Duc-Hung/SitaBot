@@ -46,6 +46,7 @@ S3_STORAGE_RATES_US_EAST_2 = {
 }
 
 BYTES_PER_GB = Decimal("1000000000")
+MAX_PRESIGNED_URL_EXPIRATION_SECONDS = 7 * 24 * 60 * 60
 
 RESERVED_BUCKET_NAME_PREFIXES = (
     "xn--",
@@ -692,6 +693,31 @@ def _create_presigned_download(
 
     Hàm này không làm bucket hoặc object trở thành public.
     """
+    try:
+        client.head_object(
+            Bucket=bucket_name,
+            Key=object_key,
+        )
+    except ClientError as error:
+        error_details = error.response.get("Error", {})
+        error_code = error_details.get("Code")
+
+        if error_code in {"404", "NoSuchKey", "NotFound"}:
+            return {
+                "ok": False,
+                "service": "s3",
+                "action": "create_presigned_download",
+                "error": {
+                    "code": "ObjectNotFound",
+                    "message": (
+                        f"Không tìm thấy object '{object_key}' trong bucket "
+                        f"'{bucket_name}'."
+                    ),
+                },
+            }
+
+        raise
+
     url = client.generate_presigned_url(
         ClientMethod="get_object",
         Params={
@@ -806,7 +832,7 @@ def execute(credentials, params):
         if (
             not isinstance(expires_in, int)
             or isinstance(expires_in, bool)
-            or expires_in <= 0
+            or not 1 <= expires_in <= MAX_PRESIGNED_URL_EXPIRATION_SECONDS
         ):
             return {
                 "ok": False,
@@ -814,7 +840,10 @@ def execute(credentials, params):
                 "action": action,
                 "error": {
                     "code": "InvalidExpiration",
-                    "message": "expires_in phải là số nguyên dương.",
+                    "message": (
+                        "expires_in phải là số nguyên từ 1 đến 604800 giây "
+                        "(tối đa 7 ngày)."
+                    ),
                 },
             }
 

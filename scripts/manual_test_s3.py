@@ -204,6 +204,27 @@ def main():
             raise RuntimeError(
                 "Direct Boto3 download returned incorrect content."
             )
+
+        print("4.2. Rejecting a presigned URL for a missing object...")
+
+        missing_object_result = execute(
+            credentials=None,
+            params={
+                "action": "create_presigned_download",
+                "bucket_name": bucket_name,
+                "object_key": "missing-object.txt",
+                "expires_in": 900,
+                "region": REGION,
+            },
+        )
+
+        if missing_object_result.get("error", {}).get("code") != (
+            "ObjectNotFound"
+        ):
+            raise RuntimeError(
+                "A missing object was not rejected before URL generation."
+            )
+
         print("5. Creating a presigned download URL...")
 
         presigned_result = execute(
