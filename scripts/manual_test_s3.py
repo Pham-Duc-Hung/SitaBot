@@ -263,7 +263,43 @@ def main():
                 "Downloaded content does not match uploaded content."
             )
 
-        print("7. Applying and verifying an S3 Lifecycle Rule...")
+        print("7. Calculating S3 storage analytics...")
+
+        analytics_result = execute(
+            credentials=None,
+            params={
+                "action": "get_storage_analytics",
+                "bucket_name": bucket_name,
+                "region": REGION,
+            },
+        )
+        analytics_data = require_success(analytics_result)
+
+        if analytics_data["current_object_count"] != 1:
+            raise RuntimeError(
+                "Storage Analytics did not count the demo object."
+            )
+
+        if analytics_data["total_stored_size_bytes"] != len(OBJECT_CONTENT):
+            raise RuntimeError(
+                "Storage Analytics returned an incorrect stored size."
+            )
+
+        standard_storage = next(
+            (
+                item
+                for item in analytics_data["storage_classes"]
+                if item["storage_class"] == "STANDARD"
+            ),
+            None,
+        )
+
+        if standard_storage is None or standard_storage["object_count"] != 1:
+            raise RuntimeError(
+                "Storage Analytics did not group the object as STANDARD."
+            )
+
+        print("8. Applying and verifying an S3 Lifecycle Rule...")
 
         lifecycle_rule_id = "sitabot-test-standard-ia-transition"
         lifecycle_result = execute(
@@ -306,7 +342,7 @@ def main():
                 f"Unexpected Lifecycle transition: {transition}"
             )
 
-        print("8. Inspecting the bucket before safe deletion...")
+        print("9. Inspecting the bucket before safe deletion...")
 
         inspect_result = execute(
             credentials=None,
@@ -343,7 +379,7 @@ def main():
                 "Safe deletion accepted an invalid confirmation."
             )
 
-        print("9. Deleting the test bucket with explicit confirmation...")
+        print("10. Deleting the test bucket with explicit confirmation...")
 
         delete_result = execute(
             credentials=None,

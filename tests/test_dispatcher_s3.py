@@ -84,6 +84,68 @@ def test_create_bucket_requires_bucket_name(mock_boto3_client):
 
 
 @patch("backend.functions.dispatcher.services.s3_service.boto3.client")
+def test_create_bucket_rejects_invalid_names_before_calling_aws(
+    mock_boto3_client,
+):
+    invalid_names = {
+        "ab": "dài từ 3 đến 63",
+        "a" * 64: "dài từ 3 đến 63",
+        "My-Bucket": "chữ thường",
+        "bucket_name": "chữ thường",
+        "-bucket": "bắt đầu",
+        "bucket-": "kết thúc",
+        "bucket..name": "hai dấu chấm liên tiếp",
+        "192.168.1.1": "địa chỉ IPv4",
+        "xn--bucket": "prefix dành riêng",
+        "sthree-bucket": "prefix dành riêng",
+        "bucket-s3alias": "suffix dành riêng",
+        "bucket--ol-s3": "suffix dành riêng",
+        "bucket.mrap": "suffix dành riêng",
+        "bucket--x-s3": "suffix dành riêng",
+        "bucket--table-s3": "suffix dành riêng",
+    }
+
+    for bucket_name, expected_message_part in invalid_names.items():
+        result = execute(
+            credentials=None,
+            params={
+                "action": "create_bucket",
+                "bucket_name": bucket_name,
+                "region": "us-east-2",
+            },
+        )
+
+        assert result["ok"] is False
+        assert result["error"]["code"] == "InvalidBucketName"
+        assert result["error"]["details"]["bucket_name"] == bucket_name
+        assert any(
+            expected_message_part in violation
+            for violation in result["error"]["details"]["violations"]
+        )
+
+    mock_boto3_client.assert_not_called()
+
+
+@patch("backend.functions.dispatcher.services.s3_service.boto3.client")
+def test_create_bucket_rejects_non_string_name(mock_boto3_client):
+    result = execute(
+        credentials=None,
+        params={
+            "action": "create_bucket",
+            "bucket_name": 12345,
+            "region": "us-east-2",
+        },
+    )
+
+    assert result["ok"] is False
+    assert result["error"]["code"] == "InvalidBucketName"
+    assert result["error"]["details"]["violations"] == [
+        "Tên bucket phải là một chuỗi."
+    ]
+    mock_boto3_client.assert_not_called()
+
+
+@patch("backend.functions.dispatcher.services.s3_service.boto3.client")
 def test_rejects_unsupported_action(mock_boto3_client):
     params = {
         "action": "delete_everything",
@@ -1008,3 +1070,226 @@ def test_put_lifecycle_rule_handles_access_denied(mock_boto3_client):
         },
     }
     mock_s3_client.put_bucket_lifecycle_configuration.assert_not_called()
+
+
+@patch("backend.functions.dispatcher.services.s3_service.boto3.client")
+def test_get_storage_analytics_groups_current_objects(
+    mock_boto3_client,
+):
+    mock_s3_client = Mock()
+    mock_boto3_client.return_value = mock_s3_client
+    _configure_bucket_inventory(
+        mock_s3_client,
+        object_pages=[
+            {
+                "Contents": [
+                    {
+                        "Key": "document.txt",
+                        "Size": 1_000_000_000,
+                    },
+                    {
+                        "Key": "archive.zip",
+                        "Size": 2_000_000_000,
+                        "StorageClass": "STANDARD_IA",
+                    },
+                ]
+            }
+        ],
+        version_pages=[{}],
+    )
+
+    result = execute(
+        credentials=None,
+        params={
+            "action": "get_storage_analytics",
+            "bucket_name": "sitabot-analytics-test",
+            "region": "us-east-2",
+        },
+    )
+
+    assert result == {
+        "ok": True,
+        "service": "s3",
+        "action": "get_storage_analytics",
+        "data": {
+            "bucket_name": "sitabot-analytics-test",
+            "prefix": "",
+            "current_object_count": 2,
+            "current_size_bytes": 3_000_000_000,
+            "version_count": 0,
+            "noncurrent_version_count": 0,
+            "delete_marker_count": 0,
+            "total_stored_size_bytes": 3_000_000_000,
+            "total_stored_size_gb": 3.0,
+            "storage_classes": [
+                {
+                    "storage_class": "STANDARD",
+                    "object_count": 1,
+                    "size_bytes": 1_000_000_000,
+                    "size_gb": 1.0,
+                    "rate_usd_per_gb_month": 0.023,
+                    "estimated_monthly_storage_cost_usd": 0.023,
+                },
+                {
+                    "storage_class": "STANDARD_IA",
+                    "object_count": 1,
+                    "size_bytes": 2_000_000_000,
+                    "size_gb": 2.0,
+                    "rate_usd_per_gb_month": 0.0125,
+                    "estimated_monthly_storage_cost_usd": 0.025,
+                },
+            ],
+            "estimated_monthly_storage_cost_usd": 0.048,
+            "cost_estimate_complete": True,
+            "unpriced_storage_classes": [],
+            "pricing_basis": {
+                "rate_region": "us-east-2",
+                "currency": "USD",
+                "unit": "GB-month",
+                "scope": "storage-only first-tier reference estimate",
+            },
+        },
+    }
+
+
+@patch("backend.functions.dispatcher.services.s3_service.boto3.client")
+def test_get_storage_analytics_includes_noncurrent_versions(
+    mock_boto3_client,
+):
+    mock_s3_client = Mock()
+    mock_boto3_client.return_value = mock_s3_client
+    _configure_bucket_inventory(
+        mock_s3_client,
+        object_pages=[
+            {
+                "Contents": [
+                    {
+                        "Key": "report.pdf",
+                        "Size": 1_000_000_000,
+                    }
+                ]
+            }
+        ],
+        version_pages=[
+            {
+                "Versions": [
+                    {
+                        "Key": "report.pdf",
+                        "VersionId": "v2",
+                        "IsLatest": True,
+                        "Size": 1_000_000_000,
+                        "StorageClass": "STANDARD",
+                    },
+                    {
+                        "Key": "report.pdf",
+                        "VersionId": "v1",
+                        "IsLatest": False,
+                        "Size": 2_000_000_000,
+                        "StorageClass": "GLACIER",
+                    },
+                ],
+                "DeleteMarkers": [
+                    {"Key": "old.txt", "VersionId": "d1"}
+                ],
+            }
+        ],
+    )
+
+    result = execute(
+        credentials=None,
+        params={
+            "action": "get_storage_analytics",
+            "bucket_name": "sitabot-versioned-analytics",
+            "region": "us-east-2",
+        },
+    )
+
+    data = result["data"]
+    assert result["ok"] is True
+    assert data["current_object_count"] == 1
+    assert data["current_size_bytes"] == 1_000_000_000
+    assert data["version_count"] == 2
+    assert data["noncurrent_version_count"] == 1
+    assert data["delete_marker_count"] == 1
+    assert data["total_stored_size_bytes"] == 3_000_000_000
+    assert data["estimated_monthly_storage_cost_usd"] == 0.0302
+    assert data["storage_classes"] == [
+        {
+            "storage_class": "GLACIER",
+            "object_count": 1,
+            "size_bytes": 2_000_000_000,
+            "size_gb": 2.0,
+            "rate_usd_per_gb_month": 0.0036,
+            "estimated_monthly_storage_cost_usd": 0.0072,
+        },
+        {
+            "storage_class": "STANDARD",
+            "object_count": 1,
+            "size_bytes": 1_000_000_000,
+            "size_gb": 1.0,
+            "rate_usd_per_gb_month": 0.023,
+            "estimated_monthly_storage_cost_usd": 0.023,
+        },
+    ]
+
+
+@patch("backend.functions.dispatcher.services.s3_service.boto3.client")
+def test_get_storage_analytics_passes_prefix_to_both_listings(
+    mock_boto3_client,
+):
+    mock_s3_client = Mock()
+    mock_boto3_client.return_value = mock_s3_client
+    objects_paginator = Mock()
+    objects_paginator.paginate.return_value = [{}]
+    versions_paginator = Mock()
+    versions_paginator.paginate.return_value = [{}]
+    mock_s3_client.get_paginator.side_effect = [
+        objects_paginator,
+        versions_paginator,
+    ]
+
+    result = execute(
+        credentials=None,
+        params={
+            "action": "get_storage_analytics",
+            "bucket_name": "sitabot-analytics-test",
+            "prefix": "documents/",
+            "region": "us-east-2",
+        },
+    )
+
+    assert result["ok"] is True
+    assert result["data"]["prefix"] == "documents/"
+    objects_paginator.paginate.assert_called_once_with(
+        Bucket="sitabot-analytics-test",
+        Prefix="documents/",
+    )
+    versions_paginator.paginate.assert_called_once_with(
+        Bucket="sitabot-analytics-test",
+        Prefix="documents/",
+    )
+
+
+@patch("backend.functions.dispatcher.services.s3_service.boto3.client")
+def test_get_storage_analytics_rejects_invalid_prefix(
+    mock_boto3_client,
+):
+    result = execute(
+        credentials=None,
+        params={
+            "action": "get_storage_analytics",
+            "bucket_name": "sitabot-analytics-test",
+            "prefix": 123,
+        },
+    )
+
+    assert result == {
+        "ok": False,
+        "service": "s3",
+        "action": "get_storage_analytics",
+        "error": {
+            "code": "InvalidPrefix",
+            "message": "prefix phải là chuỗi.",
+        },
+    }
+    mock_boto3_client.assert_not_called()

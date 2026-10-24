@@ -1,3 +1,6 @@
+import re
+from decimal import Decimal
+
 import boto3
 from botocore.config import Config
 from botocore.exceptions import ClientError
@@ -28,6 +31,72 @@ LIFECYCLE_MINIMUM_TRANSITION_DAYS = {
     "STANDARD_IA": 30,
     "ONEZONE_IA": 30,
 }
+
+# Giá tham chiếu USD/GB-tháng cho tầng đầu tiên tại us-east-2. Ước tính này
+# chỉ bao gồm dung lượng lưu trữ, không gồm request, retrieval, monitoring,
+# thuế hoặc yêu cầu thời gian lưu trữ tối thiểu.
+S3_STORAGE_RATES_US_EAST_2 = {
+    "STANDARD": Decimal("0.023"),
+    "STANDARD_IA": Decimal("0.0125"),
+    "ONEZONE_IA": Decimal("0.01"),
+    "INTELLIGENT_TIERING": Decimal("0.023"),
+    "GLACIER_IR": Decimal("0.004"),
+    "GLACIER": Decimal("0.0036"),
+    "DEEP_ARCHIVE": Decimal("0.00099"),
+}
+
+BYTES_PER_GB = Decimal("1000000000")
+
+RESERVED_BUCKET_NAME_PREFIXES = (
+    "xn--",
+    "sthree-",
+    "amzn_s3_demo_",
+)
+
+RESERVED_BUCKET_NAME_SUFFIXES = (
+    "-s3alias",
+    "--ol-s3",
+    ".mrap",
+    "--x-s3",
+    "--table-s3",
+)
+
+
+def _validate_bucket_name(bucket_name):
+    """Trả về danh sách quy tắc AWS mà tên bucket đang vi phạm."""
+    if not isinstance(bucket_name, str):
+        return ["Tên bucket phải là một chuỗi."]
+
+    violations = []
+
+    if not 3 <= len(bucket_name) <= 63:
+        violations.append("Tên bucket phải dài từ 3 đến 63 ký tự.")
+
+    if not re.fullmatch(r"[a-z0-9.-]+", bucket_name):
+        violations.append(
+            "Tên bucket chỉ được chứa chữ thường, số, dấu chấm và "
+            "dấu gạch ngang."
+        )
+
+    if not re.match(r"^[a-z0-9]", bucket_name):
+        violations.append("Tên bucket phải bắt đầu bằng chữ hoặc số.")
+
+    if not re.search(r"[a-z0-9]$", bucket_name):
+        violations.append("Tên bucket phải kết thúc bằng chữ hoặc số.")
+
+    if ".." in bucket_name:
+        violations.append("Tên bucket không được chứa hai dấu chấm liên tiếp.")
+
+    if re.fullmatch(r"\d{1,3}(?:\.\d{1,3}){3}", bucket_name):
+        violations.append("Tên bucket không được có dạng địa chỉ IPv4.")
+
+    if bucket_name.startswith(RESERVED_BUCKET_NAME_PREFIXES):
+        violations.append("Tên bucket sử dụng prefix dành riêng của AWS.")
+
+    if bucket_name.endswith(RESERVED_BUCKET_NAME_SUFFIXES):
+        violations.append("Tên bucket sử dụng suffix dành riêng của AWS.")
+
+    return violations
 
 
 def _create_s3_client(credentials, region):
@@ -474,6 +543,144 @@ def _put_lifecycle_rule(
     }
 
 
+def _add_storage_item(analytics, item):
+    """Cộng một object/version vào bộ đếm theo storage class."""
+    storage_class = item.get("StorageClass") or "STANDARD"
+    size_bytes = item.get("Size", 0)
+
+    if not isinstance(size_bytes, int) or isinstance(size_bytes, bool):
+        raise ValueError("Kích thước object S3 không hợp lệ.")
+
+    class_data = analytics.setdefault(
+        storage_class,
+        {"object_count": 0, "size_bytes": 0},
+    )
+    class_data["object_count"] += 1
+    class_data["size_bytes"] += size_bytes
+
+
+def _get_storage_analytics(client, bucket_name, prefix, region):
+    """
+    Thống kê object hiện tại, các version và chi phí lưu trữ ước tính.
+
+    Nếu bucket có versioning, tổng dung lượng được tính từ toàn bộ versions
+    vì cả version hiện tại lẫn version cũ đều chiếm dung lượng và phát sinh
+    chi phí. Với bucket không có dữ liệu version, danh sách object hiện tại
+    được dùng làm nguồn thay thế.
+    """
+    list_options = {"Bucket": bucket_name}
+    if prefix:
+        list_options["Prefix"] = prefix
+
+    current_analytics = {}
+    current_object_count = 0
+    current_size_bytes = 0
+    objects_paginator = client.get_paginator("list_objects_v2")
+
+    for page in objects_paginator.paginate(**list_options):
+        for item in page.get("Contents", []):
+            _add_storage_item(current_analytics, item)
+            current_object_count += 1
+            current_size_bytes += item.get("Size", 0)
+
+    version_analytics = {}
+    version_count = 0
+    noncurrent_version_count = 0
+    delete_marker_count = 0
+    versions_paginator = client.get_paginator("list_object_versions")
+
+    for page in versions_paginator.paginate(**list_options):
+        for item in page.get("Versions", []):
+            _add_storage_item(version_analytics, item)
+            version_count += 1
+            if item.get("IsLatest") is False:
+                noncurrent_version_count += 1
+
+        delete_marker_count += len(page.get("DeleteMarkers", []))
+
+    stored_analytics = (
+        version_analytics
+        if version_count > 0
+        else current_analytics
+    )
+    total_size_bytes = sum(
+        class_data["size_bytes"]
+        for class_data in stored_analytics.values()
+    )
+
+    rates = (
+        S3_STORAGE_RATES_US_EAST_2
+        if region == "us-east-2"
+        else {}
+    )
+    storage_classes = []
+    total_estimated_cost = Decimal("0")
+    unpriced_storage_classes = []
+
+    for storage_class in sorted(stored_analytics):
+        class_data = stored_analytics[storage_class]
+        size_gb = Decimal(class_data["size_bytes"]) / BYTES_PER_GB
+        rate = rates.get(storage_class)
+        estimated_cost = size_gb * rate if rate is not None else None
+
+        if estimated_cost is None:
+            unpriced_storage_classes.append(storage_class)
+        else:
+            total_estimated_cost += estimated_cost
+
+        storage_classes.append(
+            {
+                "storage_class": storage_class,
+                "object_count": class_data["object_count"],
+                "size_bytes": class_data["size_bytes"],
+                "size_gb": round(float(size_gb), 9),
+                "rate_usd_per_gb_month": (
+                    float(rate) if rate is not None else None
+                ),
+                "estimated_monthly_storage_cost_usd": (
+                    round(float(estimated_cost), 6)
+                    if estimated_cost is not None
+                    else None
+                ),
+            }
+        )
+
+    return {
+        "ok": True,
+        "service": "s3",
+        "action": "get_storage_analytics",
+        "data": {
+            "bucket_name": bucket_name,
+            "prefix": prefix,
+            "current_object_count": current_object_count,
+            "current_size_bytes": current_size_bytes,
+            "version_count": version_count,
+            "noncurrent_version_count": noncurrent_version_count,
+            "delete_marker_count": delete_marker_count,
+            "total_stored_size_bytes": total_size_bytes,
+            "total_stored_size_gb": round(
+                float(Decimal(total_size_bytes) / BYTES_PER_GB),
+                9,
+            ),
+            "storage_classes": storage_classes,
+            "estimated_monthly_storage_cost_usd": round(
+                float(total_estimated_cost),
+                6,
+            ),
+            "cost_estimate_complete": not unpriced_storage_classes,
+            "unpriced_storage_classes": unpriced_storage_classes,
+            "pricing_basis": {
+                "rate_region": (
+                    "us-east-2" if region == "us-east-2" else None
+                ),
+                "currency": "USD",
+                "unit": "GB-month",
+                "scope": "storage-only first-tier reference estimate",
+            },
+        },
+    }
+
+
 def _create_presigned_download(
     client,
     bucket_name,
@@ -536,6 +743,7 @@ def execute(credentials, params):
         "inspect_bucket_for_delete",
         "delete_bucket_safe",
         "put_lifecycle_rule",
+        "get_storage_analytics",
     }
 
     if action not in supported_actions:
@@ -561,6 +769,24 @@ def execute(credentials, params):
                 "message": "Thiếu tham số bucket_name.",
             },
         }
+
+    if action == "create_bucket":
+        bucket_name_violations = _validate_bucket_name(bucket_name)
+
+        if bucket_name_violations:
+            return {
+                "ok": False,
+                "service": "s3",
+                "action": action,
+                "error": {
+                    "code": "InvalidBucketName",
+                    "message": "Tên bucket không đúng quy tắc của Amazon S3.",
+                    "details": {
+                        "bucket_name": bucket_name,
+                        "violations": bucket_name_violations,
+                    },
+                },
+            }
 
     if action == "create_presigned_download":
         object_key = params.get("object_key")
@@ -736,6 +962,20 @@ def execute(credentials, params):
                 },
             }
 
+    if action == "get_storage_analytics":
+        analytics_prefix = params.get("prefix", "")
+
+        if not isinstance(analytics_prefix, str):
+            return {
+                "ok": False,
+                "service": "s3",
+                "action": action,
+                "error": {
+                    "code": "InvalidPrefix",
+                    "message": "prefix phải là chuỗi.",
+                },
+            }
+
     try:
         client = _create_s3_client(credentials, region)
 
@@ -760,6 +1000,14 @@ def execute(credentials, params):
                 prefix,
                 transition_days,
                 storage_class,
+            )
+
+        if action == "get_storage_analytics":
+            return _get_storage_analytics(
+                client,
+                bucket_name,
+                analytics_prefix,
+                region,
             )
 
         if action == "create_bucket":
