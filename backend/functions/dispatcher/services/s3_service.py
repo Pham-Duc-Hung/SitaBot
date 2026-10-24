@@ -236,6 +236,162 @@ def _scan_public_access(client):
     }
 
 
+def _collect_bucket_delete_inventory(client, bucket_name):
+    """
+    Thu thập các mục phải xóa trước khi có thể xóa bucket.
+
+    S3 versioning cần xử lý cả object versions và delete markers. Danh sách
+    object hiện tại được đọc riêng để không bỏ sót object không có version.
+    """
+    current_keys = []
+    objects_paginator = client.get_paginator("list_objects_v2")
+
+    for page in objects_paginator.paginate(Bucket=bucket_name):
+        current_keys.extend(
+            item["Key"]
+            for item in page.get("Contents", [])
+            if item.get("Key")
+        )
+
+    versions = []
+    delete_markers = []
+    versions_paginator = client.get_paginator("list_object_versions")
+
+    for page in versions_paginator.paginate(Bucket=bucket_name):
+        versions.extend(
+            {
+                "Key": item["Key"],
+                "VersionId": item["VersionId"],
+            }
+            for item in page.get("Versions", [])
+            if item.get("Key") and item.get("VersionId") is not None
+        )
+        delete_markers.extend(
+            {
+                "Key": item["Key"],
+                "VersionId": item["VersionId"],
+            }
+            for item in page.get("DeleteMarkers", [])
+            if item.get("Key") and item.get("VersionId") is not None
+        )
+
+    versioned_keys = {
+        item["Key"]
+        for item in versions + delete_markers
+    }
+    unversioned_objects = [
+        {"Key": key}
+        for key in current_keys
+        if key not in versioned_keys
+    ]
+    delete_candidates = versions + delete_markers + unversioned_objects
+
+    return {
+        "object_count": len(current_keys),
+        "version_count": len(versions),
+        "delete_marker_count": len(delete_markers),
+        "deletable_item_count": len(delete_candidates),
+        "delete_candidates": delete_candidates,
+    }
+
+
+def _inspect_bucket_for_delete(client, bucket_name):
+    """Trả về ảnh chụp nội dung bucket trước khi người dùng xác nhận xóa."""
+    inventory = _collect_bucket_delete_inventory(client, bucket_name)
+
+    return {
+        "ok": True,
+        "service": "s3",
+        "action": "inspect_bucket_for_delete",
+        "data": {
+            "bucket_name": bucket_name,
+            "object_count": inventory["object_count"],
+            "version_count": inventory["version_count"],
+            "delete_marker_count": inventory["delete_marker_count"],
+            "deletable_item_count": inventory["deletable_item_count"],
+            "is_empty": inventory["deletable_item_count"] == 0,
+            "required_confirmation": f"DELETE {bucket_name}",
+        },
+    }
+
+
+def _delete_bucket_safe(
+    client,
+    bucket_name,
+    expected_deletable_item_count,
+):
+    """
+    Xóa toàn bộ version, delete marker và object rồi mới xóa bucket.
+
+    Số mục hiện tại phải khớp ảnh chụp mà người dùng đã xác nhận. Nếu bucket
+    thay đổi giữa hai bước, thao tác dừng trước khi xóa bất kỳ dữ liệu nào.
+    """
+    inventory = _collect_bucket_delete_inventory(client, bucket_name)
+    current_item_count = inventory["deletable_item_count"]
+
+    if current_item_count != expected_deletable_item_count:
+        return {
+            "ok": False,
+            "service": "s3",
+            "action": "delete_bucket_safe",
+            "error": {
+                "code": "BucketContentsChanged",
+                "message": (
+                    "Nội dung bucket đã thay đổi sau bước kiểm tra. "
+                    "Hãy kiểm tra lại trước khi xác nhận xóa."
+                ),
+            },
+            "data": {
+                "bucket_name": bucket_name,
+                "expected_deletable_item_count": (
+                    expected_deletable_item_count
+                ),
+                "current_deletable_item_count": current_item_count,
+            },
+        }
+
+    delete_candidates = inventory["delete_candidates"]
+
+    for start in range(0, len(delete_candidates), 1000):
+        batch = delete_candidates[start:start + 1000]
+        response = client.delete_objects(
+            Bucket=bucket_name,
+            Delete={
+                "Objects": batch,
+                "Quiet": True,
+            },
+        )
+        delete_errors = response.get("Errors", [])
+
+        if delete_errors:
+            return {
+                "ok": False,
+                "service": "s3",
+                "action": "delete_bucket_safe",
+                "error": {
+                    "code": "ObjectDeleteFailed",
+                    "message": (
+                        "Không thể xóa hết nội dung bucket nên bucket chưa "
+                        "được xóa."
+                    ),
+                    "details": delete_errors,
+                },
+            }
+
+    client.delete_bucket(Bucket=bucket_name)
+
+    return {
+        "ok": True,
+        "service": "s3",
+        "action": "delete_bucket_safe",
+        "data": {
+            "bucket_name": bucket_name,
+            "deleted_item_count": len(delete_candidates),
+            "bucket_deleted": True,
+        },
+    }
+
+
 def _create_presigned_download(
     client,
     bucket_name,
@@ -295,6 +451,8 @@ def execute(credentials, params):
         "create_presigned_download",
         "block_public_access",
         "scan_public_access",
+        "inspect_bucket_for_delete",
+        "delete_bucket_safe",
     }
 
     if action not in supported_actions:
@@ -351,11 +509,60 @@ def execute(credentials, params):
                 },
             }
 
+    if action == "delete_bucket_safe":
+        required_confirmation = f"DELETE {bucket_name}"
+        confirmation = params.get("confirmation")
+        expected_deletable_item_count = params.get(
+            "expected_deletable_item_count"
+        )
+
+        if confirmation != required_confirmation:
+            return {
+                "ok": False,
+                "service": "s3",
+                "action": action,
+                "error": {
+                    "code": "ConfirmationRequired",
+                    "message": (
+                        "Để xóa bucket, confirmation phải chính xác là: "
+                        f"{required_confirmation}"
+                    ),
+                },
+            }
+
+        if (
+            not isinstance(expected_deletable_item_count, int)
+            or isinstance(expected_deletable_item_count, bool)
+            or expected_deletable_item_count < 0
+        ):
+            return {
+                "ok": False,
+                "service": "s3",
+                "action": action,
+                "error": {
+                    "code": "InvalidExpectedItemCount",
+                    "message": (
+                        "expected_deletable_item_count phải là số nguyên "
+                        "không âm lấy từ bước kiểm tra bucket."
+                    ),
+                },
+            }
+
     try:
         client = _create_s3_client(credentials, region)
 
         if action == "scan_public_access":
             return _scan_public_access(client)
+
+        if action == "inspect_bucket_for_delete":
+            return _inspect_bucket_for_delete(client, bucket_name)
+
+        if action == "delete_bucket_safe":
+            return _delete_bucket_safe(
+                client,
+                bucket_name,
+                expected_deletable_item_count,
+            )
 
         if action == "create_bucket":
             return _create_bucket(

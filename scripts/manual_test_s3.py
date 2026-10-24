@@ -263,6 +263,62 @@ def main():
                 "Downloaded content does not match uploaded content."
             )
 
+        print("7. Inspecting the bucket before safe deletion...")
+
+        inspect_result = execute(
+            credentials=None,
+            params={
+                "action": "inspect_bucket_for_delete",
+                "bucket_name": bucket_name,
+                "region": REGION,
+            },
+        )
+        inspect_data = require_success(inspect_result)
+
+        if inspect_data["object_count"] != 1:
+            raise RuntimeError(
+                "Safe-delete inspection did not find the demo object."
+            )
+
+        rejected_delete = execute(
+            credentials=None,
+            params={
+                "action": "delete_bucket_safe",
+                "bucket_name": bucket_name,
+                "confirmation": "yes",
+                "expected_deletable_item_count": (
+                    inspect_data["deletable_item_count"]
+                ),
+                "region": REGION,
+            },
+        )
+
+        if rejected_delete.get("error", {}).get("code") != (
+            "ConfirmationRequired"
+        ):
+            raise RuntimeError(
+                "Safe deletion accepted an invalid confirmation."
+            )
+
+        print("8. Deleting the test bucket with explicit confirmation...")
+
+        delete_result = execute(
+            credentials=None,
+            params={
+                "action": "delete_bucket_safe",
+                "bucket_name": bucket_name,
+                "confirmation": inspect_data["required_confirmation"],
+                "expected_deletable_item_count": (
+                    inspect_data["deletable_item_count"]
+                ),
+                "region": REGION,
+            },
+        )
+        delete_data = require_success(delete_result)
+
+        if not delete_data["bucket_deleted"]:
+            raise RuntimeError("Safe deletion did not delete the test bucket.")
+
         print("Integration test passed successfully.")
 
     finally:

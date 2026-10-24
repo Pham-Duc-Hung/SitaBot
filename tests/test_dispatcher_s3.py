@@ -590,3 +590,228 @@ def test_scan_public_access_records_per_bucket_access_denied(
             "message": "Not allowed to inspect this bucket.",
         }
     ]
+
+
+def _configure_bucket_inventory(
+    mock_s3_client,
+    object_pages,
+    version_pages,
+):
+    objects_paginator = Mock()
+    objects_paginator.paginate.return_value = object_pages
+    versions_paginator = Mock()
+    versions_paginator.paginate.return_value = version_pages
+
+    def get_paginator(operation_name):
+        if operation_name == "list_objects_v2":
+            return objects_paginator
+        if operation_name == "list_object_versions":
+            return versions_paginator
+        raise AssertionError(f"Unexpected paginator: {operation_name}")
+
+    mock_s3_client.get_paginator.side_effect = get_paginator
+
+
+@patch("backend.functions.dispatcher.services.s3_service.boto3.client")
+def test_inspect_bucket_for_delete_counts_all_items(mock_boto3_client):
+    mock_s3_client = Mock()
+    mock_boto3_client.return_value = mock_s3_client
+    _configure_bucket_inventory(
+        mock_s3_client,
+        object_pages=[
+            {
+                "Contents": [
+                    {"Key": "current.txt"},
+                    {"Key": "unversioned.txt"},
+                ]
+            }
+        ],
+        version_pages=[
+            {
+                "Versions": [
+                    {"Key": "current.txt", "VersionId": "v2"},
+                    {"Key": "current.txt", "VersionId": "v1"},
+                ],
+                "DeleteMarkers": [
+                    {"Key": "deleted.txt", "VersionId": "d1"}
+                ],
+            }
+        ],
+    )
+
+    result = execute(
+        credentials=None,
+        params={
+            "action": "inspect_bucket_for_delete",
+            "bucket_name": "sitabot-delete-test",
+            "region": "us-east-2",
+        },
+    )
+
+    assert result == {
+        "ok": True,
+        "service": "s3",
+        "action": "inspect_bucket_for_delete",
+        "data": {
+            "bucket_name": "sitabot-delete-test",
+            "object_count": 2,
+            "version_count": 2,
+            "delete_marker_count": 1,
+            "deletable_item_count": 4,
+            "is_empty": False,
+            "required_confirmation": "DELETE sitabot-delete-test",
+        },
+    }
+
+
+@patch("backend.functions.dispatcher.services.s3_service.boto3.client")
+def test_delete_bucket_safe_requires_exact_confirmation(
+    mock_boto3_client,
+):
+    result = execute(
+        credentials=None,
+        params={
+            "action": "delete_bucket_safe",
+            "bucket_name": "important-data",
+            "confirmation": "yes",
+            "expected_deletable_item_count": 0,
+        },
+    )
+
+    assert result["ok"] is False
+    assert result["error"]["code"] == "ConfirmationRequired"
+    assert "DELETE important-data" in result["error"]["message"]
+    mock_boto3_client.assert_not_called()
+
+
+@patch("backend.functions.dispatcher.services.s3_service.boto3.client")
+def test_delete_bucket_safe_stops_when_contents_changed(
+    mock_boto3_client,
+):
+    mock_s3_client = Mock()
+    mock_boto3_client.return_value = mock_s3_client
+    _configure_bucket_inventory(
+        mock_s3_client,
+        object_pages=[{"Contents": [{"Key": "new-file.txt"}]}],
+        version_pages=[{}],
+    )
+
+    result = execute(
+        credentials=None,
+        params={
+            "action": "delete_bucket_safe",
+            "bucket_name": "sitabot-delete-test",
+            "confirmation": "DELETE sitabot-delete-test",
+            "expected_deletable_item_count": 0,
+        },
+    )
+
+    assert result["ok"] is False
+    assert result["error"]["code"] == "BucketContentsChanged"
+    assert result["data"]["expected_deletable_item_count"] == 0
+    assert result["data"]["current_deletable_item_count"] == 1
+    mock_s3_client.delete_objects.assert_not_called()
+    mock_s3_client.delete_bucket.assert_not_called()
+
+
+@patch("backend.functions.dispatcher.services.s3_service.boto3.client")
+def test_delete_bucket_safe_removes_versions_and_bucket(
+    mock_boto3_client,
+):
+    mock_s3_client = Mock()
+    mock_boto3_client.return_value = mock_s3_client
+    mock_s3_client.delete_objects.return_value = {}
+    _configure_bucket_inventory(
+        mock_s3_client,
+        object_pages=[
+            {
+                "Contents": [
+                    {"Key": "current.txt"},
+                    {"Key": "unversioned.txt"},
+                ]
+            }
+        ],
+        version_pages=[
+            {
+                "Versions": [
+                    {"Key": "current.txt", "VersionId": "v2"},
+                    {"Key": "current.txt", "VersionId": "v1"},
+                ],
+                "DeleteMarkers": [
+                    {"Key": "deleted.txt", "VersionId": "d1"}
+                ],
+            }
+        ],
+    )
+
+    result = execute(
+        credentials=None,
+        params={
+            "action": "delete_bucket_safe",
+            "bucket_name": "sitabot-delete-test",
+            "confirmation": "DELETE sitabot-delete-test",
+            "expected_deletable_item_count": 4,
+        },
+    )
+
+    mock_s3_client.delete_objects.assert_called_once_with(
+        Bucket="sitabot-delete-test",
+        Delete={
+            "Objects": [
+                {"Key": "current.txt", "VersionId": "v2"},
+                {"Key": "current.txt", "VersionId": "v1"},
+                {"Key": "deleted.txt", "VersionId": "d1"},
+                {"Key": "unversioned.txt"},
+            ],
+            "Quiet": True,
+        },
+    )
+    mock_s3_client.delete_bucket.assert_called_once_with(
+        Bucket="sitabot-delete-test"
+    )
+    assert result == {
+        "ok": True,
+        "service": "s3",
+        "action": "delete_bucket_safe",
+        "data": {
+            "bucket_name": "sitabot-delete-test",
+            "deleted_item_count": 4,
+            "bucket_deleted": True,
+        },
+    }
+
+
+@patch("backend.functions.dispatcher.services.s3_service.boto3.client")
+def test_delete_bucket_safe_does_not_delete_bucket_after_object_error(
+    mock_boto3_client,
+):
+    mock_s3_client = Mock()
+    mock_boto3_client.return_value = mock_s3_client
+    mock_s3_client.delete_objects.return_value = {
+        "Errors": [
+            {
+                "Key": "protected.txt",
+                "Code": "AccessDenied",
+                "Message": "Access denied.",
+            }
+        ]
+    }
+    _configure_bucket_inventory(
+        mock_s3_client,
+        object_pages=[{"Contents": [{"Key": "protected.txt"}]}],
+        version_pages=[{}],
+    )
+
+    result = execute(
+        credentials=None,
+        params={
+            "action": "delete_bucket_safe",
+            "bucket_name": "sitabot-delete-test",
+            "confirmation": "DELETE sitabot-delete-test",
+            "expected_deletable_item_count": 1,
+        },
+    )
+
+    assert result["ok"] is False
+    assert result["error"]["code"] == "ObjectDeleteFailed"
+    mock_s3_client.delete_bucket.assert_not_called()
