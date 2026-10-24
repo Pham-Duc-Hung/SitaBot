@@ -49,13 +49,16 @@ def _dispatch_action(
         from backend.functions.dispatcher.index import lambda_handler as dispatcher_handler
     except ImportError:
         try:
-            from services.dispatcher import lambda_handler as dispatcher_handler
+            from dispatcher import lambda_handler as dispatcher_handler
         except ImportError:
-            return {
-                "status": "ERROR",
-                "message": "Không tìm thấy module Dispatcher.",
-                "error_code": "DispatcherNotFound"
-            }
+            try:
+                from services.dispatcher import lambda_handler as dispatcher_handler
+            except ImportError:
+                return {
+                    "status": "ERROR",
+                    "message": "Không tìm thấy module Dispatcher.",
+                    "error_code": "DispatcherNotFound"
+                }
 
     event = {
         "service": service,
