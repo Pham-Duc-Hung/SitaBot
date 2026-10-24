@@ -15,6 +15,58 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
+
+def _load_env_file():
+    """Tải cấu hình từ tệp .env nếu môi trường chưa có."""
+    env_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".env"))
+    if os.path.exists(env_path):
+        try:
+            with open(env_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#") and "=" in line:
+                        k, v = line.split("=", 1)
+                        k = k.strip()
+                        v = v.strip().strip('"').strip("'")
+                        if k not in os.environ:
+                            os.environ[k] = v
+        except Exception:
+            pass
+
+_load_env_file()
+
+
+def _dispatch_action(
+    service: str,
+    action: str,
+    parameters: Dict[str, Any],
+    confirmed: bool = False,
+    region: str = "us-east-1",
+    credentials: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Kết nối và chuyển tiếp yêu cầu đến Dispatcher Lambda."""
+    try:
+        from backend.functions.dispatcher.index import lambda_handler as dispatcher_handler
+    except ImportError:
+        try:
+            from services.dispatcher import lambda_handler as dispatcher_handler
+        except ImportError:
+            return {
+                "status": "ERROR",
+                "message": "Không tìm thấy module Dispatcher.",
+                "error_code": "DispatcherNotFound"
+            }
+
+    event = {
+        "service": service,
+        "action": action,
+        "parameters": parameters,
+        "confirmed": confirmed,
+        "region": region,
+        "credentials": credentials,
+    }
+    return dispatcher_handler(event, None)
+
 # System prompt định hướng hành vi cho SatiBot
 SYSTEM_PROMPT = """Bạn là SatiBot - Trợ lý ChatOps thông minh hỗ trợ quản trị và giám sát hạ tầng AWS bằng tiếng Việt.
 Nhiệm vụ của bạn:
@@ -253,6 +305,26 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         err_resp = {"status": "ERROR", "message": "Payload phải là JSON object."}
         return _build_response(400, err_resp) if is_api_gateway else err_resp
 
+    # Nếu là request xác nhận hành động đã được duyệt
+    if payload.get("confirmed") is True and payload.get("tool_name"):
+        exec_res = _dispatch_action(
+            service=payload.get("service", "lambda"),
+            action=payload.get("tool_name"),
+            parameters=payload.get("parameters", {}),
+            confirmed=True,
+            region=payload.get("region", "us-east-1"),
+            credentials=payload.get("credentials"),
+        )
+        resp_data = {
+            "status": exec_res.get("status", "SUCCESS"),
+            "type": "action_executed",
+            "service": payload.get("service", "lambda"),
+            "tool_name": payload.get("tool_name"),
+            "message": exec_res.get("message", "Thao tác đã được thực thi trên AWS."),
+            "data": exec_res.get("data", {}),
+        }
+        return _build_response(200, resp_data) if is_api_gateway else resp_data
+
     user_message = payload.get("message", "").strip()
     history = payload.get("history", [])
 
@@ -315,14 +387,23 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
             ),
         }
     else:
-        # Tác vụ chỉ đọc (an toàn): sẵn sàng chuyển sang Dispatcher
+        # Tác vụ chỉ đọc (an toàn): Tự động điều phối gọi Dispatcher lấy dữ liệu AWS thật
+        exec_res = _dispatch_action(
+            service="lambda",
+            action=tool_name,
+            parameters=parsed_params,
+            confirmed=True,
+            region=payload.get("region", "us-east-1"),
+            credentials=payload.get("credentials"),
+        )
         resp_data = {
-            "status": "SUCCESS",
-            "type": "action_ready",
+            "status": exec_res.get("status", "SUCCESS"),
+            "type": "action_executed",
             "service": "lambda",
             "tool_name": tool_name,
             "parameters": parsed_params,
-            "message": f"Đã nhận diện ý định gọi công cụ '{tool_name}'. Đang chuyển tiếp điều phối thực thi.",
+            "message": exec_res.get("message", f"Đã thực thi công cụ '{tool_name}'."),
+            "data": exec_res.get("data", {}),
         }
 
     return _build_response(200, resp_data) if is_api_gateway else resp_data

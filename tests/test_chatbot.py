@@ -19,6 +19,14 @@ from backend.functions.chatbot.index import lambda_handler, format_tools_for_llm
 
 
 class TestChatbotFunctionCalling(unittest.TestCase):
+    def setUp(self):
+        # Tách biệt unit test khỏi internet và biến môi trường LLM_API_KEY thực
+        self.env_patcher = patch.dict(os.environ, {"LLM_API_KEY": ""}, clear=False)
+        self.env_patcher.start()
+
+    def tearDown(self):
+        self.env_patcher.stop()
+
     def test_missing_message_returns_error(self):
         res = lambda_handler({}, None)
         self.assertEqual(res["status"], "ERROR")
@@ -44,12 +52,19 @@ class TestChatbotFunctionCalling(unittest.TestCase):
         self.assertEqual(res["type"], "chat_reply")
         self.assertIn("SatiBot", res["message"])
 
-    def test_list_lambda_intent_action_ready(self):
+    @patch("backend.functions.chatbot.index._dispatch_action")
+    def test_list_lambda_intent_action_executed(self, mock_dispatch):
+        mock_dispatch.return_value = {
+            "status": "SUCCESS",
+            "message": "Đã tìm thấy 2 hàm Lambda",
+            "data": {"count": 2}
+        }
         event = {"message": "Liệt kê danh sách hàm lambda"}
         res = lambda_handler(event, None)
         self.assertEqual(res["status"], "SUCCESS")
-        self.assertEqual(res["type"], "action_ready")
+        self.assertEqual(res["type"], "action_executed")
         self.assertEqual(res["tool_name"], "list_lambda_functions")
+        mock_dispatch.assert_called_once()
 
     def test_invoke_lambda_intent_requires_confirmation(self):
         event = {"message": "Chạy thử hàm test-lambda với dữ liệu giá 100 và thuế 0.1"}
@@ -78,6 +93,24 @@ class TestChatbotFunctionCalling(unittest.TestCase):
         self.assertEqual(res["tool_name"], "update_function_resources")
         self.assertEqual(res["parameters"]["memory_mb"], 512)
 
+    @patch("backend.functions.chatbot.index._dispatch_action")
+    def test_confirmed_action_execution(self, mock_dispatch):
+        mock_dispatch.return_value = {
+            "status": "SUCCESS",
+            "message": "Thao tác đã được thực thi thành công",
+            "data": {"function_name": "test-lambda"}
+        }
+        event = {
+            "confirmed": True,
+            "service": "lambda",
+            "tool_name": "invoke_lambda_function",
+            "parameters": {"function_name": "test-lambda"}
+        }
+        res = lambda_handler(event, None)
+        self.assertEqual(res["status"], "SUCCESS")
+        self.assertEqual(res["type"], "action_executed")
+        mock_dispatch.assert_called_once()
+
     def test_api_gateway_event_wrapper(self):
         event = {"body": json.dumps({"message": "Hello"})}
         res = lambda_handler(event, None)
@@ -88,4 +121,3 @@ class TestChatbotFunctionCalling(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
