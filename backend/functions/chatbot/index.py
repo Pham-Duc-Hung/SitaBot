@@ -75,8 +75,8 @@ def call_llm_api(
     để hỗ trợ kiểm thử cục bộ và chạy unit test.
     """
     api_key = api_key or os.environ.get("LLM_API_KEY")
-    api_url = api_url or os.environ.get("LLM_API_URL", "https://api.openai.com/v1/chat/completions")
-    model = model or os.environ.get("LLM_MODEL", "gpt-4o-mini")
+    api_url = api_url or os.environ.get("LLM_API_URL", "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions")
+    model = model or os.environ.get("LLM_MODEL", "gemini-2.5-flash")
 
     # Nếu không có API Key cấu hình, dùng bộ phân tích mẫu cho môi trường test
     if not api_key:
