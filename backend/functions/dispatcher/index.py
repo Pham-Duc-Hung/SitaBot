@@ -1,8 +1,6 @@
 """
-SatiBot - Dispatcher Lambda Handler (index.py)
-Phụ trách: Trịnh Thiên Quang (Nhóm 10 - INT3319 1)
-Sprint 2: Tiếp nhận request từ API Gateway hoặc Step Functions State Machine,
-phân loại dịch vụ (service), ủy quyền và điều phối đến các module dịch vụ tương ứng.
+Author: Trịnh Thiên Quang
+Điều phối các yêu cầu từ API Gateway hoặc Step Functions đến service tương ứng.
 """
 
 import json

@@ -1,6 +1,6 @@
 """
-Regression tests for Lambda input validation (không gọi AWS thật)
-Phụ trách: Trịnh Thiên Quang
+Author: Trịnh Thiên Quang
+Kiểm thử ràng buộc kiểu dữ liệu, tham số và CORS cho LambdaService.
 """
 import os
 import sys

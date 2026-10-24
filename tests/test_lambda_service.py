@@ -1,6 +1,6 @@
 """
-Unit tests an toàn cho lambda_service.py (không gọi tới AWS thật)
-Phụ trách: Trịnh Thiên Quang
+Author: Trịnh Thiên Quang
+Kiểm thử các quy tắc an toàn cơ bản của LambdaService.
 """
 import os
 import sys

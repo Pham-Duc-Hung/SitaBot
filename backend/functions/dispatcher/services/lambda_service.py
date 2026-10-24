@@ -1,8 +1,6 @@
 """
-SatiBot - Module Điều phối Dịch vụ AWS Lambda (Dispatcher Lambda Service)
-Phụ trách: Trịnh Thiên Quang (Nhóm 10 - INT3319 1)
-Sprint 2: Tiếp nhận yêu cầu từ Dispatcher Lambda trung tâm, giải mã thông tin ủy quyền (STS / Credentials)
-và gọi các tác vụ Boto3 tương ứng trên tài khoản người dùng.
+Author: Trịnh Thiên Quang
+Xử lý các thao tác quản trị và kiểm thử AWS Lambda bằng Boto3.
 """
 
 import json

@@ -1,6 +1,6 @@
 """
-Kiểm thử Dispatcher Lambda cho dịch vụ AWS Lambda
-Phụ trách: Trịnh Thiên Quang (Sprint 2)
+Author: Trịnh Thiên Quang
+Kiểm thử bộ điều phối Dispatcher cho service Lambda.
 """
 
 import json

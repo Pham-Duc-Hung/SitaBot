@@ -1,6 +1,6 @@
 """
-Mock-based business tests cho lambda_service.py (không gọi AWS thật)
-Phụ trách: Trịnh Thiên Quang
+Author: Trịnh Thiên Quang
+Kiểm thử các luồng nghiệp vụ của LambdaService qua mock Boto3.
 """
 import io
 import os
