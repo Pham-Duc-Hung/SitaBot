@@ -139,6 +139,37 @@ def main():
                 f"{configuration}"
             )
 
+        print("2.1. Scanning account buckets for public access risks...")
+
+        scan_result = execute(
+            credentials=None,
+            params={
+                "action": "scan_public_access",
+                "region": REGION,
+            },
+        )
+
+        scan_data = require_success(scan_result)
+        risky_bucket_names = {
+            item["bucket_name"]
+            for item in scan_data["risky_buckets"]
+        }
+
+        if bucket_name in risky_bucket_names:
+            raise RuntimeError(
+                "The newly created safe bucket was incorrectly marked risky."
+            )
+
+        scan_error_bucket_names = {
+            item["bucket_name"]
+            for item in scan_data["scan_errors"]
+        }
+
+        if bucket_name in scan_error_bucket_names:
+            raise RuntimeError(
+                "The public access scan could not inspect the test bucket."
+            )
+
         print("3. Calling block_public_access again...")
 
         block_result = execute(

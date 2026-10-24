@@ -423,3 +423,170 @@ def test_handles_block_public_access_denied(mock_boto3_client):
             ),
         },
     }
+
+
+@patch("backend.functions.dispatcher.services.s3_service.boto3.client")
+def test_scan_public_access_finds_risky_buckets(mock_boto3_client):
+    mock_s3_client = Mock()
+    mock_boto3_client.return_value = mock_s3_client
+
+    mock_s3_client.list_buckets.return_value = {
+        "Buckets": [
+            {"Name": "sitabot-safe-bucket"},
+            {"Name": "sitabot-risky-bucket"},
+        ]
+    }
+    mock_s3_client.get_public_access_block.side_effect = [
+        {
+            "PublicAccessBlockConfiguration": {
+                "BlockPublicAcls": True,
+                "IgnorePublicAcls": True,
+                "BlockPublicPolicy": True,
+                "RestrictPublicBuckets": True,
+            }
+        },
+        {
+            "PublicAccessBlockConfiguration": {
+                "BlockPublicAcls": False,
+                "IgnorePublicAcls": False,
+                "BlockPublicPolicy": False,
+                "RestrictPublicBuckets": False,
+            }
+        },
+    ]
+    mock_s3_client.get_bucket_policy_status.side_effect = [
+        {"PolicyStatus": {"IsPublic": False}},
+        {"PolicyStatus": {"IsPublic": True}},
+    ]
+    mock_s3_client.get_bucket_acl.side_effect = [
+        {"Grants": []},
+        {"Grants": []},
+    ]
+
+    result = execute(
+        credentials=None,
+        params={
+            "action": "scan_public_access",
+            "region": "us-east-2",
+        },
+    )
+
+    assert result == {
+        "ok": True,
+        "service": "s3",
+        "action": "scan_public_access",
+        "data": {
+            "scanned_count": 2,
+            "risky_count": 1,
+            "risky_buckets": [
+                {
+                    "bucket_name": "sitabot-risky-bucket",
+                    "reasons": [
+                        "PUBLIC_ACCESS_BLOCK_INCOMPLETE",
+                        "PUBLIC_BUCKET_POLICY",
+                    ],
+                }
+            ],
+            "scan_errors": [],
+        },
+    }
+
+
+@patch("backend.functions.dispatcher.services.s3_service.boto3.client")
+def test_scan_public_access_detects_missing_block_and_public_acl(
+    mock_boto3_client,
+):
+    mock_s3_client = Mock()
+    mock_boto3_client.return_value = mock_s3_client
+    mock_s3_client.list_buckets.return_value = {
+        "Buckets": [{"Name": "sitabot-legacy-bucket"}]
+    }
+    mock_s3_client.get_public_access_block.side_effect = ClientError(
+        error_response={
+            "Error": {
+                "Code": "NoSuchPublicAccessBlockConfiguration",
+                "Message": "The public access block configuration was not found.",
+            }
+        },
+        operation_name="GetPublicAccessBlock",
+    )
+    mock_s3_client.get_bucket_policy_status.side_effect = ClientError(
+        error_response={
+            "Error": {
+                "Code": "NoSuchBucketPolicy",
+                "Message": "The bucket policy does not exist.",
+            }
+        },
+        operation_name="GetBucketPolicyStatus",
+    )
+    mock_s3_client.get_bucket_acl.return_value = {
+        "Grants": [
+            {
+                "Grantee": {
+                    "Type": "Group",
+                    "URI": (
+                        "http://acs.amazonaws.com/groups/global/AllUsers"
+                    ),
+                },
+                "Permission": "READ",
+            }
+        ]
+    }
+
+    result = execute(
+        credentials=None,
+        params={"action": "scan_public_access"},
+    )
+
+    assert result["ok"] is True
+    assert result["data"]["risky_buckets"] == [
+        {
+            "bucket_name": "sitabot-legacy-bucket",
+            "reasons": [
+                "PUBLIC_ACCESS_BLOCK_INCOMPLETE",
+                "PUBLIC_BUCKET_ACL",
+            ],
+        }
+    ]
+    assert result["data"]["scan_errors"] == []
+
+
+@patch("backend.functions.dispatcher.services.s3_service.boto3.client")
+def test_scan_public_access_records_per_bucket_access_denied(
+    mock_boto3_client,
+):
+    mock_s3_client = Mock()
+    mock_boto3_client.return_value = mock_s3_client
+    mock_s3_client.list_buckets.return_value = {
+        "Buckets": [{"Name": "restricted-bucket"}]
+    }
+    mock_s3_client.get_public_access_block.side_effect = ClientError(
+        error_response={
+            "Error": {
+                "Code": "AccessDenied",
+                "Message": "Not allowed to inspect this bucket.",
+            }
+        },
+        operation_name="GetPublicAccessBlock",
+    )
+    mock_s3_client.get_bucket_policy_status.return_value = {
+        "PolicyStatus": {"IsPublic": False}
+    }
+    mock_s3_client.get_bucket_acl.return_value = {"Grants": []}
+
+    result = execute(
+        credentials=None,
+        params={"action": "scan_public_access"},
+    )
+
+    assert result["ok"] is True
+    assert result["data"]["scanned_count"] == 1
+    assert result["data"]["risky_count"] == 0
+    assert result["data"]["scan_errors"] == [
+        {
+            "bucket_name": "restricted-bucket",
+            "check": "PUBLIC_ACCESS_BLOCK",
+            "code": "AccessDenied",
+            "message": "Not allowed to inspect this bucket.",
+        }
+    ]
