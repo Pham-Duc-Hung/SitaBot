@@ -263,7 +263,50 @@ def main():
                 "Downloaded content does not match uploaded content."
             )
 
-        print("7. Inspecting the bucket before safe deletion...")
+        print("7. Applying and verifying an S3 Lifecycle Rule...")
+
+        lifecycle_rule_id = "sitabot-test-standard-ia-transition"
+        lifecycle_result = execute(
+            credentials=None,
+            params={
+                "action": "put_lifecycle_rule",
+                "bucket_name": bucket_name,
+                "rule_id": lifecycle_rule_id,
+                "prefix": "archive/",
+                "transition_days": 30,
+                "storage_class": "STANDARD_IA",
+                "region": REGION,
+            },
+        )
+        require_success(lifecycle_result)
+
+        lifecycle_configuration = (
+            s3_client.get_bucket_lifecycle_configuration(
+                Bucket=bucket_name,
+            )
+        )
+        lifecycle_rules = lifecycle_configuration.get("Rules", [])
+        matching_rules = [
+            rule
+            for rule in lifecycle_rules
+            if rule.get("ID") == lifecycle_rule_id
+        ]
+
+        if len(matching_rules) != 1:
+            raise RuntimeError(
+                "The Lifecycle Rule was not stored on the test bucket."
+            )
+
+        transition = matching_rules[0].get("Transitions", [{}])[0]
+        if (
+            transition.get("Days") != 30
+            or transition.get("StorageClass") != "STANDARD_IA"
+        ):
+            raise RuntimeError(
+                f"Unexpected Lifecycle transition: {transition}"
+            )
+
+        print("8. Inspecting the bucket before safe deletion...")
 
         inspect_result = execute(
             credentials=None,
@@ -300,7 +343,7 @@ def main():
                 "Safe deletion accepted an invalid confirmation."
             )
 
-        print("8. Deleting the test bucket with explicit confirmation...")
+        print("9. Deleting the test bucket with explicit confirmation...")
 
         delete_result = execute(
             credentials=None,

@@ -815,3 +815,196 @@ def test_delete_bucket_safe_does_not_delete_bucket_after_object_error(
     assert result["ok"] is False
     assert result["error"]["code"] == "ObjectDeleteFailed"
     mock_s3_client.delete_bucket.assert_not_called()
+
+
+@patch("backend.functions.dispatcher.services.s3_service.boto3.client")
+def test_put_lifecycle_rule_creates_first_rule(mock_boto3_client):
+    mock_s3_client = Mock()
+    mock_boto3_client.return_value = mock_s3_client
+    mock_s3_client.get_bucket_lifecycle_configuration.side_effect = (
+        ClientError(
+            error_response={
+                "Error": {
+                    "Code": "NoSuchLifecycleConfiguration",
+                    "Message": "The lifecycle configuration does not exist.",
+                }
+            },
+            operation_name="GetBucketLifecycleConfiguration",
+        )
+    )
+
+    result = execute(
+        credentials=None,
+        params={
+            "action": "put_lifecycle_rule",
+            "bucket_name": "sitabot-lifecycle-test",
+            "rule_id": "archive-documents",
+            "prefix": "documents/",
+            "transition_days": 30,
+            "storage_class": "standard_ia",
+            "region": "us-east-2",
+        },
+    )
+
+    expected_rule = {
+        "ID": "archive-documents",
+        "Status": "Enabled",
+        "Filter": {"Prefix": "documents/"},
+        "Transitions": [
+            {
+                "Days": 30,
+                "StorageClass": "STANDARD_IA",
+            }
+        ],
+    }
+    mock_s3_client.put_bucket_lifecycle_configuration.assert_called_once_with(
+        Bucket="sitabot-lifecycle-test",
+        LifecycleConfiguration={"Rules": [expected_rule]},
+    )
+    assert result == {
+        "ok": True,
+        "service": "s3",
+        "action": "put_lifecycle_rule",
+        "data": {
+            "bucket_name": "sitabot-lifecycle-test",
+            "rule": expected_rule,
+            "replaced_existing_rule": False,
+            "total_rule_count": 1,
+        },
+    }
+
+
+@patch("backend.functions.dispatcher.services.s3_service.boto3.client")
+def test_put_lifecycle_rule_preserves_and_replaces_rules(
+    mock_boto3_client,
+):
+    mock_s3_client = Mock()
+    mock_boto3_client.return_value = mock_s3_client
+    preserved_rule = {
+        "ID": "keep-this-rule",
+        "Status": "Enabled",
+        "Filter": {"Prefix": "backups/"},
+        "Expiration": {"Days": 365},
+    }
+    old_rule = {
+        "ID": "archive-logs",
+        "Status": "Disabled",
+        "Filter": {"Prefix": "old-logs/"},
+        "Transitions": [
+            {"Days": 180, "StorageClass": "GLACIER"}
+        ],
+    }
+    mock_s3_client.get_bucket_lifecycle_configuration.return_value = {
+        "Rules": [preserved_rule, old_rule]
+    }
+
+    result = execute(
+        credentials=None,
+        params={
+            "action": "put_lifecycle_rule",
+            "bucket_name": "sitabot-lifecycle-test",
+            "rule_id": "archive-logs",
+            "prefix": "logs/",
+            "transition_days": 90,
+            "storage_class": "GLACIER",
+        },
+    )
+
+    replacement_rule = {
+        "ID": "archive-logs",
+        "Status": "Enabled",
+        "Filter": {"Prefix": "logs/"},
+        "Transitions": [
+            {"Days": 90, "StorageClass": "GLACIER"}
+        ],
+    }
+    mock_s3_client.put_bucket_lifecycle_configuration.assert_called_once_with(
+        Bucket="sitabot-lifecycle-test",
+        LifecycleConfiguration={
+            "Rules": [preserved_rule, replacement_rule]
+        },
+    )
+    assert result["ok"] is True
+    assert result["data"]["replaced_existing_rule"] is True
+    assert result["data"]["total_rule_count"] == 2
+
+
+@patch("backend.functions.dispatcher.services.s3_service.boto3.client")
+def test_put_lifecycle_rule_rejects_standard_ia_before_30_days(
+    mock_boto3_client,
+):
+    result = execute(
+        credentials=None,
+        params={
+            "action": "put_lifecycle_rule",
+            "bucket_name": "sitabot-lifecycle-test",
+            "transition_days": 10,
+            "storage_class": "STANDARD_IA",
+        },
+    )
+
+    assert result["ok"] is False
+    assert result["error"] == {
+        "code": "TransitionTooEarly",
+        "message": (
+            "STANDARD_IA yêu cầu transition_days tối thiểu là 30."
+        ),
+    }
+    mock_boto3_client.assert_not_called()
+
+
+@patch("backend.functions.dispatcher.services.s3_service.boto3.client")
+def test_put_lifecycle_rule_rejects_unsupported_storage_class(
+    mock_boto3_client,
+):
+    result = execute(
+        credentials=None,
+        params={
+            "action": "put_lifecycle_rule",
+            "bucket_name": "sitabot-lifecycle-test",
+            "transition_days": 30,
+            "storage_class": "STANDARD",
+        },
+    )
+
+    assert result["ok"] is False
+    assert result["error"]["code"] == "InvalidStorageClass"
+    mock_boto3_client.assert_not_called()
+
+
+@patch("backend.functions.dispatcher.services.s3_service.boto3.client")
+def test_put_lifecycle_rule_handles_access_denied(mock_boto3_client):
+    mock_s3_client = Mock()
+    mock_boto3_client.return_value = mock_s3_client
+    mock_s3_client.get_bucket_lifecycle_configuration.side_effect = (
+        ClientError(
+            error_response={
+                "Error": {
+                    "Code": "AccessDenied",
+                    "Message": "Not allowed to read lifecycle configuration.",
+                }
+            },
+            operation_name="GetBucketLifecycleConfiguration",
+        )
+    )
+
+    result = execute(
+        credentials=None,
+        params={
+            "action": "put_lifecycle_rule",
+            "bucket_name": "sitabot-lifecycle-test",
+            "transition_days": 90,
+            "storage_class": "GLACIER",
+        },
+    )
+
+    assert result == {
+        "ok": False,
+        "service": "s3",
+        "action": "put_lifecycle_rule",
+        "error": {
+            "code": "AccessDenied",
+            "message": "Not allowed to read lifecycle configuration.",
+        },
+    }
+    mock_s3_client.put_bucket_lifecycle_configuration.assert_not_called()

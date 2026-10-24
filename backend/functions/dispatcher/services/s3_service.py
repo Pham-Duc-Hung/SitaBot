@@ -15,6 +15,20 @@ PUBLIC_ACCESS_BLOCK_KEYS = (
     "RestrictPublicBuckets",
 )
 
+SUPPORTED_LIFECYCLE_STORAGE_CLASSES = {
+    "STANDARD_IA",
+    "ONEZONE_IA",
+    "INTELLIGENT_TIERING",
+    "GLACIER_IR",
+    "GLACIER",
+    "DEEP_ARCHIVE",
+}
+
+LIFECYCLE_MINIMUM_TRANSITION_DAYS = {
+    "STANDARD_IA": 30,
+    "ONEZONE_IA": 30,
+}
+
 
 def _create_s3_client(credentials, region):
     """
@@ -392,6 +406,74 @@ def _delete_bucket_safe(
     }
 
 
+def _put_lifecycle_rule(
+    client,
+    bucket_name,
+    rule_id,
+    prefix,
+    transition_days,
+    storage_class,
+):
+    """
+    Thêm hoặc cập nhật một Lifecycle Rule mà không làm mất các rule khác.
+
+    PutBucketLifecycleConfiguration thay thế toàn bộ cấu hình hiện tại, vì
+    vậy phải đọc và hợp nhất các rule trước khi gửi lại cho S3.
+    """
+    try:
+        current_configuration = client.get_bucket_lifecycle_configuration(
+            Bucket=bucket_name,
+        )
+        existing_rules = current_configuration.get("Rules", [])
+    except ClientError as error:
+        error_code = error.response.get("Error", {}).get("Code")
+        if error_code != "NoSuchLifecycleConfiguration":
+            raise
+        existing_rules = []
+
+    new_rule = {
+        "ID": rule_id,
+        "Status": "Enabled",
+        "Filter": {"Prefix": prefix},
+        "Transitions": [
+            {
+                "Days": transition_days,
+                "StorageClass": storage_class,
+            }
+        ],
+    }
+
+    merged_rules = []
+    replaced_existing_rule = False
+
+    for existing_rule in existing_rules:
+        if existing_rule.get("ID") == rule_id:
+            merged_rules.append(new_rule)
+            replaced_existing_rule = True
+        else:
+            merged_rules.append(existing_rule)
+
+    if not replaced_existing_rule:
+        merged_rules.append(new_rule)
+
+    client.put_bucket_lifecycle_configuration(
+        Bucket=bucket_name,
+        LifecycleConfiguration={"Rules": merged_rules},
+    )
+
+    return {
+        "ok": True,
+        "service": "s3",
+        "action": "put_lifecycle_rule",
+        "data": {
+            "bucket_name": bucket_name,
+            "rule": new_rule,
+            "replaced_existing_rule": replaced_existing_rule,
+            "total_rule_count": len(merged_rules),
+        },
+    }
+
+
 def _create_presigned_download(
     client,
     bucket_name,
@@ -453,6 +535,7 @@ def execute(credentials, params):
         "scan_public_access",
         "inspect_bucket_for_delete",
         "delete_bucket_safe",
+        "put_lifecycle_rule",
     }
 
     if action not in supported_actions:
@@ -548,6 +631,111 @@ def execute(credentials, params):
                 },
             }
 
+    if action == "put_lifecycle_rule":
+        transition_days = params.get("transition_days")
+        storage_class = params.get("storage_class")
+        prefix = params.get("prefix", "")
+        rule_id = params.get(
+            "rule_id",
+            (
+                f"sitabot-transition-{storage_class.lower()}-"
+                f"{transition_days}-days"
+                if isinstance(storage_class, str)
+                else ""
+            ),
+        )
+
+        if (
+            not isinstance(transition_days, int)
+            or isinstance(transition_days, bool)
+            or transition_days < 1
+        ):
+            return {
+                "ok": False,
+                "service": "s3",
+                "action": action,
+                "error": {
+                    "code": "InvalidTransitionDays",
+                    "message": "transition_days phải là số nguyên dương.",
+                },
+            }
+
+        if not isinstance(storage_class, str):
+            return {
+                "ok": False,
+                "service": "s3",
+                "action": action,
+                "error": {
+                    "code": "InvalidStorageClass",
+                    "message": "storage_class không hợp lệ.",
+                },
+            }
+
+        storage_class = storage_class.upper()
+
+        if storage_class not in SUPPORTED_LIFECYCLE_STORAGE_CLASSES:
+            return {
+                "ok": False,
+                "service": "s3",
+                "action": action,
+                "error": {
+                    "code": "InvalidStorageClass",
+                    "message": (
+                        "storage_class phải là một trong: "
+                        + ", ".join(
+                            sorted(SUPPORTED_LIFECYCLE_STORAGE_CLASSES)
+                        )
+                    ),
+                },
+            }
+
+        minimum_days = LIFECYCLE_MINIMUM_TRANSITION_DAYS.get(
+            storage_class,
+            1,
+        )
+
+        if transition_days < minimum_days:
+            return {
+                "ok": False,
+                "service": "s3",
+                "action": action,
+                "error": {
+                    "code": "TransitionTooEarly",
+                    "message": (
+                        f"{storage_class} yêu cầu transition_days tối thiểu "
+                        f"là {minimum_days}."
+                    ),
+                },
+            }
+
+        if not isinstance(prefix, str):
+            return {
+                "ok": False,
+                "service": "s3",
+                "action": action,
+                "error": {
+                    "code": "InvalidPrefix",
+                    "message": "prefix phải là chuỗi.",
+                },
+            }
+
+        if (
+            not isinstance(rule_id, str)
+            or not rule_id.strip()
+            or len(rule_id) > 255
+        ):
+            return {
+                "ok": False,
+                "service": "s3",
+                "action": action,
+                "error": {
+                    "code": "InvalidRuleId",
+                    "message": (
+                        "rule_id phải là chuỗi từ 1 đến 255 ký tự."
+                    ),
+                },
+            }
+
     try:
         client = _create_s3_client(credentials, region)
 
@@ -562,6 +750,16 @@ def execute(credentials, params):
                 client,
                 bucket_name,
                 expected_deletable_item_count,
+            )
+
+        if action == "put_lifecycle_rule":
+            return _put_lifecycle_rule(
+                client,
+                bucket_name,
+                rule_id,
+                prefix,
+                transition_days,
+                storage_class,
             )
 
         if action == "create_bucket":
