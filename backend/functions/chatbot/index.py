@@ -77,6 +77,8 @@ def call_llm_api(
     api_key = api_key or os.environ.get("LLM_API_KEY")
     api_url = api_url or os.environ.get("LLM_API_URL", "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions")
     model = model or os.environ.get("LLM_MODEL", "gemini-2.5-flash")
+    if model in ("gemini-1.5-flash", "gpt-4o-mini"):
+        model = "gemini-2.5-flash"
 
     # Nếu không có API Key cấu hình, dùng bộ phân tích mẫu cho môi trường test
     if not api_key:
@@ -110,6 +112,16 @@ def call_llm_api(
                 "content": choice.get("content"),
                 "tool_calls": choice.get("tool_calls"),
             }
+    except urllib.error.HTTPError as http_err:
+        try:
+            err_body = http_err.read().decode("utf-8")
+        except Exception:
+            err_body = str(http_err)
+        logger.error("Lỗi HTTP từ LLM API: %s - %s", http_err.code, err_body)
+        return {
+            "content": f"Đã xảy ra lỗi khi kết nối với mô hình AI ({http_err.code}): {err_body}",
+            "tool_calls": None,
+        }
     except Exception as exc:
         logger.error("Lỗi khi gọi API LLM: %s", str(exc))
         return {
