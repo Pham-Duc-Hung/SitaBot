@@ -1,4 +1,5 @@
 import boto3
+from botocore.config import Config
 from botocore.exceptions import ClientError
 
 
@@ -14,6 +15,10 @@ def _create_s3_client(credentials, region):
     """
     client_options = {
         "region_name": region,
+        "config": Config(
+            signature_version="s3v4",
+            s3={"addressing_style": "virtual"},
+        ),
     }
 
     if credentials:

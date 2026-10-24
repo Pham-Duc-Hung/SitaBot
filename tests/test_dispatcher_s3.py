@@ -1,4 +1,4 @@
-from unittest.mock import Mock, patch
+from unittest.mock import ANY, Mock, patch
 
 from botocore.exceptions import ClientError
 
@@ -23,7 +23,11 @@ def test_create_bucket_safely(mock_boto3_client):
     mock_boto3_client.assert_called_once_with(
         "s3",
         region_name="us-east-2",
+        config=ANY,
     )
+    client_config = mock_boto3_client.call_args.kwargs["config"]
+    assert client_config.signature_version == "s3v4"
+    assert client_config.s3 == {"addressing_style": "virtual"}
 
     # Region khác us-east-1 phải có LocationConstraint
     mock_s3_client.create_bucket.assert_called_once_with(
@@ -158,6 +162,7 @@ def test_create_bucket_in_us_east_1_without_location_constraint(
     mock_boto3_client.assert_called_once_with(
         "s3",
         region_name="us-east-1",
+        config=ANY,
     )
 
     # us-east-1 không được truyền CreateBucketConfiguration
@@ -197,6 +202,7 @@ def test_uses_temporary_sts_credentials(mock_boto3_client):
         aws_access_key_id="temporary-access-key",
         aws_secret_access_key="temporary-secret-key",
         aws_session_token="temporary-session-token",
+        config=ANY,
     )
 
     assert result["ok"] is True
@@ -226,6 +232,7 @@ def test_create_presigned_download_url(mock_boto3_client):
     mock_boto3_client.assert_called_once_with(
         "s3",
         region_name="us-east-2",
+        config=ANY,
     )
 
     mock_s3_client.generate_presigned_url.assert_called_once_with(
@@ -358,6 +365,7 @@ def test_block_public_access_for_existing_bucket(mock_boto3_client):
     mock_boto3_client.assert_called_once_with(
         "s3",
         region_name="us-east-2",
+        config=ANY,
     )
 
     mock_s3_client.put_public_access_block.assert_called_once_with(
