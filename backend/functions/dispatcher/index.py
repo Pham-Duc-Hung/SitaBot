@@ -125,9 +125,19 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
             "error_code": "DispatcherExecutionError"
         }
 
+    # Đảm bảo kết quả luôn là dict kể cả khi service con chưa được triển khai hoàn chỉnh
+    if not isinstance(result, dict):
+        result = {
+            "status": "NOT_IMPLEMENTED",
+            "message": f"Dịch vụ '{service_name}' đang được phát triển bởi thành viên phụ trách.",
+            "error_code": "ServiceUnderDevelopment"
+        }
+
     # 4. Trả về kết quả
     http_status = 200
-    if result.get("status") == "ERROR":
+    if result.get("status") == "NOT_IMPLEMENTED":
+        http_status = 501
+    elif result.get("status") == "ERROR":
         http_status = 400 if result.get("error_code") in ("InvalidParameters", "UnsupportedService", "MissingService", "MissingAction") else 500
     elif result.get("status") == "CONFIRMATION_REQUIRED":
         http_status = 200  # Vẫn là 200 OK nhưng body báo CONFIRMATION_REQUIRED để FE hỏi người dùng
