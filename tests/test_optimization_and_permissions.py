@@ -1,6 +1,6 @@
 """
 Author: Trịnh Thiên Quang
-Kiểm thử tối ưu hóa khởi động lạnh (Cold-start) và phân quyền an toàn cho Lambda Backend.
+Kiểm thử tối ưu hóa cold start và phân quyền an toàn cho Lambda Backend.
 """
 
 import os

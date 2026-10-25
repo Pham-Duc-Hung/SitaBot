@@ -1,6 +1,6 @@
 """
 Author: Trịnh Thiên Quang
-Đo đạc và đánh giá hiệu năng khởi động lạnh (Cold-start) và tái sử dụng context (Warm start).
+Đo đạc và đánh giá hiệu năng cold start và tái sử dụng context (Warm start).
 """
 
 import json
