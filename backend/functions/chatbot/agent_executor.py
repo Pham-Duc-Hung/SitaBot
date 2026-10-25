@@ -3,8 +3,10 @@ Author: Trịnh Thiên Quang
 Bộ điều phối chu trình suy luận tự trị (ReAct Agent Loop) cho trợ lý SatiBot.
 """
 
+import ast
 import json
 import logging
+import re
 import uuid
 from typing import Any, Callable, Dict, List, Optional
 
@@ -67,13 +69,60 @@ class AgentExecutor:
             return tool_name, None, "Arguments của công cụ không phải JSON hợp lệ."
         if not isinstance(parameters, dict):
             return tool_name, None, "Arguments của công cụ phải là JSON object."
-        if tool_name == "create_lambda_function" and not parameters.get("role_arn"):
+
+        schema = self._schemas_by_name[tool_name].get("parameters", {})
+        properties = schema.get("properties", {})
+
+        if tool_name == "create_lambda_function" and "role_arn" in properties and not parameters.get("role_arn"):
             import os
             parameters["role_arn"] = os.environ.get(
                 "DEFAULT_LAMBDA_ROLE_ARN",
                 "arn:aws:iam::640737808081:role/service-role/test-lambda-role-my87f8eu",
             )
+
+        missing = [name for name in schema.get("required", []) if name not in parameters]
+        unknown = sorted(set(parameters) - set(properties))
+        # Loại bỏ các tham số phụ vô hại trước khi báo lỗi
+        for harmless in ("handler", "tags", "environment", "env_vars"):
+            if harmless in unknown:
+                unknown.remove(harmless)
+        if missing:
+            return tool_name, parameters, f"Thiếu tham số bắt buộc: {', '.join(missing)}. Hãy tự sửa tool call."
+        if unknown:
+            return tool_name, parameters, f"Tham số không được hỗ trợ: {', '.join(unknown)}. Hãy tự sửa tool call."
+        invalid_types = []
+        for name, value in parameters.items():
+            expected = properties.get(name, {}).get("type")
+            valid = True
+            if expected == "string":
+                valid = isinstance(value, str) and bool(value.strip())
+            elif expected == "integer":
+                valid = isinstance(value, int) and not isinstance(value, bool)
+            elif expected == "boolean":
+                valid = isinstance(value, bool)
+            elif expected == "object":
+                valid = isinstance(value, dict)
+            elif expected == "array":
+                valid = isinstance(value, list)
+                if valid and properties.get(name, {}).get("items", {}).get("type") == "string":
+                    valid = all(isinstance(item, str) and bool(item.strip()) for item in value)
+            if not valid:
+                invalid_types.append(name)
+        if invalid_types:
+            return tool_name, parameters, f"Sai kiểu dữ liệu cho: {', '.join(invalid_types)}. Hãy tự sửa tool call."
         return tool_name, parameters, None
+
+    @staticmethod
+    def _requires_real_action(user_message: str) -> bool:
+        """Detect operational requests that must not be completed with prose alone."""
+        normalized = re.sub(r"\s+", " ", (user_message or "").strip().lower())
+        targets = ("aws", "lambda", "function", "hàm", "tài khoản", "cloud", "webhook")
+        actions = (
+            "làm", "truy cập", "kiểm tra", "chẩn đoán", "liệt kê", "đọc", "chạy",
+            "test", "thực thi", "tạo", "triển khai", "deploy", "sửa", "cập nhật",
+            "đổi", "tăng", "giảm", "xóa", "khóa", "mở khóa", "invoke", "audit", "thiết kế",
+        )
+        return any(target in normalized for target in targets) and any(action in normalized for action in actions)
 
     def _serialize_observation(self, data: Any) -> str:
         """Keep tool output bounded so a large AWS response cannot exhaust LLM context."""
@@ -85,6 +134,128 @@ class AgentExecutor:
             return serialized
         omitted = len(serialized) - self.max_observation_chars
         return serialized[: self.max_observation_chars] + f"...[đã rút gọn {omitted} ký tự]"
+
+    def _recover_create_call_from_text(self, content: Any, user_message: str) -> Optional[Dict[str, Any]]:
+        """Recover a real tool call when a model prints code/pseudo-call as plain text or JSON."""
+        if not isinstance(content, str):
+            return None
+
+        # 1. Khôi phục từ JSON pseudo-tool-call: ```json {"tool": "...", "arguments": ...} ```
+        json_match = re.search(r"```(?:json)?\s*\n?(?P<json_str>\{.*?\})\s*```", content, re.DOTALL | re.IGNORECASE)
+        if json_match:
+            try:
+                parsed_json = json.loads(json_match.group("json_str"))
+                candidate_name = parsed_json.get("tool") or parsed_json.get("name") or parsed_json.get("action")
+                candidate_args = parsed_json.get("arguments") or parsed_json.get("parameters") or {}
+                if candidate_name and candidate_name in self._schemas_by_name:
+                    return {
+                        "id": f"recovered_{uuid.uuid4().hex[:10]}",
+                        "type": "function",
+                        "function": {
+                            "name": candidate_name,
+                            "arguments": json.dumps(candidate_args, ensure_ascii=False) if isinstance(candidate_args, dict) else str(candidate_args),
+                        },
+                    }
+            except Exception:
+                pass
+
+        # 2. Khôi phục từ Pseudo-call kiểu: [Tool Call: create_lambda_function(...)]
+        pseudo_match = re.search(r"\[(?:Tool Call|Action):\s*([A-Za-z0-9-_]+)\((.*?)\)\]", content, re.DOTALL | re.IGNORECASE)
+        if pseudo_match:
+            candidate_name = pseudo_match.group(1)
+            if candidate_name in self._schemas_by_name:
+                name_match = re.search(r"function_name\s*=\s*['\"]([A-Za-z0-9-_]{1,64})['\"]", pseudo_match.group(2))
+                func_name = name_match.group(1) if name_match else "satibot-generated-service"
+                code_match = re.search(r"```(?:python)?\s*\n?(?P<code>.*?)(?:```|$)", content, re.DOTALL | re.IGNORECASE)
+                extracted_code = code_match.group("code").strip() if code_match else "def lambda_handler(event, context):\n    return {'statusCode': 200}"
+                return {
+                    "id": f"recovered_{uuid.uuid4().hex[:10]}",
+                    "type": "function",
+                    "function": {
+                        "name": candidate_name,
+                        "arguments": json.dumps({"function_name": func_name, "code_content": extracted_code}, ensure_ascii=False),
+                    },
+                }
+
+        # 3. Khôi phục từ khối code Python trực tiếp
+        patterns = [
+            r"```(?:python)?\s*\n?(?P<code>.*?)(?:```|$)",
+            r"\x27\x27\x27(?:python)?\s*\n?(?P<code>.*?)(?:\x27\x27\x27|$)",
+            r"\"\"\"(?:python)?\s*\n?(?P<code>.*?)(?:\"\"\"|$)",
+        ]
+        code = None
+        for pat in patterns:
+            m = re.search(pat, content, re.DOTALL | re.IGNORECASE)
+            if m and len(m.group("code").strip()) > 20:
+                candidate = m.group("code").strip()
+                if "def " in candidate or "import " in candidate or "lambda_handler" in candidate:
+                    code = candidate
+                    break
+
+        if not code:
+            m = re.search(r"(?:^|\n)(?P<code>(?:import\s+|from\s+|def\s+).*)$", content, re.DOTALL)
+            if m:
+                code = m.group("code").strip()
+
+        if not code:
+            return None
+
+        # Đảm bảo có lambda_handler
+        if "def lambda_handler(" not in code and "def handler(" in code:
+            code += "\n\nlambda_handler = handler\n"
+
+        # Kiểm tra AST và cắt gọt phần bị cắt ngang nếu LLM chạm token limit
+        try:
+            ast.parse(code)
+        except SyntaxError:
+            lines = code.split("\n")
+            parsed_ok = False
+            for cut in range(len(lines) - 1, max(0, len(lines) - 30), -1):
+                sub_code = "\n".join(lines[:cut]).strip()
+                try:
+                    ast.parse(sub_code)
+                    code = sub_code
+                    parsed_ok = True
+                    break
+                except SyntaxError:
+                    continue
+            if not parsed_ok:
+                return None
+
+        name_match = re.search(
+            r"create_lambda_function\s*\(.*?function_name\s*=\s*['\"]([A-Za-z0-9-_]{1,64})['\"]",
+            content,
+            re.DOTALL,
+        )
+        if name_match:
+            function_name = name_match.group(1)
+        else:
+            goal_match = re.search(r"(?:lambda|hàm)\s+(?:tên\s+)?([A-Za-z0-9-_]{3,64})", user_message, re.IGNORECASE)
+            function_name = goal_match.group(1) if goal_match else "satibot-generated-service"
+
+        parameters = {
+            "function_name": function_name,
+            "code_content": code,
+            "description": "Lambda được SatiBot khôi phục từ model output và triển khai tự động",
+            "runtime": "python3.12",
+            "memory_mb": 256,
+            "timeout_seconds": 30,
+        }
+        create_props = self._schemas_by_name.get("create_lambda_function", {}).get("parameters", {}).get("properties", {})
+        if "role_arn" in create_props:
+            import os
+            parameters["role_arn"] = os.environ.get(
+                "DEFAULT_LAMBDA_ROLE_ARN",
+                "arn:aws:iam::640737808081:role/service-role/test-lambda-role-my87f8eu",
+            )
+        return {
+            "id": f"recovered_{uuid.uuid4().hex[:10]}",
+            "type": "function",
+            "function": {
+                "name": "create_lambda_function",
+                "arguments": json.dumps(parameters, ensure_ascii=False),
+            },
+        }
 
     @staticmethod
     def _assistant_message(raw_msg: Any, content: Any, tool_calls: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -117,6 +288,7 @@ class AgentExecutor:
             start_iteration=0,
             system_prompt=system_prompt,
             context=context,
+            action_required=self._requires_real_action(user_message),
         )
 
     def resume(
@@ -187,6 +359,7 @@ class AgentExecutor:
             start_iteration=start_iteration,
             system_prompt=system_prompt,
             context=context,
+            action_required=True,
         )
 
     def _process_tool_calls(
@@ -279,8 +452,13 @@ class AgentExecutor:
         start_iteration: int,
         system_prompt: str,
         context: Dict[str, Any],
+        action_required: bool = False,
     ) -> Dict[str, Any]:
         """Vòng lặp cốt lõi: Gửi LLM -> Thực thi -> Đọc Observation -> Nghĩ tiếp."""
+        original_goal = next(
+            (item.get("content", "") for item in messages if item.get("role") == "user"),
+            "",
+        )
         for iteration in range(start_iteration, self.max_iterations):
             llm_resp = self.call_llm_fn(messages=messages, tools=self.tools if self.tools else None)
 
@@ -288,8 +466,50 @@ class AgentExecutor:
             tool_calls = llm_resp.get("tool_calls")
             raw_msg = llm_resp.get("raw_message")
 
-            # Nếu Agent không gọi thêm công cụ nào nữa -> Đã hoàn thành câu trả lời
+            if llm_resp.get("error_code"):
+                return {
+                    "status": "ERROR",
+                    "type": "llm_error",
+                    "message": content or "Không thể kết nối mô hình AI.",
+                    "steps": steps_log,
+                    "data": {"error_code": llm_resp.get("error_code")},
+                }
+
+            # Operational runs may only finish after at least one real tool observation.
             if not tool_calls:
+                if action_required and not steps_log:
+                    recovered_call = self._recover_create_call_from_text(content, original_goal)
+                    if recovered_call:
+                        result = self._process_tool_calls(
+                            [recovered_call], messages, steps_log, iteration,
+                            system_prompt, context,
+                            "Đã khôi phục structured tool call từ mã nguồn hợp lệ do model sinh ra.",
+                            None,
+                        )
+                        if result is not None:
+                            result["recovered_tool_call"] = True
+                            return result
+                    if iteration == start_iteration:
+                        # Gemini's OpenAI-compatible endpoint rejects requests whose
+                        # conversation ends in a model/system turn. Keep the retry as
+                        # an explicit user instruction so the protocol remains valid.
+                        messages.append({
+                            "role": "user",
+                            "content": (
+                                "Tiếp tục run này bằng hành động thực tế. Bạn vừa mô tả hành động nhưng chưa gọi công cụ. "
+                                "Đây là một agent run, không phải chat tư vấn. "
+                                "Hãy gọi ngay công cụ AWS phù hợp. Nếu mục tiêu chưa đủ cụ thể để chọn công cụ, chỉ hỏi đúng một câu "
+                                "làm rõ ngắn gọn; tuyệt đối không nói đang làm, đã làm, sẽ hiện nút xác nhận hoặc đã hoàn tất."
+                            ),
+                        })
+                        continue
+                    return {
+                        "status": "NEEDS_INPUT",
+                        "type": "agent_needs_input",
+                        "message": content or "Mục tiêu chưa đủ cụ thể để chọn công cụ AWS. Hãy nêu tài nguyên hoặc hành động cần thực hiện.",
+                        "steps": [],
+                        "data": {"reason": "no_tool_selected"},
+                    }
                 return {
                     "status": "SUCCESS",
                     "type": "agent_reply",

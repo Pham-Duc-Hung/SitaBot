@@ -5,7 +5,7 @@ Kiểm thử ràng buộc kiểu dữ liệu, tham số và CORS cho LambdaServi
 import os
 import sys
 import unittest
-from unittest.mock import Mock
+from unittest.mock import MagicMock, Mock, patch
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 SERVICE_DIR = os.path.abspath(os.path.join(CURRENT_DIR, "..", "backend", "functions", "dispatcher", "services"))
@@ -67,6 +67,30 @@ class LambdaServiceHardeningTests(unittest.TestCase):
         self.assertEqual(result["status"], "ERROR")
         self.assertEqual(result["error_code"], "InvalidParameters")
         self.service.client.create_function_url_config.assert_not_called()
+
+    @patch("lambda_service.urllib.request.urlopen")
+    def test_existing_public_url_repairs_both_required_permissions_and_verifies(self, mock_urlopen):
+        self.service.client.get_function_url_config.return_value = {
+            "FunctionUrl": "https://example.lambda-url.us-east-1.on.aws/"
+        }
+        response = MagicMock()
+        response.status = 200
+        response.read.return_value = b'{"success": true}'
+        response.__enter__.return_value = response
+        mock_urlopen.return_value = response
+
+        result = self.service.create_public_function_url(
+            "demo", ["http://127.0.0.1:8080"]
+        )
+
+        self.assertEqual(result["status"], "SUCCESS")
+        self.assertTrue(result["data"]["url_verified"])
+        self.assertEqual(self.service.client.add_permission.call_count, 2)
+        actions = {
+            call.kwargs["Action"] for call in self.service.client.add_permission.call_args_list
+        }
+        self.assertEqual(actions, {"lambda:InvokeFunctionUrl", "lambda:InvokeFunction"})
+        self.service.client.update_function_url_config.assert_called_once()
 
     def test_schema_declares_cors_allow_origins(self):
         schema = next(

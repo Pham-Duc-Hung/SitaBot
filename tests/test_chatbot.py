@@ -15,7 +15,7 @@ PROJECT_ROOT = os.path.abspath(os.path.join(CURRENT_DIR, ".."))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from backend.functions.chatbot.index import lambda_handler, format_tools_for_llm
+from backend.functions.chatbot.index import lambda_handler, format_tools_for_llm, call_llm_api
 
 
 class TestChatbotFunctionCalling(unittest.TestCase):
@@ -117,6 +117,27 @@ class TestChatbotFunctionCalling(unittest.TestCase):
         self.assertEqual(res["statusCode"], 200)
         body = json.loads(res["body"])
         self.assertEqual(body["status"], "SUCCESS")
+
+    @patch("backend.functions.chatbot.index.time.sleep")
+    @patch("backend.functions.chatbot.index.urllib.request.urlopen")
+    def test_llm_connection_error_retries_before_success(self, mock_urlopen, mock_sleep):
+        response = MagicMock()
+        response.read.return_value = json.dumps({
+            "choices": [{"message": {"content": "ok", "tool_calls": None}}]
+        }).encode()
+        response.__enter__.return_value = response
+        mock_urlopen.side_effect = [TimeoutError("temporary"), response]
+
+        result = call_llm_api(
+            messages=[{"role": "user", "content": "hello"}],
+            api_key="test-key",
+            api_url="https://example.test/chat",
+        )
+
+        self.assertEqual(result["content"], "ok")
+        self.assertEqual(result["llm_attempts"], 2)
+        self.assertEqual(mock_urlopen.call_count, 2)
+        mock_sleep.assert_called_once()
 
 
 if __name__ == "__main__":

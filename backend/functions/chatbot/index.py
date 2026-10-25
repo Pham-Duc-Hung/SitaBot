@@ -100,12 +100,17 @@ Người dùng không cần kiến thức AWS chuyên sâu và KHÔNG BAO GIỜ 
        + Input Schema Validation & Comprehensive Logging (bắt lỗi an toàn, trả về chuẩn HTTP 200/400/500).
 
 3. QUY TRÌNH HÀNH ĐỘNG TRỌN GÓI (ACTION FIRST):
-   - Khi người dùng giao mục tiêu (tạo hàm, viết API, hệ thống chống chịu, xử lý đơn hàng...):
-     a) BẮT BUỘC PHẢI PHÁT RA LỆNH GỌI CÔNG CỤ (tool_call) 'create_lambda_function' NGAY LẬP TỨC kèm mã nguồn Python hoàn chỉnh do bạn thiết kế và role_arn mặc định: 'arn:aws:iam::640737808081:role/service-role/test-lambda-role-my87f8eu'.
+   - Khi người dùng giao mục tiêu (tạo hàm, viết API, hệ thống chống chịu, tiếp nhận webhook...):
+     a) BẮT BUỘC PHẢI PHÁT RA LỆNH GỌI CÔNG CỤ (tool_call) 'create_lambda_function' NGAY LẬP TỨC.
+        Toàn bộ mã nguồn Python do bạn thiết kế PHẢI NẰM TRỌN VẸN trong tham số 'code_content' của tool_call.
+        TUYỆT ĐỐI KHÔNG xuất mã nguồn dưới dạng văn bản chat (không dùng ```python hay '''python).
+        Sử dụng role_arn: 'arn:aws:iam::640737808081:role/service-role/test-lambda-role-my87f8eu'.
      b) ĐỪNG CHỈ HỎI BẰNG CHỮ "bạn có đồng ý không" mà không gọi tool! Hệ thống của chúng ta đã có sẵn cơ chế chặn an toàn (Confirmation Dialog) tự động hiển thị hộp thoại duyệt và nút bấm Xác Nhận cho người dùng mỗi khi bạn phát lệnh gọi 'create_lambda_function'.
      c) Sau khi người dùng bấm Duyệt (Confirmed): Hệ thống tự động tiếp tục vòng lặp (resume):
-        - Tự động gọi 'invoke_lambda_function' với payload thử nghiệm để kiểm chứng hàm chạy thành công thật.
+        - Với yêu cầu chống chịu sự cố / webhook, tự động gọi 'configure_resilient_service' để publish version bất biến, gắn alias ổn định, cấu hình retry/event age và reserved concurrency.
+        - Tự động gọi 'invoke_lambda_function' với payload thử nghiệm (ví dụ: các sự kiện order.created, order.cancelled, payment.failed, event cũ, event trùng lặp) để kiểm chứng hàm chạy thành công thật.
         - Tự động gọi 'create_public_function_url' để cấp đường link HTTPS công khai.
+          Khi chạy web demo cục bộ và người dùng không nêu origin, dùng cors_allow_origins=['http://127.0.0.1:8080']; tuyệt đối không bỏ thiếu trường này và không dùng wildcard '*'.
         - Bàn giao kết quả trọn gói kèm endpoint HTTPS và số liệu kiểm thử thực tế.
 
 4. AN TOÀN & BẢO MẬT:
@@ -186,44 +191,60 @@ def call_llm_api(
         "Authorization": f"Bearer {api_key}",
     }
 
-    try:
-        req = urllib.request.Request(
-            api_url,
-            data=json.dumps(payload).encode("utf-8"),
-            headers=headers,
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            choice = data["choices"][0]["message"]
-            return {
-                "content": choice.get("content"),
-                "tool_calls": choice.get("tool_calls"),
-                "raw_message": choice,
-            }
-    except urllib.error.HTTPError as http_err:
+    max_attempts = 3
+    last_error: Optional[Exception] = None
+    for attempt in range(max_attempts):
         try:
-            err_body = http_err.read().decode("utf-8")
-        except Exception:
-            err_body = str(http_err)
-        logger.error("Lỗi HTTP từ LLM API: %s - %s", http_err.code, err_body)
-        if http_err.code == 429:
-            friendly_msg = (
-                "Hệ thống AI hiện đang tạm thời vượt quá hạn mức yêu cầu (Rate Limit - HTTP 429). "
-                "Vui lòng đợi khoảng 5-10 giây rồi gửi lại yêu cầu nhé."
+            req = urllib.request.Request(
+                api_url,
+                data=json.dumps(payload).encode("utf-8"),
+                headers=headers,
+                method="POST",
             )
-        else:
-            friendly_msg = f"Đã xảy ra lỗi khi kết nối với mô hình AI ({http_err.code}): {err_body}"
-        return {
-            "content": friendly_msg,
-            "tool_calls": None,
-        }
-    except Exception as exc:
-        logger.error("Lỗi khi gọi API LLM: %s", str(exc))
-        return {
-            "content": f"Đã xảy ra lỗi khi kết nối với mô hình AI: {str(exc)}",
-            "tool_calls": None,
-        }
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                choice = data["choices"][0]["message"]
+                return {
+                    "content": choice.get("content"),
+                    "tool_calls": choice.get("tool_calls"),
+                    "raw_message": choice,
+                    "llm_attempts": attempt + 1,
+                }
+        except urllib.error.HTTPError as http_err:
+            last_error = http_err
+            try:
+                err_body = http_err.read().decode("utf-8")
+            except Exception:
+                err_body = str(http_err)
+            logger.warning(
+                "LLM HTTP attempt %s/%s failed: %s - %s",
+                attempt + 1, max_attempts, http_err.code, err_body,
+            )
+            if http_err.code not in (429, 500, 502, 503, 504) or attempt == max_attempts - 1:
+                friendly_msg = (
+                    "Hệ thống AI tạm thời vượt hạn mức sau nhiều lần tự thử lại."
+                    if http_err.code == 429 else
+                    f"Đã xảy ra lỗi khi kết nối với mô hình AI ({http_err.code}): {err_body}"
+                )
+                return {
+                    "content": friendly_msg, "tool_calls": None,
+                    "error_code": f"LLM_HTTP_{http_err.code}", "llm_attempts": attempt + 1,
+                }
+        except Exception as exc:
+            last_error = exc
+            logger.warning("LLM connection attempt %s/%s failed: %s", attempt + 1, max_attempts, exc)
+            if attempt == max_attempts - 1:
+                return {
+                    "content": f"Không thể kết nối mô hình AI sau {max_attempts} lần thử: {exc}",
+                    "tool_calls": None, "error_code": "LLM_CONNECTION_ERROR",
+                    "llm_attempts": max_attempts,
+                }
+        time.sleep(0.75 * (2 ** attempt))
+
+    return {
+        "content": f"Không thể kết nối mô hình AI: {last_error}",
+        "tool_calls": None, "error_code": "LLM_CONNECTION_ERROR", "llm_attempts": max_attempts,
+    }
 
 
 def _mock_llm_fallback(
@@ -353,10 +374,9 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     if payload.get("confirmed") is True and payload.get("tool_name"):
         tool_params = payload.get("parameters", {})
         if payload.get("tool_name") == "create_lambda_function" and not tool_params.get("role_arn"):
-            tool_params["role_arn"] = os.environ.get(
-                "DEFAULT_LAMBDA_ROLE_ARN",
-                "arn:aws:iam::640737808081:role/service-role/test-lambda-role-my87f8eu",
-            )
+            configured_role = os.environ.get("DEFAULT_LAMBDA_ROLE_ARN")
+            if configured_role:
+                tool_params["role_arn"] = configured_role
         exec_res = _dispatch_action(
             service=payload.get("service", "lambda"),
             action=payload.get("tool_name"),

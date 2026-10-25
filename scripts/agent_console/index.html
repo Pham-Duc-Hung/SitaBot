@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>SatiBot Agent Console</title>
+  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/state.css">
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="brand"><span class="brand-mark">S</span><div><strong>SatiBot</strong><small>AWS Agent Console</small></div></div>
+      <button class="new-run" id="newRun">＋ New run</button>
+      <div class="nav-label">WORKSPACE</div>
+      <nav>
+        <button class="nav-item active"><span>⌁</span>Agent</button>
+        <button class="nav-item" data-focus="activity"><span>≋</span>Activity</button>
+        <button class="nav-item" data-focus="evidence"><span>✓</span>Evidence</button>
+      </nav>
+      <div class="nav-label">RECENT RUNS</div>
+      <div id="recentRuns" class="recent-runs"><div class="empty-small">Chưa có run nào</div></div>
+      <div class="sidebar-footer"><span class="status-dot" id="sidebarDot"></span><div><strong id="connectionText">Đang kiểm tra</strong><small id="regionText">AWS</small></div></div>
+    </aside>
+
+    <main class="workspace">
+      <header class="topbar">
+        <div><div class="eyebrow">ACTIVE WORKSPACE</div><h1>Lambda operations</h1></div>
+        <div class="top-actions"><span class="pill" id="modelBadge">MODEL</span><span class="pill amber" id="regionBadge">AWS</span><button class="icon-btn" id="clearBtn" title="Xóa run hiện tại">↻</button></div>
+      </header>
+      <section class="run-header">
+        <div><span class="run-state idle" id="runState"><i></i><span>READY</span></span><h2 id="runTitle">Sẵn sàng nhận nhiệm vụ</h2><p id="runSubtitle">Giao một mục tiêu. Agent sẽ lập kế hoạch, thao tác AWS và báo cáo bằng chứng.</p></div>
+        <div class="run-meta"><div><small>RUN ID</small><code id="runId">—</code></div><div><small>STEPS</small><strong id="stepCount">0</strong></div></div>
+      </section>
+
+      <div class="content-grid">
+        <section class="primary-panel">
+          <div id="emptyState" class="empty-state">
+            <div class="agent-glyph"><span></span><span></span><span></span></div>
+            <h3>Không chỉ trả lời. Hãy giao việc.</h3>
+            <p>SatiBot đọc trạng thái AWS thật, gọi công cụ, dừng ở thay đổi nguy hiểm và tiếp tục sau khi bạn duyệt.</p>
+            <div class="suggestions">
+              <button data-prompt="Chẩn đoán toàn bộ Lambda trong tài khoản, xác định hàm có cấu hình rủi ro và đưa ra bằng chứng cụ thể."><b>01</b><span><strong>Audit Lambda fleet</strong><small>Đọc cấu hình và phân tích rủi ro</small></span><em>→</em></button>
+              <button data-prompt="Đọc mã nguồn hàm test-lambda, kiểm tra cấu hình, chạy thử với payload phù hợp và giải thích kết quả."><b>02</b><span><strong>Investigate function</strong><small>Đọc code, cấu hình và chạy thử</small></span><em>→</em></button>
+              <button data-prompt="Liệt kê tất cả hàm Lambda và tóm tắt runtime, RAM, timeout cùng các điểm cần chú ý."><b>03</b><span><strong>Inventory account</strong><small>Thu thập dữ liệu AWS thực tế</small></span><em>→</em></button>
+            </div>
+          </div>
+          <div id="timeline" class="timeline hidden" aria-live="polite"></div>
+        </section>
+
+        <aside class="inspector">
+          <div class="inspector-tabs"><button class="active">Run context</button></div>
+          <div class="inspect-section"><div class="section-title"><span>PLAN</span><small id="planProgress">0/0</small></div><ol id="planList" class="plan-list"><li class="muted">Kế hoạch xuất hiện khi agent bắt đầu chạy.</li></ol></div>
+          <div class="inspect-section" id="activity"><div class="section-title"><span>ACTIVITY</span><small>LIVE</small></div><div id="activityList" class="activity-list"><div class="muted">Chưa có hoạt động.</div></div></div>
+          <div class="inspect-section" id="evidence"><div class="section-title"><span>EVIDENCE</span><small id="evidenceCount">0</small></div><div id="evidenceList" class="evidence-list"><div class="muted">Kết quả AWS sẽ hiện tại đây.</div></div></div>
+        </aside>
+      </div>
+
+      <footer class="composer-wrap">
+        <div class="composer">
+          <textarea id="promptInput" rows="1" placeholder="Giao nhiệm vụ cho SatiBot… (Enter để chạy, Shift+Enter xuống dòng)"></textarea>
+          <div class="composer-bottom"><div class="scope" id="composerStatus"><span>⌘</span> Lambda scope <i>•</i> Confirm before write</div><button id="runBtn"><span>Run task</span><kbd>↵</kbd></button></div>
+        </div>
+        <div class="hint">Agent có thể mắc lỗi. Luôn xem kỹ diff cấu hình và hành động cần xác nhận.</div>
+      </footer>
+    </main>
+  </div>
+  <template id="thinkingTemplate"><div class="event-card thinking"><div class="event-icon"><span></span></div><div><div class="event-kicker">AGENT</div><strong>Đang lập kế hoạch và làm việc trên AWS…</strong><div class="pulse-line"></div></div></div></template>
+  <script src="/app.js" defer></script>
+</body>
+</html>

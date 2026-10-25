@@ -142,6 +142,7 @@ class LambdaService:
                     "get_lambda_source_code": "lambda:GetFunction",
                     "create_lambda_function": "lambda:CreateFunction",
                     "update_lambda_code": "lambda:UpdateFunctionCode",
+                    "configure_resilient_service": "lambda:PublishVersion, lambda:CreateAlias, lambda:PutFunctionEventInvokeConfig, lambda:PutFunctionConcurrency",
                 }
                 required_perm = action_permission_map.get(action, f"lambda:{action}")
                 msg = (
@@ -473,6 +474,11 @@ class LambdaService:
             try:
                 existing = self.client.get_function_url_config(FunctionName=function_name)
                 func_url = existing.get("FunctionUrl")
+                self.client.update_function_url_config(
+                    FunctionName=function_name,
+                    AuthType="NONE",
+                    Cors=cors_config,
+                )
             except ClientError as e:
                 if e.response.get("Error", {}).get("Code") == "ResourceNotFoundException":
                     url_resp = self.client.create_function_url_config(
@@ -485,19 +491,51 @@ class LambdaService:
                 else:
                     raise
 
-            if is_new:
-                statement_id = f"SatiBotPublicAccess-{int(time.time())}"
+            permissions = (
+                {
+                    "StatementId": "SatiBotFunctionUrlPublicAccess",
+                    "Action": "lambda:InvokeFunctionUrl",
+                    "FunctionUrlAuthType": "NONE",
+                },
+                {
+                    "StatementId": "SatiBotFunctionUrlInvokeAccess",
+                    "Action": "lambda:InvokeFunction",
+                    "InvokedViaFunctionUrl": True,
+                },
+            )
+            for permission in permissions:
                 try:
                     self.client.add_permission(
                         FunctionName=function_name,
-                        StatementId=statement_id,
-                        Action="lambda:InvokeFunctionUrl",
                         Principal="*",
-                        FunctionUrlAuthType="NONE",
+                        **permission,
                     )
                 except ClientError as perm_err:
                     if perm_err.response.get("Error", {}).get("Code") != "ResourceConflictException":
                         raise
+
+            verification_status = None
+            verification_preview = None
+            if func_url:
+                try:
+                    verify_req = urllib.request.Request(func_url, headers={"User-Agent": "SatiBot-Agent/1.0"})
+                    with urllib.request.urlopen(verify_req, timeout=20) as verify_resp:
+                        verification_status = verify_resp.status
+                        verification_preview = verify_resp.read(1000).decode("utf-8", errors="replace")
+                except urllib.error.HTTPError as http_err:
+                    # Các mã HTTP (như 400 Bad Request khi gọi GET vào Webhook POST) chứng minh Function URL đã thông tới Lambda
+                    verification_status = http_err.code
+                    try:
+                        verification_preview = http_err.read(1000).decode("utf-8", errors="replace")
+                    except Exception:
+                        verification_preview = str(http_err)
+                except Exception as verify_exc:
+                    return self._format_response(
+                        "ERROR", action,
+                        f"Function URL đã được cấu hình nhưng kiểm thử HTTP thất bại: {verify_exc}",
+                        data={"function_name": function_name, "function_url": func_url, "url_verified": False},
+                        error_code="FunctionUrlVerificationFailed",
+                    )
 
             msg = (
                 f"Đã cấp phát Function URL công khai cho hàm '{function_name}': {func_url}"
@@ -506,7 +544,12 @@ class LambdaService:
             )
             return self._format_response(
                 status="SUCCESS", action=action, message=msg,
-                data={"function_name": function_name, "function_url": func_url, "auth_type": "NONE", "is_newly_created": is_new},
+                data={
+                    "function_name": function_name, "function_url": func_url, "auth_type": "NONE",
+                    "is_newly_created": is_new, "url_verified": verification_status == 200,
+                    "verification_http_status": verification_status,
+                    "verification_body_preview": verification_preview,
+                },
             )
         except Exception as exc:
             return self._handle_boto_error(action, exc)
@@ -806,6 +849,28 @@ class LambdaService:
             }
             msg = f"ĐÃ TẠO THÀNH CÔNG HÀM LAMBDA '{function_name}' (Runtime {runtime}, RAM {memory_mb}MB, Timeout {timeout_seconds}s)!"
             return self._format_response("SUCCESS", action, msg, data=data)
+        except ClientError as exc:
+            if exc.response.get("Error", {}).get("Code") == "ResourceConflictException":
+                try:
+                    existing = self.client.get_function_configuration(FunctionName=function_name)
+                    data = {
+                        "function_name": existing.get("FunctionName", function_name),
+                        "function_arn": existing.get("FunctionArn"),
+                        "runtime": existing.get("Runtime"),
+                        "handler": existing.get("Handler"),
+                        "memory_mb": existing.get("MemorySize"),
+                        "timeout_seconds": existing.get("Timeout"),
+                        "created": False,
+                        "already_existed": True,
+                    }
+                    return self._format_response(
+                        "SUCCESS", action,
+                        f"Hàm '{function_name}' đã tồn tại; tiếp tục deployment theo hướng idempotent.",
+                        data=data,
+                    )
+                except Exception as lookup_exc:
+                    return self._handle_boto_error(action, lookup_exc)
+            return self._handle_boto_error(action, exc)
         except Exception as exc:
             return self._handle_boto_error(action, exc)
 
@@ -858,6 +923,102 @@ class LambdaService:
             return self._format_response("SUCCESS", action, msg, data=data)
         except Exception as exc:
             return self._handle_boto_error(action, exc)
+
+    def configure_resilient_service(
+        self,
+        function_name: str,
+        alias_name: str = "live",
+        reserved_concurrency: int = 2,
+        maximum_retry_attempts: int = 2,
+        maximum_event_age_seconds: int = 3600,
+    ) -> Dict[str, Any]:
+        """Publish an immutable release and apply bounded Lambda resilience controls."""
+        action = "configure_resilient_service"
+        if not _valid_function_name(function_name):
+            return self._format_response("ERROR", action, "function_name không hợp lệ.", error_code="InvalidParameters")
+        if not isinstance(alias_name, str) or not re.fullmatch(r"(?!^[0-9]+$)[A-Za-z0-9-_]{1,128}", alias_name.strip()):
+            return self._format_response("ERROR", action, "alias_name không hợp lệ.", error_code="InvalidParameters")
+        ranges = {
+            "reserved_concurrency": (reserved_concurrency, 1, 1000),
+            "maximum_retry_attempts": (maximum_retry_attempts, 0, 2),
+            "maximum_event_age_seconds": (maximum_event_age_seconds, 60, 21600),
+        }
+        for field, (value, minimum, maximum) in ranges.items():
+            if not _is_strict_int(value) or not minimum <= value <= maximum:
+                return self._format_response(
+                    "ERROR", action, f"{field} phải nằm trong khoảng {minimum}-{maximum}.",
+                    error_code="InvalidParameters",
+                )
+
+        completed: List[str] = []
+        try:
+            try:
+                waiter = self.client.get_waiter("function_updated_v2")
+            except Exception:
+                waiter = self.client.get_waiter("function_updated")
+            waiter.wait(FunctionName=function_name, WaiterConfig={"Delay": 1, "MaxAttempts": 30})
+            version_response = self.client.publish_version(
+                FunctionName=function_name,
+                Description="Immutable release managed by SatiBot resilient deployment",
+            )
+            version = version_response.get("Version")
+            completed.append(f"published_version:{version}")
+            try:
+                alias_response = self.client.update_alias(
+                    FunctionName=function_name, Name=alias_name, FunctionVersion=version,
+                )
+            except ClientError as exc:
+                if exc.response.get("Error", {}).get("Code") != "ResourceNotFoundException":
+                    raise
+                alias_response = self.client.create_alias(
+                    FunctionName=function_name, Name=alias_name, FunctionVersion=version,
+                    Description="Stable alias managed by SatiBot",
+                )
+            completed.append(f"alias:{alias_name}")
+            self.client.put_function_event_invoke_config(
+                FunctionName=function_name, Qualifier=alias_name,
+                MaximumRetryAttempts=maximum_retry_attempts,
+                MaximumEventAgeInSeconds=maximum_event_age_seconds,
+            )
+            completed.append("async_retry_policy")
+            warnings: List[str] = []
+            try:
+                self.client.put_function_concurrency(
+                    FunctionName=function_name,
+                    ReservedConcurrentExecutions=reserved_concurrency,
+                )
+                completed.append("reserved_concurrency")
+            except ClientError as concurrency_error:
+                code = concurrency_error.response.get("Error", {}).get("Code")
+                message = concurrency_error.response.get("Error", {}).get("Message", "")
+                if code == "InvalidParameterValueException" and "UnreservedConcurrentExecution" in message:
+                    warnings.append(
+                        "Không đặt reserved concurrency vì quota tài khoản phải giữ tối thiểu 10 unreserved executions."
+                    )
+                else:
+                    raise
+            data = {
+                "function_name": function_name,
+                "published_version": version,
+                "alias_name": alias_response.get("Name", alias_name),
+                "alias_arn": alias_response.get("AliasArn"),
+                "reserved_concurrency": reserved_concurrency,
+                "maximum_retry_attempts": maximum_retry_attempts,
+                "maximum_event_age_seconds": maximum_event_age_seconds,
+                "completed_controls": completed,
+                "warnings": warnings,
+            }
+            message = f"Đã cấu hình release bất biến và các kiểm soát resilience cho '{function_name}'."
+            if warnings:
+                message += " Reserved concurrency được bỏ qua an toàn do giới hạn quota tài khoản."
+            return self._format_response(
+                "SUCCESS", action, message,
+                data=data,
+            )
+        except Exception as exc:
+            result = self._handle_boto_error(action, exc)
+            result.setdefault("data", {})["completed_before_error"] = completed
+            return result
 
     def execute_tool(
         self,
@@ -983,6 +1144,13 @@ class LambdaService:
                 code_content=p["code_content"],
                 filename=p.get("filename", "lambda_function.py"),
             ),
+            "configure_resilient_service": lambda p: self.configure_resilient_service(
+                function_name=p["function_name"],
+                alias_name=p.get("alias_name", "live"),
+                reserved_concurrency=p.get("reserved_concurrency", 2),
+                maximum_retry_attempts=p.get("maximum_retry_attempts", 2),
+                maximum_event_age_seconds=p.get("maximum_event_age_seconds", 3600),
+            ),
         }
         return dispatch_map[tool_name](parameters)
 
@@ -1103,6 +1271,7 @@ LAMBDA_TOOL_SCHEMAS = [
                 "runtime": {"type": "string", "description": "Môi trường thực thi (mặc định: 'python3.12')."},
                 "memory_mb": {"type": "integer", "description": "Dung lượng RAM tính bằng MB (128 đến 10240, mặc định 128)."},
                 "timeout_seconds": {"type": "integer", "description": "Thời gian timeout tối đa tính bằng giây (1 đến 900, mặc định 15)."},
+                "handler": {"type": "string", "description": "Tên handler của hàm (mặc định: 'lambda_function.lambda_handler')."},
                 "role_arn": {"type": "string", "description": "ARN IAM execution role dành cho hàm Lambda (mặc định: 'arn:aws:iam::640737808081:role/service-role/test-lambda-role-my87f8eu')."},
             },
             "required": ["function_name", "code_content"],
@@ -1120,6 +1289,22 @@ LAMBDA_TOOL_SCHEMAS = [
                 "filename": {"type": "string", "description": "Tên file Python trong gói ZIP, mặc định lambda_function.py."},
             },
             "required": ["function_name", "code_content"],
+        },
+    },
+    {
+        "name": "configure_resilient_service",
+        "description": "Sau khi tạo hoặc cập nhật Lambda, publish phiên bản bất biến, tạo/cập nhật alias ổn định, cấu hình retry bất đồng bộ, tuổi thọ event và reserved concurrency để tăng khả năng chống chịu sự cố.",
+        "requires_confirmation": True,
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "function_name": {"type": "string", "description": "Tên hàm Lambda cần harden."},
+                "alias_name": {"type": "string", "description": "Alias ổn định, mặc định live."},
+                "reserved_concurrency": {"type": "integer", "description": "Concurrency dành riêng, 1-1000."},
+                "maximum_retry_attempts": {"type": "integer", "description": "Số lần retry async, 0-2."},
+                "maximum_event_age_seconds": {"type": "integer", "description": "Tuổi tối đa của async event, 60-21600 giây."},
+            },
+            "required": ["function_name"],
         },
     },
 ]

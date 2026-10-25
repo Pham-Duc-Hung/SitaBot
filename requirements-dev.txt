@@ -1,0 +1,3 @@
+# Local development and regression tests for Quang's Lambda backend/agent scope.
+boto3>=1.34,<2
+pytest>=8,<10

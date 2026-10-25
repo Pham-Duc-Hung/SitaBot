@@ -51,6 +51,31 @@ class TestAgentReasoningLoop(unittest.TestCase):
                     "required": ["function_name"],
                 },
             },
+            {
+                "name": "create_lambda_function",
+                "requires_confirmation": True,
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "function_name": {"type": "string"},
+                        "code_content": {"type": "string"},
+                        "description": {"type": "string"},
+                        "runtime": {"type": "string"},
+                        "memory_mb": {"type": "integer"},
+                        "timeout_seconds": {"type": "integer"},
+                    },
+                    "required": ["function_name", "code_content"],
+                },
+            },
+            {
+                "name": "configure_resilient_service",
+                "requires_confirmation": True,
+                "parameters": {
+                    "type": "object",
+                    "properties": {"function_name": {"type": "string"}},
+                    "required": ["function_name"],
+                },
+            },
         ]
         self.tools = [{"type": "function", "function": {"name": s["name"]}} for s in self.raw_schemas]
         self.mock_llm = Mock()
@@ -187,6 +212,117 @@ class TestAgentReasoningLoop(unittest.TestCase):
 
         self.assertEqual(result["status"], "INCOMPLETE")
         self.assertEqual(result["type"], "agent_limit_reached")
+
+    def test_operational_request_cannot_finish_without_tool_evidence(self):
+        self.mock_llm.side_effect = [
+            {
+                "content": "Tôi đang truy cập AWS. Hãy bấm xác nhận để tôi làm tiếp.",
+                "tool_calls": None,
+            },
+            {
+                "content": "Bạn muốn tôi kiểm tra hay thay đổi Lambda nào?",
+                "tool_calls": None,
+            },
+        ]
+
+        result = self.executor.run("Truy cập vào AWS của tôi và làm đi", "Prompt")
+
+        self.assertEqual(result["status"], "NEEDS_INPUT")
+        self.assertEqual(result["type"], "agent_needs_input")
+        self.assertEqual(result["steps"], [])
+        self.mock_dispatch.assert_not_called()
+
+    def test_operational_request_retries_then_executes_real_tool(self):
+        self.mock_llm.side_effect = [
+            {"content": "Tôi sẽ kiểm tra ngay.", "tool_calls": None},
+            {
+                "content": "",
+                "tool_calls": [{
+                    "id": "call_retry",
+                    "type": "function",
+                    "function": {"name": "list_lambda_functions", "arguments": "{}"},
+                }],
+            },
+            {"content": "Đã kiểm tra AWS dựa trên dữ liệu thực tế.", "tool_calls": None},
+        ]
+        self.mock_dispatch.return_value = {
+            "status": "SUCCESS", "message": "Đã tìm thấy 2 hàm", "data": {"count": 2}
+        }
+
+        result = self.executor.run("Liệt kê Lambda trong tài khoản AWS", "Prompt")
+
+        self.assertEqual(result["status"], "SUCCESS")
+        self.assertEqual(len(result["steps"]), 1)
+        self.mock_dispatch.assert_called_once()
+
+    def test_resume_continues_resilient_deployment_after_approval(self):
+        self.mock_llm.side_effect = [
+            {
+                "content": "Tạo service trước.",
+                "tool_calls": [{
+                    "id": "create_1", "type": "function",
+                    "function": {"name": "create_lambda_function", "arguments": '{"function_name":"resilient-api","code_content":"def lambda_handler(e,c): return {}"}'},
+                }],
+            },
+            {
+                "content": "Tiếp tục cấu hình resilience.",
+                "tool_calls": [{
+                    "id": "harden_1", "type": "function",
+                    "function": {"name": "configure_resilient_service", "arguments": '{"function_name":"resilient-api"}'},
+                }],
+            },
+        ]
+
+        first = self.executor.run("Triển khai Lambda resilient", "Prompt")
+        resumed = self.executor.resume(
+            first["agent_state"],
+            {"status": "SUCCESS", "message": "Đã tạo resilient-api", "data": {"function_name": "resilient-api"}},
+        )
+
+        self.assertEqual(first["status"], "CONFIRMATION_REQUIRED")
+        self.assertEqual(resumed["status"], "CONFIRMATION_REQUIRED")
+        self.assertEqual(resumed["tool_name"], "configure_resilient_service")
+        self.assertEqual(len(resumed["steps"]), 1)
+
+    def test_invalid_tool_arguments_are_self_corrected_before_approval(self):
+        self.mock_llm.side_effect = [
+            {
+                "content": "Cấu hình resilience.",
+                "tool_calls": [{
+                    "id": "bad_args", "type": "function",
+                    "function": {"name": "configure_resilient_service", "arguments": "{}"},
+                }],
+            },
+            {
+                "content": "Đã sửa arguments.",
+                "tool_calls": [{
+                    "id": "fixed_args", "type": "function",
+                    "function": {"name": "configure_resilient_service", "arguments": '{"function_name":"resilient-api"}'},
+                }],
+            },
+        ]
+
+        result = self.executor.run("Cấu hình Lambda resilient", "Prompt")
+
+        self.assertEqual(result["status"], "CONFIRMATION_REQUIRED")
+        self.assertEqual(result["parameters"]["function_name"], "resilient-api")
+        self.assertEqual(result["steps"][0]["action"], "configure_resilient_service")
+        self.mock_dispatch.assert_not_called()
+
+    def test_plain_text_pseudo_tool_call_is_recovered(self):
+        self.mock_llm.return_value = {
+            "content": """Đang tạo service.\n```python\ndef lambda_handler(event, context):\n    return {\"statusCode\": 200}\n```\n[Tool Call: create_lambda_function(function_name='resilient-webhook-receiver', code_content='...')]""",
+            "tool_calls": None,
+        }
+
+        result = self.executor.run(
+            "Triển khai Lambda resilient-webhook-receiver trên AWS", "Prompt"
+        )
+
+        self.assertEqual(result["status"], "CONFIRMATION_REQUIRED")
+        self.assertEqual(result["tool_name"], "create_lambda_function")
+        self.assertEqual(result["parameters"]["function_name"], "resilient-webhook-receiver")
+        self.assertTrue(result["recovered_tool_call"])
 
 
 if __name__ == "__main__":
