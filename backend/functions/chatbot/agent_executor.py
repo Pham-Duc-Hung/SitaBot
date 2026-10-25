@@ -107,14 +107,22 @@ class AgentExecutor:
                 }
 
             # Công cụ đọc / chẩn đoán an toàn: Tự động thực thi ngay trên AWS
-            exec_res = self.dispatch_fn(
-                service="lambda",
-                action=tool_name,
-                parameters=parsed_params,
-                confirmed=True,
-                region=region,
-                credentials=credentials,
-            )
+            try:
+                exec_res = self.dispatch_fn(
+                    service="lambda",
+                    action=tool_name,
+                    parameters=parsed_params,
+                    confirmed=True,
+                    region=region,
+                    credentials=credentials,
+                )
+            except Exception as exc:
+                logger.exception("Ngoại lệ khi thực thi công cụ %s", tool_name)
+                exec_res = {
+                    "status": "ERROR",
+                    "message": f"Lỗi ngoại lệ khi thực thi công cụ '{tool_name}': {str(exc)}",
+                    "data": {"error": str(exc)},
+                }
 
             obs_data = exec_res.get("data", exec_res)
             obs_summary = exec_res.get("message", f"Hoàn thành {tool_name}")

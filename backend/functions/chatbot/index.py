@@ -183,8 +183,15 @@ def call_llm_api(
         except Exception:
             err_body = str(http_err)
         logger.error("Lỗi HTTP từ LLM API: %s - %s", http_err.code, err_body)
+        if http_err.code == 429:
+            friendly_msg = (
+                "Hệ thống AI hiện đang tạm thời vượt quá hạn mức yêu cầu (Rate Limit - HTTP 429). "
+                "Vui lòng đợi khoảng 5-10 giây rồi gửi lại yêu cầu nhé."
+            )
+        else:
+            friendly_msg = f"Đã xảy ra lỗi khi kết nối với mô hình AI ({http_err.code}): {err_body}"
         return {
-            "content": f"Đã xảy ra lỗi khi kết nối với mô hình AI ({http_err.code}): {err_body}",
+            "content": friendly_msg,
             "tool_calls": None,
         }
     except Exception as exc:
@@ -340,6 +347,8 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
 
     user_message = payload.get("message", "").strip()
     history = payload.get("history", [])
+    if isinstance(history, list) and len(history) > 10:
+        history = history[-10:]
 
     if not user_message:
         err_resp = {"status": "ERROR", "message": "Thiếu nội dung câu lệnh 'message'."}
