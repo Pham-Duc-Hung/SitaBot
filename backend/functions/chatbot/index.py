@@ -160,7 +160,7 @@ def call_llm_api(
     api_key: Optional[str] = None,
     api_url: Optional[str] = None,
     model: Optional[str] = None,
-    timeout: int = 30,
+    timeout: int = 60,
 ) -> Dict[str, Any]:
     """
     Gọi API mô hình ngôn ngữ lớn (OpenAI-compatible / Gemini / REST endpoint).
