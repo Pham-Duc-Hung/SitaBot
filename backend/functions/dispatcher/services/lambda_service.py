@@ -683,7 +683,7 @@ class LambdaService:
 
             # Tải file zip qua URL ký trước (presigned URL)
             req = urllib.request.Request(code_location, headers={"User-Agent": "SatiBot-Agent/1.0"})
-            with urllib.request.urlopen(req, timeout=15) as resp:
+            with urllib.request.urlopen(req, timeout=30) as resp:
                 zip_data = resp.read()
 
             files = []
