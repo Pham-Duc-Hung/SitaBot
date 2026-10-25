@@ -1,4 +1,7 @@
-"""Author: Trịnh Thiên Quang - Local SatiBot Agent Console."""
+"""
+Author: Trịnh Thiên Quang
+Cung cấp máy chủ điều khiển cục bộ Agent Console và chuyển tiếp gọi Lambda.
+"""
 
 import http.server
 import json
@@ -8,6 +11,13 @@ import sys
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+try:
+    import boto3  # noqa: F401
+except ImportError:
+    conda_py = Path("/home/sora/miniconda3/envs/chatbot/bin/python")
+    if conda_py.exists() and sys.executable != str(conda_py):
+        os.execv(str(conda_py), [str(conda_py)] + sys.argv)
+
 WEB_ROOT = PROJECT_ROOT / "scripts" / "agent_console"
 DISPATCHER_PATH = PROJECT_ROOT / "backend" / "functions" / "dispatcher"
 for path in (str(PROJECT_ROOT), str(DISPATCHER_PATH)):
@@ -38,11 +48,18 @@ class AgentConsoleHandler(http.server.SimpleHTTPRequestHandler):
 
     def do_GET(self):
         if self.path == "/api/health":
+            tool_count = 0
+            try:
+                from backend.functions.chatbot.index import _get_lambda_tool_schemas
+                tool_count = len(_get_lambda_tool_schemas())
+            except Exception:
+                pass
             self._send_json({
                 "status": "ready",
                 "region": os.environ.get("AWS_REGION", "us-east-1"),
                 "model": os.environ.get("LLM_MODEL", "configured model"),
                 "llm_configured": bool(os.environ.get("LLM_API_KEY")),
+                "tools_loaded": tool_count,
             })
             return
         super().do_GET()
@@ -58,7 +75,12 @@ class AgentConsoleHandler(http.server.SimpleHTTPRequestHandler):
             payload = json.loads(self.rfile.read(length).decode("utf-8"))
             if not isinstance(payload, dict):
                 raise ValueError("Payload phải là JSON object.")
-            self._send_json(lambda_handler(payload, None))
+            import importlib
+            import backend.functions.chatbot.index as chatbot_mod
+            import backend.functions.chatbot.agent_executor as agent_mod
+            importlib.reload(agent_mod)
+            importlib.reload(chatbot_mod)
+            self._send_json(chatbot_mod.lambda_handler(payload, None))
         except (ValueError, json.JSONDecodeError, UnicodeDecodeError) as exc:
             self._send_json({"status": "ERROR", "message": str(exc)}, status=400)
         except Exception as exc:
@@ -73,6 +95,12 @@ class AgentConsoleHandler(http.server.SimpleHTTPRequestHandler):
         self.send_header("X-Content-Type-Options", "nosniff")
         self.end_headers()
         self.wfile.write(body)
+
+    def end_headers(self):
+        if self.path.startswith("/api/") or self.path.endswith((".js", ".css", ".html")) or self.path == "/":
+            self.send_header("Cache-Control", "no-store, max-age=0")
+        self.send_header("X-SatiBot-Server", "local-current-worktree")
+        super().end_headers()
 
     def log_message(self, format, *args):
         pass
@@ -91,6 +119,8 @@ def run():
             continue
     if server is None:
         raise SystemExit(f"Các cổng {PORT}-{PORT + 9} đều đang bận.")
+    if port != PORT:
+        print(f"⚠️ Lưu ý: Cổng {PORT} đã có tiến trình khác chạy. Đang mở cổng phụ: http://127.0.0.1:{port}")
     print(f"SatiBot Agent Console: http://127.0.0.1:{port}")
     print("Nhấn Ctrl+C để dừng.")
     try:

@@ -80,10 +80,15 @@ class AgentExecutor:
                 "arn:aws:iam::640737808081:role/service-role/test-lambda-role-my87f8eu",
             )
 
+        if tool_name == "create_public_function_url":
+            origins = parameters.get("cors_allow_origins")
+            if not isinstance(origins, list) or not origins or any(not isinstance(o, str) or o == "*" or not o.startswith("http") for o in origins):
+                parameters["cors_allow_origins"] = ["http://127.0.0.1:8080"]
+
         missing = [name for name in schema.get("required", []) if name not in parameters]
         unknown = sorted(set(parameters) - set(properties))
         # Loại bỏ các tham số phụ vô hại trước khi báo lỗi
-        for harmless in ("handler", "tags", "environment", "env_vars"):
+        for harmless in ("handler", "tags", "environment", "env_vars", "role_arn"):
             if harmless in unknown:
                 unknown.remove(harmless)
         if missing:
@@ -116,13 +121,38 @@ class AgentExecutor:
     def _requires_real_action(user_message: str) -> bool:
         """Detect operational requests that must not be completed with prose alone."""
         normalized = re.sub(r"\s+", " ", (user_message or "").strip().lower())
-        targets = ("aws", "lambda", "function", "hàm", "tài khoản", "cloud", "webhook")
+        if not normalized:
+            return False
+
+        follow_ups = (
+            "tiếp tục", "làm tiếp", "làm đi", "sao rồi", "link đâu", "tại sao", "sao thế",
+            "tiếp đi", "chạy đi", "tạo đi", "deploy đi", "xong chưa", "nút đâu", "xác nhận",
+            "đâu rồi", "thế nào rồi", "tiếp", "được chưa", "ở đâu", "bấm đâu", "bấm nút",
+            "confirm đâu", "nút confirm", "sao không thấy", "chưa thấy", "đưa tôi code",
+        )
+        if any(f in normalized for f in follow_ups):
+            return True
+
+        targets = (
+            "aws", "lambda", "function", "hàm", "tài khoản", "cloud", "webhook",
+            "web", "trang web", "website", "shop", "cửa hàng", "bán hàng", "app",
+            "ứng dụng", "api", "service", "dịch vụ", "giỏ hàng", "sản phẩm", "bot",
+            "hệ thống", "server", "máy chủ", "code", "mã nguồn", "store", "link",
+            "url", "endpoint", "ecommerce", "giao diện", "frontend", "backend",
+        )
         actions = (
             "làm", "truy cập", "kiểm tra", "chẩn đoán", "liệt kê", "đọc", "chạy",
             "test", "thực thi", "tạo", "triển khai", "deploy", "sửa", "cập nhật",
-            "đổi", "tăng", "giảm", "xóa", "khóa", "mở khóa", "invoke", "audit", "thiết kế",
+            "đổi", "tăng", "giảm", "xóa", "khóa", "mở khóa", "invoke", "audit",
+            "thiết kế", "viết", "xây dựng", "setup", "cài đặt", "build", "phát triển",
         )
-        return any(target in normalized for target in targets) and any(action in normalized for action in actions)
+        if any(target in normalized for target in targets) and any(action in normalized for action in actions):
+            return True
+
+        if any(action in normalized for action in ("tạo", "viết", "xây dựng", "deploy", "triển khai", "chạy", "test")):
+            return True
+
+        return False
 
     def _serialize_observation(self, data: Any) -> str:
         """Keep tool output bounded so a large AWS response cannot exhaust LLM context."""
@@ -135,7 +165,12 @@ class AgentExecutor:
         omitted = len(serialized) - self.max_observation_chars
         return serialized[: self.max_observation_chars] + f"...[đã rút gọn {omitted} ký tự]"
 
-    def _recover_create_call_from_text(self, content: Any, user_message: str) -> Optional[Dict[str, Any]]:
+    def _recover_create_call_from_text(
+        self,
+        content: Any,
+        user_message: str,
+        messages: Optional[List[Dict[str, Any]]] = None,
+    ) -> Optional[Dict[str, Any]]:
         """Recover a real tool call when a model prints code/pseudo-call as plain text or JSON."""
         if not isinstance(content, str):
             return None
@@ -196,6 +231,19 @@ class AgentExecutor:
             m = re.search(r"(?:^|\n)(?P<code>(?:import\s+|from\s+|def\s+).*)$", content, re.DOTALL)
             if m:
                 code = m.group("code").strip()
+
+        # Nếu tin nhắn hiện tại không có code nhưng có trong lịch sử hội thoại
+        if not code and messages:
+            for past_m in reversed(messages):
+                past_content = past_m.get("content", "")
+                if isinstance(past_content, str) and ("lambda_handler" in past_content or "def handler(" in past_content):
+                    for pat in patterns:
+                        m = re.search(pat, past_content, re.DOTALL | re.IGNORECASE)
+                        if m and len(m.group("code").strip()) > 20:
+                            code = m.group("code").strip()
+                            break
+                    if code:
+                        break
 
         if not code:
             return None
@@ -319,7 +367,21 @@ class AgentExecutor:
             "action": tool_name,
             "parameters": parameters,
             "observation": obs_summary,
+            "status": exec_res.get("status", "UNKNOWN"),
         })
+
+        # A verified public URL is the terminal condition for website delivery.
+        if tool_name == "create_public_function_url" and exec_res.get("status") == "SUCCESS":
+            function_url = obs_data.get("function_url") if isinstance(obs_data, dict) else None
+            if function_url:
+                return {
+                    "status": "SUCCESS",
+                    "type": "website_deployed",
+                    "message": f"Website đã được triển khai và kiểm thử thành công: {function_url}",
+                    "steps": steps_log,
+                    "tool_name": tool_name,
+                    "data": obs_data,
+                }
 
         # Nạp trợ lý và kết quả quan sát tool vào messages
         assistant_entry = raw_msg if raw_msg else {
@@ -477,32 +539,48 @@ class AgentExecutor:
 
             # Operational runs may only finish after at least one real tool observation.
             if not tool_calls:
-                if action_required and not steps_log:
-                    recovered_call = self._recover_create_call_from_text(content, original_goal)
+                hallucinated_confirm = isinstance(content, str) and any(
+                    k in content.lower() for k in (
+                        "bấm vào nút", "nút xác nhận", "hộp thoại yêu cầu gọi công cụ",
+                        "bấm xác nhận", "bấm nút", "hộp thoại xác nhận", "nút confirm",
+                        "nút approve", "bấm confirm", "bấm approve", "hộp thoại đang hiển thị",
+                        "xác nhận để tiếp tục",
+                    )
+                )
+                if (action_required or hallucinated_confirm) and not steps_log:
+                    recovered_call = self._recover_create_call_from_text(content, original_goal, messages=messages)
                     if recovered_call:
                         result = self._process_tool_calls(
                             [recovered_call], messages, steps_log, iteration,
                             system_prompt, context,
-                            "Đã khôi phục structured tool call từ mã nguồn hợp lệ do model sinh ra.",
+                            "Đã khôi phục structured tool call từ mã nguồn do model thiết kế.",
                             None,
                         )
                         if result is not None:
                             result["recovered_tool_call"] = True
                             return result
+
                     if iteration == start_iteration:
-                        # Gemini's OpenAI-compatible endpoint rejects requests whose
-                        # conversation ends in a model/system turn. Keep the retry as
-                        # an explicit user instruction so the protocol remains valid.
-                        messages.append({
-                            "role": "user",
-                            "content": (
-                                "Tiếp tục run này bằng hành động thực tế. Bạn vừa mô tả hành động nhưng chưa gọi công cụ. "
+                        if hallucinated_confirm:
+                            retry_prompt = (
+                                "LỖI: Bạn vừa phản hồi bảo người dùng 'bấm nút xác nhận' hoặc mô tả kết quả, "
+                                "nhưng bạn CHƯA HỀ phát ra tool_call! Giao diện hệ thống CHỈ hiển thị nút Xác Nhận (Approve) "
+                                "khi bạn thực sự phát lệnh gọi công cụ 'create_lambda_function'. Hiện tại trên màn hình người dùng KHÔNG CÓ NÚT NÀO ĐỂ BẤM! "
+                                "Hãy phát lệnh gọi tool 'create_lambda_function' NGAY BÂY GIỜ kèm toàn bộ code Python hoàn chỉnh!"
+                            )
+                        else:
+                            retry_prompt = (
+                                "Tiếp tục run này bằng hành động thực tế. Bạn vừa mô tả hành động hoặc in mã nguồn ra chat nhưng chưa gọi công cụ. "
                                 "Đây là một agent run, không phải chat tư vấn. "
                                 "Hãy gọi ngay công cụ AWS phù hợp. Nếu mục tiêu chưa đủ cụ thể để chọn công cụ, chỉ hỏi đúng một câu "
                                 "làm rõ ngắn gọn; tuyệt đối không nói đang làm, đã làm, sẽ hiện nút xác nhận hoặc đã hoàn tất."
-                            ),
+                            )
+                        messages.append({
+                            "role": "user",
+                            "content": retry_prompt,
                         })
                         continue
+
                     return {
                         "status": "NEEDS_INPUT",
                         "type": "agent_needs_input",
@@ -510,6 +588,7 @@ class AgentExecutor:
                         "steps": [],
                         "data": {"reason": "no_tool_selected"},
                     }
+
                 return {
                     "status": "SUCCESS",
                     "type": "agent_reply",

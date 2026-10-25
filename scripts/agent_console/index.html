@@ -2,71 +2,112 @@
 <html lang="vi">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="color-scheme" content="dark">
-  <title>SatiBot Agent Console</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SatiBot • Autonomous AWS Agent</title>
   <link rel="stylesheet" href="/styles.css">
   <link rel="stylesheet" href="/state.css">
 </head>
 <body>
-  <div class="shell">
-    <aside class="sidebar">
-      <div class="brand"><span class="brand-mark">S</span><div><strong>SatiBot</strong><small>AWS Agent Console</small></div></div>
-      <button class="new-run" id="newRun">＋ New run</button>
-      <div class="nav-label">WORKSPACE</div>
-      <nav>
-        <button class="nav-item active"><span>⌁</span>Agent</button>
-        <button class="nav-item" data-focus="activity"><span>≋</span>Activity</button>
-        <button class="nav-item" data-focus="evidence"><span>✓</span>Evidence</button>
-      </nav>
-      <div class="nav-label">RECENT RUNS</div>
-      <div id="recentRuns" class="recent-runs"><div class="empty-small">Chưa có run nào</div></div>
-      <div class="sidebar-footer"><span class="status-dot" id="sidebarDot"></span><div><strong id="connectionText">Đang kiểm tra</strong><small id="regionText">AWS</small></div></div>
-    </aside>
-
-    <main class="workspace">
-      <header class="topbar">
-        <div><div class="eyebrow">ACTIVE WORKSPACE</div><h1>Lambda operations</h1></div>
-        <div class="top-actions"><span class="pill" id="modelBadge">MODEL</span><span class="pill amber" id="regionBadge">AWS</span><button class="icon-btn" id="clearBtn" title="Xóa run hiện tại">↻</button></div>
-      </header>
-      <section class="run-header">
-        <div><span class="run-state idle" id="runState"><i></i><span>READY</span></span><h2 id="runTitle">Sẵn sàng nhận nhiệm vụ</h2><p id="runSubtitle">Giao một mục tiêu. Agent sẽ lập kế hoạch, thao tác AWS và báo cáo bằng chứng.</p></div>
-        <div class="run-meta"><div><small>RUN ID</small><code id="runId">—</code></div><div><small>STEPS</small><strong id="stepCount">0</strong></div></div>
-      </section>
-
-      <div class="content-grid">
-        <section class="primary-panel">
-          <div id="emptyState" class="empty-state">
-            <div class="agent-glyph"><span></span><span></span><span></span></div>
-            <h3>Không chỉ trả lời. Hãy giao việc.</h3>
-            <p>SatiBot đọc trạng thái AWS thật, gọi công cụ, dừng ở thay đổi nguy hiểm và tiếp tục sau khi bạn duyệt.</p>
-            <div class="suggestions">
-              <button data-prompt="Chẩn đoán toàn bộ Lambda trong tài khoản, xác định hàm có cấu hình rủi ro và đưa ra bằng chứng cụ thể."><b>01</b><span><strong>Audit Lambda fleet</strong><small>Đọc cấu hình và phân tích rủi ro</small></span><em>→</em></button>
-              <button data-prompt="Đọc mã nguồn hàm test-lambda, kiểm tra cấu hình, chạy thử với payload phù hợp và giải thích kết quả."><b>02</b><span><strong>Investigate function</strong><small>Đọc code, cấu hình và chạy thử</small></span><em>→</em></button>
-              <button data-prompt="Liệt kê tất cả hàm Lambda và tóm tắt runtime, RAM, timeout cùng các điểm cần chú ý."><b>03</b><span><strong>Inventory account</strong><small>Thu thập dữ liệu AWS thực tế</small></span><em>→</em></button>
-            </div>
-          </div>
-          <div id="timeline" class="timeline hidden" aria-live="polite"></div>
-        </section>
-
-        <aside class="inspector">
-          <div class="inspector-tabs"><button class="active">Run context</button></div>
-          <div class="inspect-section"><div class="section-title"><span>PLAN</span><small id="planProgress">0/0</small></div><ol id="planList" class="plan-list"><li class="muted">Kế hoạch xuất hiện khi agent bắt đầu chạy.</li></ol></div>
-          <div class="inspect-section" id="activity"><div class="section-title"><span>ACTIVITY</span><small>LIVE</small></div><div id="activityList" class="activity-list"><div class="muted">Chưa có hoạt động.</div></div></div>
-          <div class="inspect-section" id="evidence"><div class="section-title"><span>EVIDENCE</span><small id="evidenceCount">0</small></div><div id="evidenceList" class="evidence-list"><div class="muted">Kết quả AWS sẽ hiện tại đây.</div></div></div>
-        </aside>
+  <div class="app-layout">
+    <!-- Left Sidebar (Collapses to slim icon rail with clickable ⚡) -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-header">
+        <div class="sidebar-brand">
+          <button class="brand-lightning-btn" id="lightningBtn" title="Bấm vào tia sét để mở/đóng thanh bên">
+            <span>⚡</span>
+          </button>
+          <span class="brand-title">SatiBot</span>
+        </div>
+        <button class="icon-action-btn" id="sidebarToggleBtn" title="Thu nhỏ thanh bên">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="9" y1="3" x2="9" y2="21"></line></svg>
+        </button>
       </div>
 
-      <footer class="composer-wrap">
-        <div class="composer">
-          <textarea id="promptInput" rows="1" placeholder="Giao nhiệm vụ cho SatiBot… (Enter để chạy, Shift+Enter xuống dòng)"></textarea>
-          <div class="composer-bottom"><div class="scope" id="composerStatus"><span>⌘</span> Lambda scope <i>•</i> Confirm before write</div><button id="runBtn"><span>Run task</span><kbd>↵</kbd></button></div>
+      <!-- New Chat Button -->
+      <button class="new-chat-btn" id="newChatBtn" title="Đoạn chat mới (Ctrl+K)">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg>
+        <span class="btn-text">Đoạn chat mới</span>
+      </button>
+
+      <!-- Recent Sessions -->
+      <div class="recent-section">
+        <div class="recent-label">Gần đây</div>
+        <div class="recent-list" id="recentList">
+          <div class="empty-recent">Chưa có nhiệm vụ nào gần đây</div>
         </div>
-        <div class="hint">Agent có thể mắc lỗi. Luôn xem kỹ diff cấu hình và hành động cần xác nhận.</div>
-      </footer>
+      </div>
+
+      <!-- User Profile at Bottom -->
+      <div class="sidebar-user" id="userProfileBtn" title="AWS Workspace (us-east-1)">
+        <div class="user-avatar-symbolic">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
+        </div>
+        <div class="user-info">
+          <div class="user-name">AWS Workspace</div>
+          <div class="user-plan" id="statusBadge">us-east-1 • 11 Tools Active</div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main Chat Area (Right) -->
+    <main class="chat-main">
+      <!-- Minimal Header -->
+      <header class="chat-header">
+        <div class="header-left">
+          <span class="chat-title" id="topModelText">SatiBot</span>
+        </div>
+        <div class="header-right">
+          <span class="pill-badge" id="awsStatusPill">☁️ us-east-1</span>
+          <span class="pill-badge green" id="toolsPill">⚡ 11 Tools</span>
+        </div>
+      </header>
+
+      <!-- Scrollable Chat Stream -->
+      <div class="chat-scroll" id="chatScroll">
+        <!-- Empty State (AWS Agent Focused) -->
+        <div class="empty-view" id="emptyView">
+          <div class="mascot-icon">
+            <svg width="52" height="52" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/>
+              <circle cx="10" cy="13" r="0.75" fill="currentColor"/>
+              <circle cx="14" cy="13" r="0.75" fill="currentColor"/>
+              <path d="M10.5 16c.8.5 2.2.5 3 0"/>
+            </svg>
+          </div>
+          <h1 class="empty-title">Bạn muốn triển khai gì trên AWS hôm nay?</h1>
+          <p class="empty-subtext">SatiBot tự động lập kế hoạch, sinh code Serverless, tạo Lambda function, cấp Function URL công khai và kiểm thử trong tích tắc.</p>
+        </div>
+
+        <!-- Conversation Timeline -->
+        <div class="conversation-feed hidden" id="conversationFeed"></div>
+      </div>
+
+      <!-- Floating Composer at Bottom -->
+      <div class="composer-container">
+        <div class="composer-box" id="composerBox">
+          <textarea id="promptInput" rows="1" placeholder="Giao nhiệm vụ cho SatiBot… (ví dụ: tạo web bán hàng demo, audit Lambda fleet, inspect logs)"></textarea>
+
+          <div class="composer-controls">
+            <div class="controls-left">
+              <button class="approval-toggle active" id="approvalToggle" title="Bật/tắt yêu cầu phê duyệt thao tác ghi AWS">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 11V6a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v0"></path><path d="M14 10V4a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v2"></path><path d="M10 10.5V6a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v8"></path><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"></path></svg>
+                <span>Yêu cầu phê duyệt</span>
+              </button>
+            </div>
+            <div class="controls-right">
+              <div class="model-select-pill" id="modelSelectPill">
+                <span id="composerModelText">gemini-3.5-flash-lite</span>
+              </div>
+              <button class="send-btn" id="sendBtn" title="Gửi (Enter)" disabled>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"></line><polyline points="5 12 12 5 19 12"></polyline></svg>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
     </main>
   </div>
-  <template id="thinkingTemplate"><div class="event-card thinking"><div class="event-icon"><span></span></div><div><div class="event-kicker">AGENT</div><strong>Đang lập kế hoạch và làm việc trên AWS…</strong><div class="pulse-line"></div></div></div></template>
+
   <script src="/app.js" defer></script>
 </body>
 </html>

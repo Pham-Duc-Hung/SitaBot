@@ -3,6 +3,7 @@ Author: Trịnh Thiên Quang
 Kiểm thử chu trình suy luận tự trị (ReAct Agent Loop) và điều phối công cụ đa bước.
 """
 
+import json
 import os
 import sys
 import unittest
@@ -74,6 +75,18 @@ class TestAgentReasoningLoop(unittest.TestCase):
                     "type": "object",
                     "properties": {"function_name": {"type": "string"}},
                     "required": ["function_name"],
+                },
+            },
+            {
+                "name": "create_public_function_url",
+                "requires_confirmation": True,
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "function_name": {"type": "string"},
+                        "cors_allow_origins": {"type": "array", "items": {"type": "string"}},
+                    },
+                    "required": ["function_name", "cors_allow_origins"],
                 },
             },
         ]
@@ -323,6 +336,50 @@ class TestAgentReasoningLoop(unittest.TestCase):
         self.assertEqual(result["tool_name"], "create_lambda_function")
         self.assertEqual(result["parameters"]["function_name"], "resilient-webhook-receiver")
         self.assertTrue(result["recovered_tool_call"])
+
+    def test_hallucinated_confirmation_prose_is_intercepted_and_retried_with_real_tool(self):
+        self.mock_llm.side_effect = [
+            {
+                "content": "Dạ, tôi cần bạn bấm vào nút Xác nhận (Confirm/Approve) trên hộp thoại yêu cầu gọi công cụ mà hệ thống đang hiển thị.",
+                "tool_calls": None,
+            },
+            {
+                "content": "",
+                "tool_calls": [{
+                    "id": "call_store",
+                    "type": "function",
+                    "function": {
+                        "name": "create_lambda_function",
+                        "arguments": json.dumps({
+                            "function_name": "custom-service",
+                            "code_content": "def lambda_handler(e, c): return {'statusCode': 200}",
+                        }),
+                    },
+                }],
+            },
+        ]
+
+        result = self.executor.run(
+            "Triển khai dịch vụ của tôi lên AWS", "Prompt"
+        )
+
+        self.assertEqual(result["status"], "CONFIRMATION_REQUIRED")
+        self.assertEqual(result["tool_name"], "create_lambda_function")
+        self.assertEqual(result["parameters"]["function_name"], "custom-service")
+        self.assertIn("lambda_handler", result["parameters"]["code_content"])
+
+    def test_create_public_function_url_auto_injects_cors(self):
+        tool_call = {
+            "id": "call_url",
+            "type": "function",
+            "function": {
+                "name": "create_public_function_url",
+                "arguments": json.dumps({"function_name": "web-store-demo"}),
+            },
+        }
+        tool_name, params, err = self.executor._parse_tool_call(tool_call)
+        self.assertIsNone(err)
+        self.assertEqual(params["cors_allow_origins"], ["http://127.0.0.1:8080"])
 
 
 if __name__ == "__main__":

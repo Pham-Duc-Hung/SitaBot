@@ -100,22 +100,31 @@ Người dùng không cần kiến thức AWS chuyên sâu và KHÔNG BAO GIỜ 
        + Input Schema Validation & Comprehensive Logging (bắt lỗi an toàn, trả về chuẩn HTTP 200/400/500).
 
 3. QUY TRÌNH HÀNH ĐỘNG TRỌN GÓI (ACTION FIRST):
-   - Khi người dùng giao mục tiêu (tạo hàm, viết API, hệ thống chống chịu, tiếp nhận webhook...):
+   - Khi người dùng giao mục tiêu (tạo hàm, viết API, hệ thống chống chịu, tiếp nhận webhook, tạo web bán hàng, website demo, link đâu, làm tiếp đi...):
      a) BẮT BUỘC PHẢI PHÁT RA LỆNH GỌI CÔNG CỤ (tool_call) 'create_lambda_function' NGAY LẬP TỨC.
         Toàn bộ mã nguồn Python do bạn thiết kế PHẢI NẰM TRỌN VẸN trong tham số 'code_content' của tool_call.
         TUYỆT ĐỐI KHÔNG xuất mã nguồn dưới dạng văn bản chat (không dùng ```python hay '''python).
         Sử dụng role_arn: 'arn:aws:iam::640737808081:role/service-role/test-lambda-role-my87f8eu'.
-     b) ĐỪNG CHỈ HỎI BẰNG CHỮ "bạn có đồng ý không" mà không gọi tool! Hệ thống của chúng ta đã có sẵn cơ chế chặn an toàn (Confirmation Dialog) tự động hiển thị hộp thoại duyệt và nút bấm Xác Nhận cho người dùng mỗi khi bạn phát lệnh gọi 'create_lambda_function'.
-     c) Sau khi người dùng bấm Duyệt (Confirmed): Hệ thống tự động tiếp tục vòng lặp (resume):
+     b) TUYỆT ĐỐI CẤM NÓI SUÔNG: "bạn hãy bấm nút xác nhận", "vui lòng bấm Approve", "tôi cần bạn bấm xác nhận trên hộp thoại đang hiển thị".
+        Giao diện hệ thống CHỈ HIỂN THỊ nút bấm Xác Nhận KHI VÀ CHỈ KHI bạn phát ra tool_call! Nếu bạn nói bằng chữ mà không phát tool_call, người dùng sẽ KHÔNG THẤY NÚT BẤM NÀO và hệ thống sẽ bị coi là lỗi.
+     c) Khi người dùng yêu cầu tạo trang web, web bán hàng, ứng dụng web, demo giao diện:
+        - Thiết kế hàm Lambda trả về HTML/CSS/JS tương tác hiện đại (statusCode 200, Content-Type: text/html; charset=utf-8) với danh sách sản phẩm, giỏ hàng, đặt mua.
+        - Sau khi hàm được tạo, tự động gọi 'create_public_function_url' để cấp link HTTPS công khai.
+     d) Sau khi người dùng bấm Duyệt (Confirmed): Hệ thống tự động tiếp tục vòng lặp (resume):
         - Với yêu cầu chống chịu sự cố / webhook, tự động gọi 'configure_resilient_service' để publish version bất biến, gắn alias ổn định, cấu hình retry/event age và reserved concurrency.
-        - Tự động gọi 'invoke_lambda_function' với payload thử nghiệm (ví dụ: các sự kiện order.created, order.cancelled, payment.failed, event cũ, event trùng lặp) để kiểm chứng hàm chạy thành công thật.
-        - Tự động gọi 'create_public_function_url' để cấp đường link HTTPS công khai.
-          Khi chạy web demo cục bộ và người dùng không nêu origin, dùng cors_allow_origins=['http://127.0.0.1:8080']; tuyệt đối không bỏ thiếu trường này và không dùng wildcard '*'.
-        - Bàn giao kết quả trọn gói kèm endpoint HTTPS và số liệu kiểm thử thực tế.
+        - Tự động gọi 'invoke_lambda_function' với payload thử nghiệm để kiểm chứng hàm chạy thành công thật.
+        - Tự động gọi 'create_public_function_url' để cấp đường link HTTPS công khai (cors_allow_origins=['http://127.0.0.1:8080']).
+        - Bàn giao kết quả trọn gói kèm endpoint HTTPS công khai và số liệu kiểm thử thực tế.
 
 4. AN TOÀN & BẢO MẬT:
    - Luôn tôn trọng quy trình xác nhận khi thực hiện thao tác thay đổi tài nguyên (tạo hàm, sửa code, đổi cấu hình, kill-switch).
-   - Trước khi đề xuất tạo hoặc cập nhật code, hãy giải thích ngắn gọn tư duy (Thought) và cơ chế kỹ thuật bạn đã áp dụng."""
+   - Trước khi đề xuất tạo hoặc cập nhật code, hãy giải thích ngắn gọn tư duy (Thought) và cơ chế kỹ thuật bạn đã áp dụng.
+
+5. ĐỊNH DẠNG PHẢN HỒI:
+   - Viết Markdown dễ đọc, ngắn gọn; không dồn toàn bộ câu trả lời thành một đoạn dài.
+   - Mỗi ý chính hoặc bước đánh số phải nằm trên một dòng riêng; dùng dòng trống giữa các phần.
+   - Dùng tiêu đề ngắn và danh sách bullet/numbered list khi có từ 2 ý trở lên.
+   - Không dùng bảng nếu một danh sách ngắn đã đủ rõ."""
 
 
 def _get_lambda_tool_schemas() -> List[Dict[str, Any]]:
@@ -377,6 +386,10 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
             configured_role = os.environ.get("DEFAULT_LAMBDA_ROLE_ARN")
             if configured_role:
                 tool_params["role_arn"] = configured_role
+        if payload.get("tool_name") == "create_public_function_url":
+            origins = tool_params.get("cors_allow_origins")
+            if not isinstance(origins, list) or not origins or any(not isinstance(o, str) or o == "*" or not o.startswith("http") for o in origins):
+                tool_params["cors_allow_origins"] = ["http://127.0.0.1:8080"]
         exec_res = _dispatch_action(
             service=payload.get("service", "lambda"),
             action=payload.get("tool_name"),
@@ -388,10 +401,12 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
 
         # Nếu có agent_state, tự động tiếp tục chu trình ReAct hoàn thiện toàn bộ mục tiêu
         try:
-            from agent_executor import AgentExecutor
+            # Avoid loading the same file under two module names in local servers.
+            from backend.functions.chatbot.agent_executor import AgentExecutor
         except ImportError:
             try:
-                from backend.functions.chatbot.agent_executor import AgentExecutor
+                # Packaged Lambda artifact keeps both modules at its root.
+                from agent_executor import AgentExecutor
             except ImportError:
                 AgentExecutor = None
 
@@ -443,10 +458,10 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
 
     # 3. Kích hoạt chu trình suy luận tự trị Agent (ReAct Loop) khi có LLM API Key
     try:
-        from agent_executor import AgentExecutor
+        from backend.functions.chatbot.agent_executor import AgentExecutor
     except ImportError:
         try:
-            from backend.functions.chatbot.agent_executor import AgentExecutor
+            from agent_executor import AgentExecutor
         except ImportError:
             AgentExecutor = None
 

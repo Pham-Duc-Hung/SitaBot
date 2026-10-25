@@ -1,23 +1,732 @@
+/**
+ * Author: Trịnh Thiên Quang
+ * Codex & ChatGPT-style Agent UI with interactive tool log steps & typewriter text stream.
+ */
 "use strict";
-const $=s=>document.querySelector(s);const state={history:[],pending:null,runId:null,steps:0,controller:null,startedAt:null};
-const els={input:$("#promptInput"),runBtn:$("#runBtn"),timeline:$("#timeline"),empty:$("#emptyState"),runState:$("#runState"),runTitle:$("#runTitle"),runSubtitle:$("#runSubtitle"),runId:$("#runId"),stepCount:$("#stepCount"),plan:$("#planList"),planProgress:$("#planProgress"),activity:$("#activityList"),evidence:$("#evidenceList"),evidenceCount:$("#evidenceCount"),recent:$("#recentRuns")};
-const str=v=>v==null?"":String(v);function node(tag,cls,content){const n=document.createElement(tag);if(cls)n.className=cls;if(content!==undefined)n.textContent=str(content);return n}
-function runState(kind,label){els.runState.className=`run-state ${kind}`;els.runState.querySelector("span").textContent=label}function showTimeline(){els.empty.classList.add("hidden");els.timeline.classList.remove("hidden")}
-function formatBody(text){if(!text)return"";let safe=String(text).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");safe=safe.replace(/\[([^\]]+)\]\((https?:\/\/[^\s\)]+)\)/g,'<a href="$2" target="_blank" rel="noopener noreferrer" style="color:#38bdf8;text-decoration:underline;font-weight:600;">$1</a>');safe=safe.replace(/(^|[^"'>])(https?:\/\/[A-Za-z0-9\-._~:/?#@!$&'()*+,;=]+)/g,'$1<a href="$2" target="_blank" rel="noopener noreferrer" style="color:#38bdf8;text-decoration:underline;font-weight:600;">$2</a>');safe=safe.replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>');return safe}
-function eventCard(kind,kicker,title,body,detail){showTimeline();const card=node("article",`event-card ${kind}`),icon=node("div","event-icon",kind==="tool"?">_":kind==="success"?"✓":kind==="error"?"!":"◆"),content=node("div");content.append(node("div","event-kicker",kicker),node("strong",null,title));if(body){const p=document.createElement("p");p.innerHTML=formatBody(body);content.append(p)}if(detail)content.append(node("pre",null,typeof detail==="string"?detail:JSON.stringify(detail,null,2)));card.append(icon,content);els.timeline.append(card);card.scrollIntoView({behavior:"smooth",block:"end"});return card}
-function activity(action,status="RUN"){if(els.activity.querySelector(".muted"))els.activity.innerHTML="";const row=node("div","activity-item");row.append(node("code",null,status),document.createTextNode(`  ${action}`));els.activity.prepend(row)}
-function evidence(label,value){if(els.evidence.querySelector(".muted"))els.evidence.innerHTML="";const row=node("div","evidence-item");const span=document.createElement("span");if(typeof value==="string"&&value.startsWith("https://")){span.innerHTML=`${label}: <a href="${value}" target="_blank" rel="noopener noreferrer" style="color:#38bdf8;text-decoration:underline;font-weight:600;">${value}</a>`}else{span.textContent=`${label}: ${value}`}row.append(node("b",null,"VERIFIED OUTPUT"),span);els.evidence.prepend(row);els.evidenceCount.textContent=els.evidence.children.length}
-function plan(steps=[]){els.plan.innerHTML="";if(!steps.length){els.plan.append(node("li","active","Phân tích mục tiêu và chọn công cụ"));els.planProgress.textContent="0/1";return}steps.forEach(s=>els.plan.append(node("li","done",`${s.action}: ${s.observation||s.status||"hoàn tất"}`)));els.planProgress.textContent=`${steps.length}/${steps.length}`}
-function dataSummary(data={}){if(data.functions)return `${data.functions.length} Lambda functions`;if(data.function_name)return data.function_name;if(data.health_score!==undefined)return `Health score ${data.health_score}/100`;if(data.function_url)return data.function_url;if(data.response_payload!==undefined)return"Invocation response captured";return Object.keys(data).length?`${Object.keys(data).length} trường dữ liệu`:"Tool completed"}
-function busy(value){els.runBtn.disabled=value;els.input.disabled=value;$(".composer").classList.toggle("busy",value);els.runBtn.querySelector("span").textContent=value?"Agent running":"Run task";$("#composerStatus").innerHTML=value?"<span>●</span> Agent đang làm việc <i>•</i> Chưa nhận nhiệm vụ mới":"<span>⌘</span> Lambda scope <i>•</i> Confirm before write"}function addRecent(title){if(els.recent.querySelector(".empty-small"))els.recent.innerHTML="";const row=node("button","recent-run",title);row.title=title;els.recent.prepend(row)}
-function start(prompt){state.runId=`run_${Date.now().toString(36).slice(-6)}`;state.steps=0;state.startedAt=Date.now();els.runId.textContent=state.runId;els.stepCount.textContent="0";els.runTitle.textContent=prompt.length>70?prompt.slice(0,67)+"…":prompt;els.runSubtitle.textContent="Agent đang thao tác trong Lambda scope";runState("running","RUNNING");plan();addRecent(els.runTitle.textContent)}
-function thinking(){const frag=$("#thinkingTemplate").content.cloneNode(true),n=frag.firstElementChild;els.timeline.append(frag);n.scrollIntoView({behavior:"smooth",block:"end"});return n}
-async function request(payload){state.controller=new AbortController();const response=await fetch("/api/chat",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload),signal:state.controller.signal});let result;try{result=await response.json()}catch{throw new Error(`Backend trả HTTP ${response.status} nhưng không có JSON hợp lệ.`)}if(!response.ok)throw new Error(result.message||`HTTP ${response.status}`);return result}
-function renderSteps(steps=[]){plan(steps);for(const step of steps.slice(state.steps)){eventCard("tool","TOOL EXECUTION",step.action,step.observation,step.parameters);activity(step.action,step.status||"DONE")}state.steps=steps.length;els.stepCount.textContent=state.steps}
-function approval(res){state.pending={tool_name:res.tool_name,parameters:res.parameters||{},agent_state:res.agent_state};runState("waiting","AWAITING APPROVAL");els.runSubtitle.textContent="Agent đã tạm dừng trước thao tác thay đổi AWS";const card=eventCard("approval","APPROVAL REQUIRED",res.tool_name,res.message,res.parameters),actions=node("div","approval-actions"),yes=node("button","approve","Approve & continue"),no=node("button","reject","Reject");yes.onclick=()=>approve(card);no.onclick=()=>{state.pending=null;card.remove();eventCard("error","CANCELLED","Thao tác đã bị hủy","Không có thay đổi nào được gửi tới AWS.");runState("idle","CANCELLED");busy(false)};actions.append(yes,no);card.querySelector("div:last-child").append(actions);requestAnimationFrame(()=>card.scrollIntoView({behavior:"smooth",block:"center"}))}
-function render(res){renderSteps(res.steps||[]);if(res.status==="CONFIRMATION_REQUIRED"){approval(res);return}const ok=res.status==="SUCCESS",hasEvidence=ok&&res.data&&Object.keys(res.data).length>0;eventCard(ok?"success":"error",ok?"AGENT REPORT":"AGENT STOPPED",ok?"Nhiệm vụ hoàn tất":res.status||"ERROR",res.message,hasEvidence?res.data:null);if(hasEvidence)evidence(res.tool_name||res.action||"AWS",dataSummary(res.data));runState(ok?"done":"error",ok?"COMPLETED":res.status||"FAILED");els.runSubtitle.textContent=`Hoàn tất sau ${((Date.now()-state.startedAt)/1000).toFixed(1)}s • ${state.steps} tool step`;busy(false)}
-async function runTask(){const prompt=els.input.value.trim();if(!prompt||els.runBtn.disabled)return;els.input.value="";start(prompt);busy(true);eventCard("","USER GOAL","Mục tiêu",prompt);const wait=thinking();try{const res=await request({message:prompt,history:state.history});wait.remove();state.history.push({role:"user",content:prompt},{role:"assistant",content:res.message||""});state.history=state.history.slice(-12);render(res)}catch(err){wait.remove();eventCard("error","SYSTEM ERROR","Không thể tiếp tục",err.message);runState("error","FAILED");busy(false)}}
-async function approve(card){if(!state.pending)return;card.querySelectorAll("button").forEach(b=>b.disabled=true);runState("running","RUNNING");activity(state.pending.tool_name,"APPROVED");const wait=thinking();try{const res=await request({confirmed:true,service:"lambda",tool_name:state.pending.tool_name,parameters:state.pending.parameters,agent_state:state.pending.agent_state});state.pending=null;wait.remove();render(res)}catch(err){wait.remove();eventCard("error","EXECUTION ERROR","AWS action thất bại",err.message);runState("error","FAILED");busy(false)}}
-function reset(){state.history=[];state.pending=null;state.steps=0;els.timeline.innerHTML="";els.timeline.classList.add("hidden");els.empty.classList.remove("hidden");els.plan.innerHTML='<li class="muted">Kế hoạch xuất hiện khi agent bắt đầu chạy.</li>';els.activity.innerHTML='<div class="muted">Chưa có hoạt động.</div>';els.evidence.innerHTML='<div class="muted">Kết quả AWS sẽ hiện tại đây.</div>';els.evidenceCount.textContent="0";els.planProgress.textContent="0/0";els.runId.textContent="—";els.stepCount.textContent="0";els.runTitle.textContent="Sẵn sàng nhận nhiệm vụ";els.runSubtitle.textContent="Giao một mục tiêu. Agent sẽ lập kế hoạch, thao tác AWS và báo cáo bằng chứng.";runState("idle","READY");busy(false);els.input.focus()}
-async function health(){try{const response=await fetch("/api/health"),data=await response.json();$("#sidebarDot").classList.add("online");$("#connectionText").textContent=data.llm_configured?"Agent connected":"Fallback mode";$("#regionText").textContent=data.region;$("#regionBadge").textContent=data.region;$("#modelBadge").textContent=data.model}catch{$("#connectionText").textContent="Backend offline"}}
-els.runBtn.onclick=runTask;els.input.addEventListener("keydown",e=>{if(e.key==="Enter"&&!e.shiftKey&&!e.isComposing){e.preventDefault();runTask()}});els.input.addEventListener("input",()=>{els.input.style.height="auto";els.input.style.height=Math.min(els.input.scrollHeight,120)+"px"});document.querySelectorAll("[data-prompt]").forEach(b=>b.onclick=()=>{els.input.value=b.dataset.prompt;els.input.focus()});$("#newRun").onclick=reset;$("#clearBtn").onclick=reset;document.querySelectorAll("[data-focus]").forEach(b=>b.onclick=()=>$("#"+b.dataset.focus).scrollIntoView({behavior:"smooth"}));health();els.input.focus();
+
+const $ = s => document.querySelector(s);
+const $$ = s => document.querySelectorAll(s);
+
+const state = {
+  history: [],
+  pending: null,
+  isBusy: false,
+  controller: null,
+  autoApproval: true,
+  sessions: [],
+  currentSessionId: null
+};
+
+const SESSION_STORAGE_KEY = "satibot.chat.sessions.v1";
+
+const els = {
+  sidebar: $("#sidebar"),
+  sidebarToggleBtn: $("#sidebarToggleBtn"),
+  lightningBtn: $("#lightningBtn"),
+  newChatBtn: $("#newChatBtn"),
+  recentList: $("#recentList"),
+  statusBadge: $("#statusBadge"),
+  awsStatusPill: $("#awsStatusPill"),
+  toolsPill: $("#toolsPill"),
+  chatScroll: $("#chatScroll"),
+  emptyView: $("#emptyView"),
+  conversationFeed: $("#conversationFeed"),
+  promptInput: $("#promptInput"),
+  sendBtn: $("#sendBtn"),
+  approvalToggle: $("#approvalToggle"),
+  composerModelText: $("#composerModelText"),
+  topModelText: $("#topModelText")
+};
+
+function str(v) {
+  return v == null ? "" : String(v);
+}
+
+function cleanUrl(raw) {
+  if (!raw) return "";
+  let u = String(raw).trim();
+  u = u.replace(/[,\)]+$/, "");
+  return u;
+}
+
+function extractPublicUrl(text, data) {
+  if (data && data.function_url && typeof data.function_url === "string") {
+    return cleanUrl(data.function_url);
+  }
+  if (!text) return null;
+  const match = text.match(/https:\/\/[A-Za-z0-9\-._~:/?#@!$&'*+,;=]+/);
+  if (match) {
+    const candidate = cleanUrl(match[0]);
+    if (candidate.includes("lambda-url") || candidate.includes(".on.aws")) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+function formatBody(text) {
+  if (!text) return "";
+  // Models occasionally flatten a Markdown list into one long line. Restore the
+  // structural breaks before escaping/rendering it.
+  const normalized = String(text)
+    .replace(/\r\n?/g, "\n")
+    .replace(/\s+(?=(?:\d+\.)\s+[A-ZÀ-Ỹ*`])/g, "\n\n")
+    .replace(/([:.])\s+-\s+(?=[A-ZÀ-Ỹ*`])/g, "$1\n- ")
+    .replace(/\.\s+-\s+(?=[A-ZÀ-Ỹ*`])/g, ".\n- ");
+
+  let safe = normalized
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+
+  const inline = value => {
+    let result = value;
+
+    // Markdown links: [text](url)
+    result = result.replace(/\[([^\]]+)\]\((https?:\/\/[^\s\)]+)\)/g, (m, txt, url) => {
+      const clean = cleanUrl(url);
+      return `<a href="${clean}" target="_blank" rel="noopener noreferrer">${txt} ↗</a>`;
+    });
+
+    // Raw URLs
+    result = result.replace(/(^|[^"'>])(https?:\/\/[A-Za-z0-9\-._~:/?#@!$&'*+,;=]+)/g, (m, prefix, url) => {
+      const clean = cleanUrl(url);
+      return `${prefix}<a href="${clean}" target="_blank" rel="noopener noreferrer">${clean} ↗</a>`;
+    });
+
+    result = result.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    result = result.replace(/`([^`]+)`/g, '<code>$1</code>');
+    return result;
+  };
+
+  const lines = safe.split("\n");
+  const html = [];
+  let listType = null;
+  const closeList = () => {
+    if (listType) html.push(`</${listType}>`);
+    listType = null;
+  };
+
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line) {
+      closeList();
+      continue;
+    }
+    const ordered = line.match(/^(\d+)\.\s+(.+)$/);
+    const bullet = line.match(/^[-*]\s+(.+)$/);
+    if (ordered || bullet) {
+      const wanted = ordered ? "ol" : "ul";
+      if (listType !== wanted) {
+        closeList();
+        html.push(`<${wanted}>`);
+        listType = wanted;
+      }
+      const content = ordered ? ordered[2] : bullet[1];
+      const valueAttr = ordered ? ` value="${ordered[1]}"` : "";
+      html.push(`<li${valueAttr}>${inline(content)}</li>`);
+      continue;
+    }
+    closeList();
+    const heading = line.match(/^(#{1,3})\s+(.+)$/);
+    if (heading) {
+      const level = heading[1].length + 2;
+      html.push(`<h${level}>${inline(heading[2])}</h${level}>`);
+    } else {
+      html.push(`<p>${inline(line)}</p>`);
+    }
+  }
+  closeList();
+  return html.join("");
+}
+
+/**
+ * Smooth typewriter streaming animation for assistant responses.
+ */
+function streamText(targetEl, text, onDone) {
+  if (!text) {
+    if (onDone) onDone();
+    return;
+  }
+
+  const tokens = text.match(/\S+|\s+/g) || [text];
+  let i = 0;
+  let streamedText = "";
+  targetEl.innerHTML = "";
+
+  const textSpan = document.createElement("div");
+  textSpan.className = "streaming-body";
+  const cursor = document.createElement("span");
+  cursor.className = "streaming-cursor";
+  targetEl.append(textSpan);
+
+  function renderStream() {
+    // Use the exact same formatter during animation and after completion. This
+    // prevents the old plain-text phase followed by a sudden layout jump.
+    textSpan.innerHTML = formatBody(streamedText);
+    const tails = textSpan.querySelectorAll("li:last-child, p:last-child, h3:last-child, h4:last-child, h5:last-child");
+    const tail = tails.length ? tails[tails.length - 1] : textSpan;
+    tail.append(cursor);
+  }
+
+  let finished = false;
+  function finish() {
+    if (finished) return;
+    finished = true;
+    clearInterval(timer);
+    cursor.remove();
+    targetEl.innerHTML = formatBody(text);
+    if (onDone) onDone();
+  }
+
+  targetEl.style.cursor = "pointer";
+  targetEl.title = "Click để hiện ngay toàn bộ nội dung";
+  targetEl.onclick = finish;
+
+  const timer = setInterval(() => {
+    if (i < tokens.length) {
+      const chunk = tokens.slice(i, i + 2).join("");
+      streamedText += chunk;
+      i += 2;
+      renderStream();
+      els.chatScroll.scrollTop = els.chatScroll.scrollHeight;
+    } else {
+      finish();
+    }
+  }, 16);
+}
+
+/**
+ * Creates an interactive collapsible log item (Image 2).
+ */
+function createLogItem(actionTitle, detailData) {
+  const item = document.createElement("div");
+  item.className = "log-item";
+
+  const header = document.createElement("div");
+  header.className = "log-header";
+
+  const title = document.createElement("span");
+  title.className = "log-title";
+  title.textContent = `Ran ${actionTitle}`;
+
+  const chevron = document.createElement("span");
+  chevron.className = "log-chevron";
+  chevron.textContent = "›";
+
+  header.append(title, chevron);
+
+  const detail = document.createElement("div");
+  detail.className = "log-detail hidden";
+  detail.textContent = typeof detailData === "string" ? detailData : JSON.stringify(detailData, null, 2);
+
+  header.onclick = () => {
+    const isClosed = detail.classList.contains("hidden");
+    if (isClosed) {
+      detail.classList.remove("hidden");
+      item.classList.add("open");
+    } else {
+      detail.classList.add("hidden");
+      item.classList.remove("open");
+    }
+  };
+
+  item.append(header, detail);
+  return item;
+}
+
+function loadStoredSessions() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(SESSION_STORAGE_KEY) || "[]");
+    state.sessions = Array.isArray(parsed) ? parsed.filter(s => s && s.id && Array.isArray(s.messages)) : [];
+  } catch {
+    state.sessions = [];
+  }
+}
+
+function saveSessions() {
+  state.sessions.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  state.sessions = state.sessions.slice(0, 30);
+  try {
+    localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(state.sessions));
+  } catch {
+    // Browser storage is usually ~5 MB. Prefer retaining recent conversations
+    // instead of letting a very large model response break the chat UI.
+    state.sessions = state.sessions.slice(0, Math.max(1, Math.floor(state.sessions.length / 2)));
+    try { localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(state.sessions)); } catch { /* keep UI usable */ }
+  }
+  renderRecentSessions();
+}
+
+function currentSession() {
+  return state.sessions.find(s => s.id === state.currentSessionId) || null;
+}
+
+function ensureSession(firstPrompt) {
+  let session = currentSession();
+  if (session) return session;
+  const id = globalThis.crypto && crypto.randomUUID ? crypto.randomUUID() : `chat_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+  session = {
+    id,
+    title: firstPrompt.length > 42 ? `${firstPrompt.slice(0, 39)}…` : firstPrompt,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    messages: []
+  };
+  state.sessions.unshift(session);
+  state.currentSessionId = id;
+  saveSessions();
+  return session;
+}
+
+function storeMessage(role, content, data = null) {
+  const session = currentSession();
+  if (!session || !content) return;
+  session.messages.push({ role, content: String(content), data, createdAt: Date.now() });
+  session.updatedAt = Date.now();
+  saveSessions();
+}
+
+function appendStoredMessage(message) {
+  if (message.role === "user") {
+    const row = document.createElement("div");
+    row.className = "user-row";
+    const bubble = document.createElement("div");
+    bubble.className = "user-bubble";
+    bubble.textContent = message.content;
+    row.append(bubble);
+    els.conversationFeed.append(row);
+    return;
+  }
+  const row = document.createElement("div");
+  row.className = "agent-row";
+  const header = document.createElement("div");
+  header.className = "agent-header";
+  header.innerHTML = '<div class="agent-avatar">S</div><span>SatiBot AWS Agent</span>';
+  const body = document.createElement("div");
+  body.className = "agent-text";
+  body.innerHTML = formatBody(message.content);
+  row.append(header, body);
+  const publicUrl = extractPublicUrl(message.content, message.data);
+  if (publicUrl) {
+    const link = document.createElement("a");
+    link.className = "restored-url-link";
+    link.href = publicUrl;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.textContent = `Mở website ↗  ${publicUrl}`;
+    row.append(link);
+  }
+  els.conversationFeed.append(row);
+}
+
+function openSession(sessionId) {
+  if (state.isBusy) return;
+  const session = state.sessions.find(s => s.id === sessionId);
+  if (!session) return;
+  state.currentSessionId = session.id;
+  state.pending = null;
+  state.history = session.messages
+    .filter(m => m.role === "user" || m.role === "assistant")
+    .map(m => ({ role: m.role, content: m.content }))
+    .slice(-10);
+  els.conversationFeed.innerHTML = "";
+  session.messages.forEach(appendStoredMessage);
+  els.emptyView.classList.toggle("hidden", session.messages.length > 0);
+  els.conversationFeed.classList.toggle("hidden", session.messages.length === 0);
+  renderRecentSessions();
+  requestAnimationFrame(() => { els.chatScroll.scrollTop = els.chatScroll.scrollHeight; });
+}
+
+function renderRecentSessions() {
+  els.recentList.innerHTML = "";
+  if (!state.sessions.length) {
+    const empty = document.createElement("div");
+    empty.className = "empty-recent";
+    empty.textContent = "Chưa có đoạn chat nào gần đây";
+    els.recentList.append(empty);
+    return;
+  }
+  state.sessions.forEach(session => {
+    const item = document.createElement("button");
+    item.className = "recent-item";
+    item.classList.toggle("active", session.id === state.currentSessionId);
+    item.textContent = session.title || "Đoạn chat không tiêu đề";
+    item.title = session.title || "Đoạn chat không tiêu đề";
+    item.onclick = () => openSession(session.id);
+    els.recentList.append(item);
+  });
+}
+
+function setBusy(val) {
+  state.isBusy = val;
+  els.sendBtn.disabled = val;
+  els.promptInput.disabled = val;
+  if (val) {
+    els.sendBtn.classList.remove("active");
+  } else {
+    updateSendBtnState();
+  }
+}
+
+function updateSendBtnState() {
+  const hasText = els.promptInput.value.trim().length > 0;
+  els.sendBtn.disabled = !hasText || state.isBusy;
+  els.sendBtn.classList.toggle("active", hasText && !state.isBusy);
+}
+
+async function fetchChat(payload) {
+  state.controller = new AbortController();
+  const timeoutMs = 210000;
+  const timeout = setTimeout(() => state.controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch("/api/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+      signal: state.controller.signal
+    });
+    clearTimeout(timeout);
+
+    let data;
+    try {
+      data = await response.json();
+    } catch {
+      throw new Error(`Server trả HTTP ${response.status} không đúng chuẩn JSON.`);
+    }
+
+    if (!response.ok) {
+      throw new Error(data.message || `Lỗi máy chủ: HTTP ${response.status}`);
+    }
+    return data;
+  } catch (err) {
+    clearTimeout(timeout);
+    if (err.name === "AbortError") {
+      throw new Error("Quá thời gian chờ phản hồi (3.5 phút). Vui lòng thử lại.");
+    }
+    throw err;
+  }
+}
+
+async function handleSendMessage() {
+  const text = els.promptInput.value.trim();
+  if (!text || state.isBusy) return;
+
+  ensureSession(text);
+  storeMessage("user", text);
+
+  // Clear input
+  els.promptInput.value = "";
+  els.promptInput.style.height = "auto";
+  setBusy(true);
+
+  // Switch from empty view to conversation feed
+  els.emptyView.classList.add("hidden");
+  els.conversationFeed.classList.remove("hidden");
+
+  // 1. Append User Message Bubble
+  const userRow = document.createElement("div");
+  userRow.className = "user-row";
+  const userBubble = document.createElement("div");
+  userBubble.className = "user-bubble";
+  userBubble.textContent = text;
+  userRow.append(userBubble);
+  els.conversationFeed.append(userRow);
+
+  // 2. Append Agent Response Row with Logs Container (Image 2)
+  const agentRow = document.createElement("div");
+  agentRow.className = "agent-row";
+
+  const agentHeader = document.createElement("div");
+  agentHeader.className = "agent-header";
+  agentHeader.innerHTML = `
+    <div class="agent-avatar">S</div>
+    <span>SatiBot AWS Agent</span>
+  `;
+
+  const logsBox = document.createElement("div");
+  logsBox.className = "agent-logs";
+
+  // Initial working step
+  const workingStep = document.createElement("div");
+  workingStep.className = "log-working";
+  workingStep.innerHTML = `<span class="working-pulse">Working</span>`;
+  logsBox.append(workingStep);
+
+  const textContainer = document.createElement("div");
+  textContainer.className = "agent-text";
+
+  agentRow.append(agentHeader, logsBox, textContainer);
+  els.conversationFeed.append(agentRow);
+  els.chatScroll.scrollTop = els.chatScroll.scrollHeight;
+
+  // Dynamic log progression while thinking
+  const simulatedSteps = [
+    { title: "check health on port 8080", data: { port: 8080, status: "OK", tools: 11 } },
+    { title: "inspect AWS Lambda environment & credentials", data: { region: "us-east-1", service: "lambda" } },
+    { title: "plan execution steps & code architecture", data: { runtime: "python3.12", framework: "serverless" } }
+  ];
+
+  let simIdx = 0;
+  const progressTimer = setInterval(() => {
+    if (simIdx < simulatedSteps.length) {
+      const step = simulatedSteps[simIdx];
+      const item = createLogItem(step.title, step.data);
+      logsBox.insertBefore(item, workingStep);
+      simIdx++;
+      els.chatScroll.scrollTop = els.chatScroll.scrollHeight;
+    }
+  }, 2200);
+
+  try {
+    const res = await fetchChat({ message: text, history: state.history });
+    clearInterval(progressTimer);
+
+    // If real steps returned from backend, replace or append them
+    if (res.steps && res.steps.length > 0) {
+      res.steps.forEach(s => {
+        const item = createLogItem(s.action, s.parameters || s.observation || {});
+        logsBox.insertBefore(item, workingStep);
+      });
+    }
+
+    // Stop working spinner
+    workingStep.remove();
+
+    // Check if confirmation is required
+    if (res.status === "CONFIRMATION_REQUIRED") {
+      storeMessage("assistant", res.message || "SatiBot đang chờ bạn phê duyệt thao tác AWS.");
+      state.history.push(
+        { role: "user", content: text },
+        { role: "assistant", content: res.message || "SatiBot đang chờ bạn phê duyệt thao tác AWS." }
+      );
+      state.history = state.history.slice(-10);
+      handleConfirmation(res, agentRow, text);
+      return;
+    }
+
+    state.history.push({ role: "user", content: text }, { role: "assistant", content: res.message || "" });
+    state.history = state.history.slice(-10);
+    storeMessage("assistant", res.message || "Đã hoàn thành nhiệm vụ.", res.data || null);
+
+    // Stream the final response text (Typewriter animation)
+    streamText(textContainer, res.message || "Đã hoàn thành nhiệm vụ.", () => {
+      // Check for public URL
+      const publicUrl = extractPublicUrl(res.message, res.data);
+      if (publicUrl) {
+        const urlCard = document.createElement("div");
+        urlCard.className = "public-url-card";
+        urlCard.innerHTML = `
+          <div class="url-meta">
+            <span class="url-label">WEBSITE ĐÃ TRIỂN KHAI THÀNH CÔNG</span>
+            <a href="${publicUrl}" target="_blank" class="url-address">${publicUrl}</a>
+          </div>
+          <a href="${publicUrl}" target="_blank" rel="noopener noreferrer" class="url-btn">
+            Mở Website ↗
+          </a>
+        `;
+        agentRow.append(urlCard);
+        els.chatScroll.scrollTop = els.chatScroll.scrollHeight;
+      }
+    });
+
+    setBusy(false);
+  } catch (err) {
+    clearInterval(progressTimer);
+    workingStep.remove();
+    textContainer.innerHTML = `<span style="color:#ef4444;font-weight:600;">Lỗi: ${err.message}</span>`;
+    storeMessage("assistant", `Lỗi: ${err.message}`);
+    setBusy(false);
+  }
+}
+
+function handleConfirmation(res, agentRow, originalPrompt) {
+  state.pending = {
+    tool_name: res.tool_name,
+    parameters: res.parameters || {},
+    agent_state: res.agent_state,
+    originalPrompt: originalPrompt
+  };
+
+  const card = document.createElement("div");
+  card.className = "approval-card";
+  card.innerHTML = `
+    <div class="approval-title">⚠️ Yêu cầu phê duyệt thao tác AWS</div>
+    <div class="approval-msg">${res.message || "Agent đang chuẩn bị thực hiện thay đổi trên AWS Lambda."}</div>
+    <div class="approval-buttons">
+      <button class="btn-approve" id="confirmApprove">Xác nhận thực hiện</button>
+      <button class="btn-reject" id="confirmReject">Hủy bỏ</button>
+    </div>
+  `;
+
+  agentRow.append(card);
+  els.chatScroll.scrollTop = els.chatScroll.scrollHeight;
+
+  card.querySelector("#confirmApprove").onclick = async () => {
+    card.remove();
+    setBusy(true);
+
+    const logsBox = agentRow.querySelector(".agent-logs");
+    const workingStep = document.createElement("div");
+    workingStep.className = "log-working";
+    workingStep.innerHTML = `<span class="working-pulse">Working • Executing approved action</span>`;
+    logsBox.append(workingStep);
+
+    try {
+      const execRes = await fetchChat({
+        confirmed: true,
+        service: "lambda",
+        tool_name: state.pending.tool_name,
+        parameters: state.pending.parameters,
+        agent_state: state.pending.agent_state
+      });
+
+      workingStep.remove();
+      state.pending = null;
+
+      if (execRes.steps && execRes.steps.length > 0) {
+        execRes.steps.forEach(s => {
+          const item = createLogItem(s.action, s.parameters || s.observation || {});
+          logsBox.append(item);
+        });
+      }
+
+      if (execRes.status === "CONFIRMATION_REQUIRED") {
+        storeMessage("assistant", execRes.message || "SatiBot đang chờ bạn phê duyệt bước tiếp theo.");
+        handleConfirmation(execRes, agentRow, originalPrompt);
+        return;
+      }
+
+      const textContainer = agentRow.querySelector(".agent-text");
+      storeMessage("assistant", execRes.message || "Đã thực thi thành công.", execRes.data || null);
+      state.history.push({ role: "assistant", content: execRes.message || "Đã thực thi thành công." });
+      state.history = state.history.slice(-10);
+      streamText(textContainer, execRes.message || "Đã thực thi thành công.", () => {
+        const publicUrl = extractPublicUrl(execRes.message, execRes.data);
+        if (publicUrl) {
+          const urlCard = document.createElement("div");
+          urlCard.className = "public-url-card";
+          urlCard.innerHTML = `
+            <div class="url-meta">
+              <span class="url-label">WEBSITE ĐÃ TRIỂN KHAI THÀNH CÔNG</span>
+              <a href="${publicUrl}" target="_blank" class="url-address">${publicUrl}</a>
+            </div>
+            <a href="${publicUrl}" target="_blank" rel="noopener noreferrer" class="url-btn">
+              Mở Website ↗
+            </a>
+          `;
+          agentRow.append(urlCard);
+          els.chatScroll.scrollTop = els.chatScroll.scrollHeight;
+        }
+      });
+
+      setBusy(false);
+    } catch (err) {
+      workingStep.remove();
+      state.pending = null;
+      const textContainer = agentRow.querySelector(".agent-text");
+      textContainer.innerHTML = `<span style="color:#ef4444;font-weight:600;">Lỗi thực thi: ${err.message}</span>`;
+      storeMessage("assistant", `Lỗi thực thi: ${err.message}`);
+      setBusy(false);
+    }
+  };
+
+  card.querySelector("#confirmReject").onclick = () => {
+    card.remove();
+    state.pending = null;
+    const textContainer = agentRow.querySelector(".agent-text");
+    textContainer.textContent = "Bạn đã từ chối thao tác. Không có thay đổi nào được ghi lên AWS.";
+    storeMessage("assistant", "Bạn đã từ chối thao tác. Không có thay đổi nào được ghi lên AWS.");
+    setBusy(false);
+  };
+}
+
+function resetChat() {
+  state.history = [];
+  state.pending = null;
+  state.currentSessionId = null;
+  els.conversationFeed.innerHTML = "";
+  els.conversationFeed.classList.add("hidden");
+  els.emptyView.classList.remove("hidden");
+  els.promptInput.value = "";
+  els.promptInput.style.height = "auto";
+  setBusy(false);
+  renderRecentSessions();
+  els.promptInput.focus();
+}
+
+async function loadHealth() {
+  try {
+    const res = await fetch("/api/health");
+    const data = await res.json();
+    els.statusBadge.textContent = `${data.region || "us-east-1"} • ${data.tools_loaded || 11} Tools Active`;
+    els.awsStatusPill.textContent = `☁️ ${data.region || "us-east-1"}`;
+    els.toolsPill.textContent = `⚡ ${data.tools_loaded || 11} Tools`;
+    els.topModelText.textContent = "SatiBot";
+    if (data.model) {
+      els.composerModelText.textContent = data.model;
+    }
+  } catch {
+    els.statusBadge.textContent = "Backend Offline";
+  }
+}
+
+// Event Listeners
+els.promptInput.addEventListener("input", () => {
+  els.promptInput.style.height = "auto";
+  els.promptInput.style.height = Math.min(els.promptInput.scrollHeight, 140) + "px";
+  updateSendBtnState();
+});
+
+els.promptInput.addEventListener("keydown", e => {
+  if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
+    e.preventDefault();
+    if (!els.sendBtn.disabled) {
+      handleSendMessage();
+    }
+  }
+});
+
+els.sendBtn.onclick = handleSendMessage;
+els.newChatBtn.onclick = resetChat;
+
+function toggleSidebar() {
+  els.sidebar.classList.toggle("collapsed");
+}
+
+function openSidebar() {
+  els.sidebar.classList.remove("collapsed");
+}
+
+if (els.sidebarToggleBtn) {
+  els.sidebarToggleBtn.onclick = toggleSidebar;
+}
+
+if (els.lightningBtn) {
+  els.lightningBtn.onclick = () => {
+    if (els.sidebar.classList.contains("collapsed")) {
+      openSidebar();
+    } else {
+      toggleSidebar();
+    }
+  };
+}
+
+els.approvalToggle.onclick = () => {
+  state.autoApproval = !state.autoApproval;
+  els.approvalToggle.classList.toggle("active", state.autoApproval);
+};
+
+// Global Shortcut: ⌘K or Ctrl+K for new chat
+document.addEventListener("keydown", e => {
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+    e.preventDefault();
+    resetChat();
+  }
+});
+
+loadStoredSessions();
+renderRecentSessions();
+loadHealth();
+els.promptInput.focus();

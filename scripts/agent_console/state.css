@@ -1,18 +1,24 @@
+/*
+Author: Trịnh Thiên Quang
+State styles for SatiBot Agent Console.
+*/
+
 textarea:disabled {
   cursor: not-allowed;
-  color: #59616b;
+  color: #64748b;
 }
 
 .composer.busy {
-  border-color: #4d592f;
-  background: #0c1009;
+  border-color: rgba(56, 189, 248, 0.35);
+  background: rgba(11, 16, 26, 0.95);
+  box-shadow: 0 0 16px rgba(56, 189, 248, 0.12);
 }
 
 .composer.busy textarea::placeholder {
-  color: #8b9971;
+  color: #475569;
 }
 
 .approval-actions button:disabled {
   cursor: not-allowed;
-  opacity: .5;
+  opacity: 0.5;
 }
