@@ -6,6 +6,7 @@ Tiếp nhận câu lệnh chat, gọi LLM trích xuất Function Call và xử l
 import json
 import logging
 import os
+import sys
 import time
 import uuid
 import urllib.request
@@ -45,6 +46,11 @@ def _dispatch_action(
     credentials: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Kết nối và chuyển tiếp yêu cầu đến Dispatcher Lambda."""
+    # Đảm bảo đường dẫn dispatcher có trong sys.path
+    dispatcher_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "dispatcher"))
+    if dispatcher_dir not in sys.path:
+        sys.path.insert(0, dispatcher_dir)
+
     try:
         from backend.functions.dispatcher.index import lambda_handler as dispatcher_handler
     except ImportError:
@@ -52,7 +58,7 @@ def _dispatch_action(
             from dispatcher import lambda_handler as dispatcher_handler
         except ImportError:
             try:
-                from services.dispatcher import lambda_handler as dispatcher_handler
+                from index import lambda_handler as dispatcher_handler
             except ImportError:
                 return {
                     "status": "ERROR",
@@ -131,9 +137,9 @@ def call_llm_api(
     """
     api_key = api_key or os.environ.get("LLM_API_KEY")
     api_url = api_url or os.environ.get("LLM_API_URL", "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions")
-    model = model or os.environ.get("LLM_MODEL", "gemini-2.5-flash")
-    if model in ("gemini-1.5-flash", "gpt-4o-mini"):
-        model = "gemini-2.5-flash"
+    model = model or os.environ.get("LLM_MODEL", "gemini-3.5-flash-lite")
+    if model in ("gemini-1.5-flash", "gemini-2.5-flash", "gemini-3.5-flash", "gpt-4o-mini"):
+        model = "gemini-3.5-flash-lite"
 
     # Nếu không có API Key cấu hình, dùng bộ phân tích mẫu cho môi trường test
     if not api_key:

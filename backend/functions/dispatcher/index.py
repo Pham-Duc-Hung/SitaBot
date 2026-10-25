@@ -7,11 +7,17 @@ import json
 import logging
 from typing import Any, Dict
 
-# Import các service con (được phát triển bởi các thành viên trong nhóm)
-from services import lambda_service
-from services import ec2_service
-from services import s3_service
-from services import iam_service
+# Import các service con (hỗ trợ cả chạy cục bộ lẫn đóng gói Lambda)
+try:
+    from services import lambda_service
+    from services import ec2_service
+    from services import s3_service
+    from services import iam_service
+except ImportError:
+    from backend.functions.dispatcher.services import lambda_service
+    from backend.functions.dispatcher.services import ec2_service
+    from backend.functions.dispatcher.services import s3_service
+    from backend.functions.dispatcher.services import iam_service
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)

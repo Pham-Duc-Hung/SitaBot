@@ -9,10 +9,12 @@ import os
 import socketserver
 import sys
 
-# Thêm path đến backend
+# Thêm path đến backend và dispatcher
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-if PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, PROJECT_ROOT)
+DISPATCHER_PATH = os.path.join(PROJECT_ROOT, "backend", "functions", "dispatcher")
+for p in (PROJECT_ROOT, DISPATCHER_PATH):
+    if p not in sys.path:
+        sys.path.insert(0, p)
 
 from backend.functions.chatbot.index import lambda_handler
 
@@ -141,7 +143,7 @@ HTML_PAGE = """<!DOCTYPE html>
         </div>
       </div>
       <div class="badges">
-        <span class="badge">Gemini 2.5 Flash</span>
+        <span class="badge">Gemini 3.5 Flash Lite</span>
         <span class="badge badge-aws">AWS us-east-1</span>
       </div>
     </div>
@@ -155,7 +157,7 @@ HTML_PAGE = """<!DOCTYPE html>
     <div class="chat-messages" id="messages">
       <div class="message-row bot">
         <div class="bubble">
-          Xin chào Trịnh Thiên Quang! Tôi là <strong>SatiBot</strong>. Tôi đã sẵn sàng kết nối trực tiếp với tài khoản AWS của bạn qua Gemini 2.5 Flash.<br><br>
+          Xin chào Trịnh Thiên Quang! Tôi là <strong>SatiBot</strong>. Tôi đã sẵn sàng kết nối trực tiếp với tài khoản AWS của bạn qua Gemini 3.5 Flash Lite.<br><br>
           Bạn có thể thử nhắn các câu lệnh quản trị hoặc chọn gợi ý bên trên nhé!
         </div>
       </div>
@@ -214,8 +216,14 @@ HTML_PAGE = """<!DOCTYPE html>
       }
     }
 
+    let currentPending = null;
+
     function renderBotResponse(res) {
       if (res.status === 'CONFIRMATION_REQUIRED') {
+        currentPending = {
+          tool_name: res.tool_name,
+          parameters: res.parameters
+        };
         const paramsStr = JSON.stringify(res.parameters, null, 2);
         const html = `
           <div>${res.message}</div>
@@ -223,7 +231,7 @@ HTML_PAGE = """<!DOCTYPE html>
             <strong>⚠️ Thao tác yêu cầu xác nhận:</strong> <code>${res.tool_name}</code>
             <pre>${paramsStr}</pre>
             <div class="action-buttons">
-              <button class="btn btn-confirm" onclick="confirmAction('${res.tool_name}', ${JSON.stringify(JSON.stringify(res.parameters))})">✅ Xác nhận thực thi</button>
+              <button class="btn btn-confirm" onclick="executeCurrentPending()">✅ Xác nhận thực thi</button>
               <button class="btn btn-cancel" onclick="cancelAction()">❌ Hủy bỏ</button>
             </div>
           </div>
@@ -244,9 +252,11 @@ HTML_PAGE = """<!DOCTYPE html>
       }
     }
 
-    async function confirmAction(toolName, paramsStr) {
+    async function executeCurrentPending() {
+      if (!currentPending) return;
+      const { tool_name, parameters } = currentPending;
+      currentPending = null;
       addMessage('user', '✅ Tôi xác nhận thực hiện thao tác.');
-      const params = JSON.parse(paramsStr);
       try {
         const resp = await fetch('/api/chat', {
           method: 'POST',
@@ -254,8 +264,8 @@ HTML_PAGE = """<!DOCTYPE html>
           body: JSON.stringify({
             confirmed: true,
             service: 'lambda',
-            tool_name: toolName,
-            parameters: params
+            tool_name: tool_name,
+            parameters: parameters
           })
         });
         const res = await resp.json();
@@ -266,6 +276,7 @@ HTML_PAGE = """<!DOCTYPE html>
     }
 
     function cancelAction() {
+      currentPending = null;
       addMessage('user', '❌ Tôi hủy bỏ thao tác.');
       addMessage('bot', 'Đã hủy bỏ thao tác an toàn. Không có tài nguyên nào bị thay đổi.');
     }
@@ -309,10 +320,24 @@ class ChatRequestHandler(http.server.BaseHTTPRequestHandler):
 
 def run():
     socketserver.TCPServer.allow_reuse_address = True
-    with socketserver.TCPServer(("", PORT), ChatRequestHandler) as httpd:
+    port = PORT
+    httpd = None
+    for p in range(PORT, PORT + 10):
+        try:
+            httpd = socketserver.TCPServer(("", p), ChatRequestHandler)
+            port = p
+            break
+        except OSError:
+            continue
+
+    if not httpd:
+        print(f"Lỗi: Các cổng từ {PORT} đến {PORT + 9} đều đang bận.")
+        return
+
+    with httpd:
         print("\n" + "=" * 65)
         print("🚀 SATIBOT WEB CHAT ĐANG CHẠY TRỰC QUAN TẠI:")
-        print(f"👉 http://localhost:{PORT}")
+        print(f"👉 http://localhost:{port}")
         print("=" * 65)
         print("Mở đường link trên bằng Google Chrome để trải nghiệm chat như web thật!")
         print("Bấm Ctrl + C trong terminal nếu muốn dừng.\n")
