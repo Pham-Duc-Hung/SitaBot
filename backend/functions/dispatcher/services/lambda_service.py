@@ -41,6 +41,7 @@ class LambdaService:
             retries={"max_attempts": 3, "mode": "standard"},
             connect_timeout=10,
             read_timeout=60,
+            max_pool_connections=25,
         )
 
         if boto3_session is not None:
@@ -109,9 +110,27 @@ class LambdaService:
             code = err_info.get("Code", "UnknownClientError")
             raw_msg = err_info.get("Message", str(exc))
 
+            if code in ("AccessDeniedException", "AccessDenied", "UnauthorizedOperation"):
+                action_permission_map = {
+                    "list_lambda_functions": "lambda:ListFunctions",
+                    "get_function_config_detail": "lambda:GetFunctionConfiguration",
+                    "invoke_lambda_function": "lambda:InvokeFunction",
+                    "update_function_resources": "lambda:UpdateFunctionConfiguration",
+                    "create_public_function_url": "lambda:CreateFunctionUrlConfig",
+                    "delete_function_url": "lambda:DeleteFunctionUrlConfig",
+                    "set_emergency_kill_switch": "lambda:PutFunctionConcurrency",
+                }
+                required_perm = action_permission_map.get(action, f"lambda:{action}")
+                msg = (
+                    f"LỖI PHÂN QUYỀN (403): Tài khoản/Role hiện tại không đủ quyền thực hiện '{required_perm}'. "
+                    f"Chi tiết từ AWS: {raw_msg}"
+                )
+                res = self._format_response("ERROR", action, msg, error_code="AccessDeniedException")
+                res["required_permission"] = required_perm
+                return res
+
             error_mappings = {
                 "ResourceNotFoundException": "Không tìm thấy hàm Lambda được chỉ định. Vui lòng kiểm tra lại tên hàm.",
-                "AccessDeniedException": "Tài khoản không đủ quyền thực hiện thao tác này trên AWS Lambda.",
                 "InvalidParameterValueException": f"Tham số đầu vào không hợp lệ: {raw_msg}",
                 "TooManyRequestsException": "Hệ thống đang bị giới hạn tần suất gọi API (Rate limit). Vui lòng thử lại sau.",
                 "ResourceConflictException": f"Xung đột tài nguyên: {raw_msg}",
@@ -723,8 +742,67 @@ LAMBDA_TOOL_SCHEMAS = [
 
 
 # =============================================================================
-# HÀM ENTRYPOINT CỦA DISPATCHER DÀNH CHO LAMBDA_SERVICE
+# HÀM ENTRYPOINT CỦA DISPATCHER DÀNH CHO LAMBDA_SERVICE (CÓ GLOBAL CONTEXT CACHE)
 # =============================================================================
+_GLOBAL_LAMBDA_SERVICE_CACHE: Dict[str, "LambdaService"] = {}
+
+
+def _compute_cache_key(credentials: Optional[Dict[str, Any]], region: str) -> str:
+    """Tính toán khóa nhận diện duy nhất cho phiên làm việc."""
+    if not credentials:
+        return f"default:{region}"
+    if credentials.get("AccessKeyId"):
+        return f"key:{credentials.get('AccessKeyId')}:{region}"
+    if credentials.get("RoleArn"):
+        return f"role:{credentials.get('RoleArn')}:{credentials.get('ExternalId', '')}:{region}"
+    return f"default:{region}"
+
+
+def _create_lambda_service(credentials: Optional[Dict[str, Any]], region: str) -> "LambdaService":
+    """Tạo mới một đối tượng LambdaService."""
+    if credentials and credentials.get("AccessKeyId"):
+        return LambdaService(
+            region_name=region,
+            aws_access_key_id=credentials.get("AccessKeyId"),
+            aws_secret_access_key=credentials.get("SecretAccessKey"),
+            aws_session_token=credentials.get("SessionToken"),
+        )
+    if credentials and credentials.get("RoleArn"):
+        return LambdaService.from_assumed_role(
+            role_arn=credentials["RoleArn"],
+            external_id=credentials.get("ExternalId", ""),
+            region_name=region,
+        )
+    return LambdaService(region_name=region)
+
+
+def get_cached_lambda_service(
+    credentials: Optional[Dict[str, Any]] = None,
+    region: str = "us-east-1",
+    enable_cache: bool = True,
+) -> "LambdaService":
+    """
+    Tái sử dụng hoặc khởi tạo mới đối tượng LambdaService (Global Context Caching).
+    Giúp giảm thời gian khởi tạo từ hàng trăm ms xuống vài ms trong các lần gọi Warm Start.
+    """
+    if not enable_cache:
+        return _create_lambda_service(credentials, region)
+
+    cache_key = _compute_cache_key(credentials, region)
+    if cache_key in _GLOBAL_LAMBDA_SERVICE_CACHE:
+        return _GLOBAL_LAMBDA_SERVICE_CACHE[cache_key]
+
+    service = _create_lambda_service(credentials, region)
+    _GLOBAL_LAMBDA_SERVICE_CACHE[cache_key] = service
+    return service
+
+
+def clear_service_cache() -> None:
+    """Xóa bộ nhớ đệm dịch vụ (phục vụ kiểm thử hoặc làm mới session)."""
+    global _GLOBAL_LAMBDA_SERVICE_CACHE
+    _GLOBAL_LAMBDA_SERVICE_CACHE.clear()
+
+
 def execute(credentials: Optional[Dict[str, Any]], params: Dict[str, Any]) -> Dict[str, Any]:
     """
     Hàm thực thi chuẩn hóa được Dispatcher Lambda gọi đến:
@@ -735,24 +813,7 @@ def execute(credentials: Optional[Dict[str, Any]], params: Dict[str, Any]) -> Di
         + 'confirmed': Boolean (True nếu đã được người dùng xác nhận ở bước trước).
     """
     region = (credentials or {}).get("region_name") or params.get("region") or "us-east-1"
-    
-    # Khởi tạo service với credentials truyền vào
-    if credentials and credentials.get("AccessKeyId"):
-        service = LambdaService(
-            region_name=region,
-            aws_access_key_id=credentials.get("AccessKeyId"),
-            aws_secret_access_key=credentials.get("SecretAccessKey"),
-            aws_session_token=credentials.get("SessionToken"),
-        )
-    elif credentials and credentials.get("RoleArn"):
-        service = LambdaService.from_assumed_role(
-            role_arn=credentials["RoleArn"],
-            external_id=credentials.get("ExternalId", ""),
-            region_name=region,
-        )
-    else:
-        # Dùng session môi trường hiện tại (Local PoC hoặc Lambda Execution Role)
-        service = LambdaService(region_name=region)
+    service = get_cached_lambda_service(credentials=credentials, region=region)
 
     action = params.get("action") or params.get("tool_name")
     action_params = params.get("parameters", {})
