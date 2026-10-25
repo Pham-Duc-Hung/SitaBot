@@ -9,6 +9,8 @@ import json
 import time
 import urllib.request
 import zipfile
+import re
+import posixpath
 from urllib.parse import urlsplit
 from typing import Any, Dict, List, Optional
 import boto3
@@ -23,7 +25,20 @@ def _is_strict_int(value: Any) -> bool:
 
 def _valid_function_name(value: Any) -> bool:
     """Kiểm tra tên hàm hoặc ARN là chuỗi hợp lệ."""
-    return isinstance(value, str) and bool(value.strip())
+    if not isinstance(value, str) or not value.strip() or len(value) > 140:
+        return False
+    clean = value.strip()
+    if clean.startswith("arn:"):
+        return bool(re.fullmatch(r"arn:(aws[a-zA-Z-]*)?:lambda:[^:]+:\d{1,12}:function:[A-Za-z0-9-_]+(?::[A-Za-z0-9-_]+)?", clean))
+    return bool(re.fullmatch(r"[A-Za-z0-9-_]{1,64}", clean))
+
+
+def _safe_zip_filename(value: Any) -> bool:
+    """Only permit a relative source filename; block zip-slip style paths."""
+    if not isinstance(value, str) or not value.strip() or "\\" in value:
+        return False
+    normalized = posixpath.normpath(value.strip())
+    return not normalized.startswith("../") and normalized not in (".", "..") and not normalized.startswith("/")
 
 
 class LambdaService:
@@ -688,7 +703,12 @@ class LambdaService:
 
             files = []
             main_code = ""
+            if len(zip_data) > 25_000_000:
+                return self._format_response("ERROR", action, "Gói mã nguồn vượt giới hạn đọc an toàn 25 MB.", error_code="CodePackageTooLarge")
             with zipfile.ZipFile(io.BytesIO(zip_data)) as zf:
+                total_uncompressed = sum(item.file_size for item in zf.infolist())
+                if total_uncompressed > 50_000_000 or len(zf.infolist()) > 500:
+                    return self._format_response("ERROR", action, "Gói mã nguồn có kích thước giải nén hoặc số file vượt giới hạn an toàn.", error_code="UnsafeCodePackage")
                 for file_info in zf.infolist():
                     if file_info.is_dir() or file_info.file_size > 1_000_000:
                         continue
@@ -754,14 +774,14 @@ class LambdaService:
             zf.writestr("lambda_function.py", code_content)
         zip_bytes = buf.getvalue()
 
-        # Xác định IAM Role
+        # Không tự đoán/copy role từ tài nguyên khác: caller phải chọn role rõ ràng.
         target_role = role_arn
-        if not target_role:
-            try:
-                existing = self.client.get_function(FunctionName="test-lambda")
-                target_role = existing.get("Configuration", {}).get("Role")
-            except Exception:
-                target_role = "arn:aws:iam::640737808081:role/service-role/test-lambda-role-my87f8eu"
+        if not isinstance(target_role, str) or not re.fullmatch(r"arn:(aws[a-zA-Z-]*)?:iam::\d{1,12}:role\/.+", target_role.strip()):
+            return self._format_response(
+                "ERROR", action,
+                "role_arn là bắt buộc và phải là ARN IAM Role hợp lệ dành cho Lambda.",
+                error_code="InvalidParameters",
+            )
 
         try:
             res = self.client.create_function(
@@ -809,6 +829,11 @@ class LambdaService:
                 "ERROR", action,
                 f"Mã nguồn Python cập nhật bị lỗi cú pháp tại dòng {syn_err.lineno}: {syn_err.msg}",
                 error_code="PythonSyntaxError",
+            )
+        if not _safe_zip_filename(filename) or not filename.endswith(".py"):
+            return self._format_response(
+                "ERROR", action, "filename phải là đường dẫn tương đối an toàn tới một file .py.",
+                error_code="InvalidParameters",
             )
 
         buf = io.BytesIO()
@@ -1067,17 +1092,18 @@ LAMBDA_TOOL_SCHEMAS = [
     },
     {
         "name": "create_lambda_function",
-        "description": "Tự động tạo mới một hàm AWS Lambda trên đám mây từ mã nguồn Python. Khi người dùng yêu cầu tạo hàm, viết logic mới hoặc phát triển API Serverless, hãy sinh mã nguồn Python hoàn chỉnh và gọi công cụ này.",
+        "description": "Tự động tạo mới một hàm AWS Lambda trên đám mây từ mã nguồn Python. Khi người dùng yêu cầu tạo hàm, viết logic mới, viết API hoặc xây dựng dịch vụ chống chịu, hãy sinh mã nguồn Python hoàn chỉnh và gọi công cụ này.",
         "requires_confirmation": True,
         "parameters": {
             "type": "object",
             "properties": {
-                "function_name": {"type": "string", "description": "Tên hàm Lambda mới muốn tạo (vd: 'calculate-shipping', 'order-processor')."},
+                "function_name": {"type": "string", "description": "Tên hàm Lambda mới muốn tạo (vd: 'calculate-shipping', 'resilient-service', 'order-processor')."},
                 "code_content": {"type": "string", "description": "Mã nguồn Python hoàn chỉnh chứa hàm lambda_handler(event, context)."},
                 "description": {"type": "string", "description": "Mô tả ngắn gọn mục đích nghiệp vụ của hàm."},
                 "runtime": {"type": "string", "description": "Môi trường thực thi (mặc định: 'python3.12')."},
                 "memory_mb": {"type": "integer", "description": "Dung lượng RAM tính bằng MB (128 đến 10240, mặc định 128)."},
                 "timeout_seconds": {"type": "integer", "description": "Thời gian timeout tối đa tính bằng giây (1 đến 900, mặc định 15)."},
+                "role_arn": {"type": "string", "description": "ARN IAM execution role dành cho hàm Lambda (mặc định: 'arn:aws:iam::640737808081:role/service-role/test-lambda-role-my87f8eu')."},
             },
             "required": ["function_name", "code_content"],
         },
@@ -1091,6 +1117,7 @@ LAMBDA_TOOL_SCHEMAS = [
             "properties": {
                 "function_name": {"type": "string", "description": "Tên hoặc ARN của hàm Lambda cần cập nhật code."},
                 "code_content": {"type": "string", "description": "Mã nguồn Python mới hoàn chỉnh sẽ thay thế mã nguồn hiện tại của hàm."},
+                "filename": {"type": "string", "description": "Tên file Python trong gói ZIP, mặc định lambda_function.py."},
             },
             "required": ["function_name", "code_content"],
         },

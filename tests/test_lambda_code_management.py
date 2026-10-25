@@ -46,6 +46,13 @@ class TestLambdaCodeManagement(unittest.TestCase):
         self.assertEqual(res["error_code"], "PythonSyntaxError")
         self.service.client.create_function.assert_not_called()
 
+    def test_create_lambda_function_does_not_guess_execution_role(self):
+        good_code = "def lambda_handler(event, context):\n    return {'statusCode': 200}"
+        res = self.service.create_lambda_function("safe-func", good_code)
+        self.assertEqual(res["status"], "ERROR")
+        self.assertEqual(res["error_code"], "InvalidParameters")
+        self.service.client.create_function.assert_not_called()
+
     def test_create_lambda_function_success(self):
         good_code = "def lambda_handler(event, context):\n    return {'statusCode': 200}"
         self.service.client.create_function.return_value = {
@@ -84,6 +91,13 @@ class TestLambdaCodeManagement(unittest.TestCase):
         self.assertEqual(res["status"], "SUCCESS")
         self.assertEqual(res["data"]["function_name"], "test-lambda")
         self.service.client.update_function_code.assert_called_once()
+
+    def test_update_lambda_code_rejects_zip_slip_filename(self):
+        code = "def lambda_handler(event, context):\n    return {}"
+        res = self.service.update_lambda_code("test-lambda", code, filename="../../lambda_function.py")
+        self.assertEqual(res["status"], "ERROR")
+        self.assertEqual(res["error_code"], "InvalidParameters")
+        self.service.client.update_function_code.assert_not_called()
 
     def test_execute_tool_requires_confirmation_for_create_and_update(self):
         # Thử gọi create_lambda_function mà chưa confirm

@@ -141,6 +141,53 @@ class TestAgentReasoningLoop(unittest.TestCase):
         self.assertIn("act_", res["action_id"])
         self.mock_dispatch.assert_not_called()
 
+    def test_agent_executes_multiple_read_only_tools_in_one_turn(self):
+        self.mock_llm.side_effect = [
+            {
+                "content": "Kiểm tra song song hai nguồn dữ liệu.",
+                "tool_calls": [
+                    {"id": "call_1", "type": "function", "function": {"name": "list_lambda_functions", "arguments": "{}"}},
+                    {"id": "call_2", "type": "function", "function": {"name": "diagnose_lambda_health", "arguments": "{}"}},
+                ],
+            },
+            {"content": "Đã tổng hợp xong kết quả.", "tool_calls": None},
+        ]
+        self.mock_dispatch.side_effect = [
+            {"status": "SUCCESS", "message": "Có 2 hàm", "data": {"count": 2}},
+            {"status": "SUCCESS", "message": "Hệ thống khỏe", "data": {"health_score": 95}},
+        ]
+
+        result = self.executor.run("Kiểm tra toàn bộ Lambda", "Prompt")
+
+        self.assertEqual(result["status"], "SUCCESS")
+        self.assertEqual(self.mock_dispatch.call_count, 2)
+        self.assertEqual([step["action"] for step in result["steps"]], ["list_lambda_functions", "diagnose_lambda_health"])
+
+    def test_invalid_tool_call_is_returned_to_model_instead_of_executed(self):
+        self.mock_llm.side_effect = [
+            {"content": "", "tool_calls": [{"id": "bad", "type": "function", "function": {"name": "delete_everything", "arguments": "{}"}}]},
+            {"content": "Tôi không có công cụ đó.", "tool_calls": None},
+        ]
+
+        result = self.executor.run("Xóa hết", "Prompt")
+
+        self.assertEqual(result["status"], "SUCCESS")
+        self.mock_dispatch.assert_not_called()
+        self.assertEqual(result["steps"][0]["action"], "delete_everything")
+
+    def test_iteration_limit_is_not_reported_as_success(self):
+        self.executor.max_iterations = 1
+        self.mock_llm.return_value = {
+            "content": "Đang kiểm tra",
+            "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "list_lambda_functions", "arguments": "{}"}}],
+        }
+        self.mock_dispatch.return_value = {"status": "SUCCESS", "message": "OK", "data": {}}
+
+        result = self.executor.run("Kiểm tra", "Prompt")
+
+        self.assertEqual(result["status"], "INCOMPLETE")
+        self.assertEqual(result["type"], "agent_limit_reached")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
