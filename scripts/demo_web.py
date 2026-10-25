@@ -178,7 +178,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
 
     <div class="quick-prompts">
       <div class="quick-chip" onclick="fillInput('Chẩn đoán sức khỏe và rủi ro các hàm Lambda trong tài khoản giúp tôi')">🩺 Chẩn đoán sức khỏe (Health Check)</div>
-      <div class="quick-chip" onclick="fillInput('Tạo cho tôi một hàm Lambda tên order-calculator bằng Python để tính tổng tiền đơn hàng với thuế VAT 10% và phí ship 25000, cấu hình RAM 256MB')">🛠️ Tạo hàm mới (Codex)</div>
+      <div class="quick-chip" onclick="fillInput('Tạo cho tôi một hàm Lambda tên order-calculator bằng Python để tính tổng tiền đơn hàng với thuế VAT 10% và phí ship 25000, cấu hình RAM 256MB')">🛠️ Tự động tạo hàm mới (AI Code & Deploy)</div>
       <div class="quick-chip" onclick="fillInput('Đọc và hiển thị mã nguồn của hàm test-lambda hiện tại trên AWS')">📄 Xem mã nguồn test-lambda</div>
       <div class="quick-chip" onclick="fillInput('Hàm test-lambda dạo này chạy chậm, hãy kiểm tra và đề xuất tối ưu giúp tôi')">⚡ Kiểm tra & Tối ưu test-lambda</div>
       <div class="quick-chip" onclick="fillInput('Liệt kê danh sách các hàm Lambda trong tài khoản')">📋 Liệt kê hàm</div>

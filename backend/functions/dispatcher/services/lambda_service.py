@@ -666,7 +666,7 @@ class LambdaService:
             return self._handle_boto_error(action, exc)
 
     def get_lambda_source_code(self, function_name: str) -> Dict[str, Any]:
-        """Kịch bản Codex 1: Đọc và trích xuất mã nguồn bên trong hàm Lambda."""
+        """Kịch bản Nâng cao 1: Đọc và trích xuất mã nguồn bên trong hàm Lambda."""
         action = "get_lambda_source_code"
         if not _valid_function_name(function_name):
             return self._format_response("ERROR", action, "function_name phải là chuỗi không rỗng.", error_code="InvalidParameters")
@@ -725,7 +725,7 @@ class LambdaService:
         timeout_seconds: int = 15,
         role_arn: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Kịch bản Codex 2: Tự động khởi tạo hàm Lambda mới từ mã nguồn do Agent sinh ra."""
+        """Kịch bản Nâng cao 2: Tự động khởi tạo hàm Lambda mới từ mã nguồn do Agent sinh ra."""
         action = "create_lambda_function"
         if not _valid_function_name(function_name):
             return self._format_response("ERROR", action, "function_name phải là chuỗi không rỗng.", error_code="InvalidParameters")
@@ -795,7 +795,7 @@ class LambdaService:
         code_content: str,
         filename: str = "lambda_function.py",
     ) -> Dict[str, Any]:
-        """Kịch bản Codex 3: Sửa đổi và cập nhật trực tiếp mã nguồn của hàm Lambda."""
+        """Kịch bản Nâng cao 3: Sửa đổi và cập nhật trực tiếp mã nguồn của hàm Lambda."""
         action = "update_lambda_code"
         if not _valid_function_name(function_name):
             return self._format_response("ERROR", action, "function_name phải là chuỗi không rỗng.", error_code="InvalidParameters")

@@ -1,6 +1,6 @@
 """
 Author: Trịnh Thiên Quang
-Kiểm thử tính năng tự động tạo, đọc và cập nhật mã nguồn Lambda của AI Agent (Codex).
+Kiểm thử tính năng tự động tạo, đọc và cập nhật mã nguồn Lambda của AI Agent.
 """
 
 import io
@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, patch
 from backend.functions.dispatcher.services.lambda_service import LambdaService
 
 
-class TestCodexCapabilities(unittest.TestCase):
+class TestLambdaCodeManagement(unittest.TestCase):
     def setUp(self):
         self.service = LambdaService(region_name="us-east-1")
         self.service.client = MagicMock()
