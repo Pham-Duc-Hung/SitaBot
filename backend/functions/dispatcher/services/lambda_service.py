@@ -3,8 +3,12 @@ Author: Trịnh Thiên Quang
 Xử lý các thao tác quản trị và kiểm thử AWS Lambda bằng Boto3.
 """
 
+import ast
+import io
 import json
 import time
+import urllib.request
+import zipfile
 from urllib.parse import urlsplit
 from typing import Any, Dict, List, Optional
 import boto3
@@ -120,6 +124,9 @@ class LambdaService:
                     "delete_function_url": "lambda:DeleteFunctionUrlConfig",
                     "set_emergency_kill_switch": "lambda:PutFunctionConcurrency",
                     "diagnose_lambda_health": "lambda:ListFunctions",
+                    "get_lambda_source_code": "lambda:GetFunction",
+                    "create_lambda_function": "lambda:CreateFunction",
+                    "update_lambda_code": "lambda:UpdateFunctionCode",
                 }
                 required_perm = action_permission_map.get(action, f"lambda:{action}")
                 msg = (
@@ -658,6 +665,175 @@ class LambdaService:
         except Exception as exc:
             return self._handle_boto_error(action, exc)
 
+    def get_lambda_source_code(self, function_name: str) -> Dict[str, Any]:
+        """Kịch bản Codex 1: Đọc và trích xuất mã nguồn bên trong hàm Lambda."""
+        action = "get_lambda_source_code"
+        if not _valid_function_name(function_name):
+            return self._format_response("ERROR", action, "function_name phải là chuỗi không rỗng.", error_code="InvalidParameters")
+
+        try:
+            fn_info = self.client.get_function(FunctionName=function_name)
+            cfg = fn_info.get("Configuration", {})
+            runtime = cfg.get("Runtime", "unknown")
+            handler = cfg.get("Handler", "lambda_function.lambda_handler")
+            code_location = fn_info.get("Code", {}).get("Location")
+
+            if not code_location:
+                return self._format_response("ERROR", action, f"Không tìm thấy vị trí tải mã nguồn của hàm '{function_name}'.", error_code="CodeLocationNotFound")
+
+            # Tải file zip qua URL ký trước (presigned URL)
+            req = urllib.request.Request(code_location, headers={"User-Agent": "SatiBot-Agent/1.0"})
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                zip_data = resp.read()
+
+            files = []
+            main_code = ""
+            with zipfile.ZipFile(io.BytesIO(zip_data)) as zf:
+                for file_info in zf.infolist():
+                    if file_info.is_dir() or file_info.file_size > 1_000_000:
+                        continue
+                    fname = file_info.filename
+                    try:
+                        content = zf.read(fname).decode("utf-8", errors="replace")
+                        files.append({"filename": fname, "content": content, "size_bytes": file_info.file_size})
+                        if fname in ("lambda_function.py", "index.py", "app.py", "handler.py") or not main_code:
+                            main_code = content
+                    except Exception:
+                        pass
+
+            data = {
+                "function_name": function_name,
+                "runtime": runtime,
+                "handler": handler,
+                "files": files,
+                "main_code": main_code,
+                "total_files": len(files),
+            }
+            msg = f"Đã đọc mã nguồn của hàm '{function_name}' ({len(files)} file, runtime {runtime})."
+            return self._format_response("SUCCESS", action, msg, data=data)
+        except Exception as exc:
+            return self._handle_boto_error(action, exc)
+
+    def create_lambda_function(
+        self,
+        function_name: str,
+        code_content: str,
+        description: str = "Hàm Lambda được tạo tự động bởi SatiBot AI Agent",
+        runtime: str = "python3.12",
+        handler: str = "lambda_function.lambda_handler",
+        memory_mb: int = 128,
+        timeout_seconds: int = 15,
+        role_arn: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Kịch bản Codex 2: Tự động khởi tạo hàm Lambda mới từ mã nguồn do Agent sinh ra."""
+        action = "create_lambda_function"
+        if not _valid_function_name(function_name):
+            return self._format_response("ERROR", action, "function_name phải là chuỗi không rỗng.", error_code="InvalidParameters")
+        if not isinstance(code_content, str) or not code_content.strip():
+            return self._format_response("ERROR", action, "code_content phải là chuỗi mã nguồn Python hợp lệ.", error_code="InvalidParameters")
+
+        # Kiểm tra cú pháp Python trước khi đóng gói
+        if runtime.startswith("python"):
+            try:
+                ast.parse(code_content)
+            except SyntaxError as syn_err:
+                return self._format_response(
+                    "ERROR", action,
+                    f"Mã nguồn Python bị lỗi cú pháp tại dòng {syn_err.lineno}: {syn_err.msg}",
+                    error_code="PythonSyntaxError",
+                )
+
+        if not _is_strict_int(memory_mb) or not (128 <= memory_mb <= 10240):
+            return self._format_response("ERROR", action, "memory_mb phải từ 128 đến 10240 MB.", error_code="InvalidParameters")
+        if not _is_strict_int(timeout_seconds) or not (1 <= timeout_seconds <= 900):
+            return self._format_response("ERROR", action, "timeout_seconds phải từ 1 đến 900 giây.", error_code="InvalidParameters")
+
+        # Đóng gói zip in-memory
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("lambda_function.py", code_content)
+        zip_bytes = buf.getvalue()
+
+        # Xác định IAM Role
+        target_role = role_arn
+        if not target_role:
+            try:
+                existing = self.client.get_function(FunctionName="test-lambda")
+                target_role = existing.get("Configuration", {}).get("Role")
+            except Exception:
+                target_role = "arn:aws:iam::640737808081:role/service-role/test-lambda-role-my87f8eu"
+
+        try:
+            res = self.client.create_function(
+                FunctionName=function_name,
+                Runtime=runtime,
+                Role=target_role,
+                Handler=handler,
+                Code={"ZipFile": zip_bytes},
+                Description=description,
+                Timeout=timeout_seconds,
+                MemorySize=memory_mb,
+            )
+            data = {
+                "function_name": res.get("FunctionName"),
+                "function_arn": res.get("FunctionArn"),
+                "runtime": res.get("Runtime"),
+                "handler": res.get("Handler"),
+                "memory_mb": res.get("MemorySize"),
+                "timeout_seconds": res.get("Timeout"),
+                "code_size_bytes": res.get("CodeSize"),
+                "code_content": code_content,
+            }
+            msg = f"ĐÃ TẠO THÀNH CÔNG HÀM LAMBDA '{function_name}' (Runtime {runtime}, RAM {memory_mb}MB, Timeout {timeout_seconds}s)!"
+            return self._format_response("SUCCESS", action, msg, data=data)
+        except Exception as exc:
+            return self._handle_boto_error(action, exc)
+
+    def update_lambda_code(
+        self,
+        function_name: str,
+        code_content: str,
+        filename: str = "lambda_function.py",
+    ) -> Dict[str, Any]:
+        """Kịch bản Codex 3: Sửa đổi và cập nhật trực tiếp mã nguồn của hàm Lambda."""
+        action = "update_lambda_code"
+        if not _valid_function_name(function_name):
+            return self._format_response("ERROR", action, "function_name phải là chuỗi không rỗng.", error_code="InvalidParameters")
+        if not isinstance(code_content, str) or not code_content.strip():
+            return self._format_response("ERROR", action, "code_content phải là chuỗi mã nguồn Python hợp lệ.", error_code="InvalidParameters")
+
+        try:
+            ast.parse(code_content)
+        except SyntaxError as syn_err:
+            return self._format_response(
+                "ERROR", action,
+                f"Mã nguồn Python cập nhật bị lỗi cú pháp tại dòng {syn_err.lineno}: {syn_err.msg}",
+                error_code="PythonSyntaxError",
+            )
+
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr(filename, code_content)
+        zip_bytes = buf.getvalue()
+
+        try:
+            res = self.client.update_function_code(
+                FunctionName=function_name,
+                ZipFile=zip_bytes,
+            )
+            data = {
+                "function_name": res.get("FunctionName"),
+                "function_arn": res.get("FunctionArn"),
+                "runtime": res.get("Runtime"),
+                "last_modified": res.get("LastModified"),
+                "code_size_bytes": res.get("CodeSize"),
+                "code_content": code_content,
+            }
+            msg = f"ĐÃ CẬP NHẬT MÃ NGUỒN CHO HÀM '{function_name}' THÀNH CÔNG!"
+            return self._format_response("SUCCESS", action, msg, data=data)
+        except Exception as exc:
+            return self._handle_boto_error(action, exc)
+
     def execute_tool(
         self,
         tool_name: str,
@@ -764,6 +940,24 @@ class LambdaService:
                 restore_concurrency=p.get("restore_concurrency"),
             ),
             "diagnose_lambda_health": lambda p: self.diagnose_lambda_health(),
+            "get_lambda_source_code": lambda p: self.get_lambda_source_code(
+                function_name=p["function_name"]
+            ),
+            "create_lambda_function": lambda p: self.create_lambda_function(
+                function_name=p["function_name"],
+                code_content=p["code_content"],
+                description=p.get("description", "Hàm Lambda được tạo tự động bởi SatiBot AI Agent"),
+                runtime=p.get("runtime", "python3.12"),
+                handler=p.get("handler", "lambda_function.lambda_handler"),
+                memory_mb=p.get("memory_mb", 128),
+                timeout_seconds=p.get("timeout_seconds", 15),
+                role_arn=p.get("role_arn"),
+            ),
+            "update_lambda_code": lambda p: self.update_lambda_code(
+                function_name=p["function_name"],
+                code_content=p["code_content"],
+                filename=p.get("filename", "lambda_function.py"),
+            ),
         }
         return dispatch_map[tool_name](parameters)
 
@@ -857,6 +1051,48 @@ LAMBDA_TOOL_SCHEMAS = [
         "parameters": {
             "type": "object",
             "properties": {},
+        },
+    },
+    {
+        "name": "get_lambda_source_code",
+        "description": "Đọc và trích xuất toàn bộ mã nguồn bên trong hàm AWS Lambda để kiểm tra logic, đọc hiểu file code hoặc chuẩn bị sửa đổi.",
+        "requires_confirmation": False,
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "function_name": {"type": "string", "description": "Tên hoặc ARN của hàm AWS Lambda cần đọc mã nguồn."},
+            },
+            "required": ["function_name"],
+        },
+    },
+    {
+        "name": "create_lambda_function",
+        "description": "Tự động tạo mới một hàm AWS Lambda trên đám mây từ mã nguồn Python. Khi người dùng yêu cầu tạo hàm, viết logic mới hoặc phát triển API Serverless, hãy sinh mã nguồn Python hoàn chỉnh và gọi công cụ này.",
+        "requires_confirmation": True,
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "function_name": {"type": "string", "description": "Tên hàm Lambda mới muốn tạo (vd: 'calculate-shipping', 'order-processor')."},
+                "code_content": {"type": "string", "description": "Mã nguồn Python hoàn chỉnh chứa hàm lambda_handler(event, context)."},
+                "description": {"type": "string", "description": "Mô tả ngắn gọn mục đích nghiệp vụ của hàm."},
+                "runtime": {"type": "string", "description": "Môi trường thực thi (mặc định: 'python3.12')."},
+                "memory_mb": {"type": "integer", "description": "Dung lượng RAM tính bằng MB (128 đến 10240, mặc định 128)."},
+                "timeout_seconds": {"type": "integer", "description": "Thời gian timeout tối đa tính bằng giây (1 đến 900, mặc định 15)."},
+            },
+            "required": ["function_name", "code_content"],
+        },
+    },
+    {
+        "name": "update_lambda_code",
+        "description": "Sửa đổi và cập nhật trực tiếp mã nguồn Python mới lên một hàm AWS Lambda đã có.",
+        "requires_confirmation": True,
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "function_name": {"type": "string", "description": "Tên hoặc ARN của hàm Lambda cần cập nhật code."},
+                "code_content": {"type": "string", "description": "Mã nguồn Python mới hoàn chỉnh sẽ thay thế mã nguồn hiện tại của hàm."},
+            },
+            "required": ["function_name", "code_content"],
         },
     },
 ]

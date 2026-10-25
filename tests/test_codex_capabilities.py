@@ -1,0 +1,116 @@
+"""
+Author: Trịnh Thiên Quang
+Kiểm thử tính năng tự động tạo, đọc và cập nhật mã nguồn Lambda của AI Agent (Codex).
+"""
+
+import io
+import unittest
+import zipfile
+from unittest.mock import MagicMock, patch
+from backend.functions.dispatcher.services.lambda_service import LambdaService
+
+
+class TestCodexCapabilities(unittest.TestCase):
+    def setUp(self):
+        self.service = LambdaService(region_name="us-east-1")
+        self.service.client = MagicMock()
+
+    def test_get_lambda_source_code_success(self):
+        # Tạo mock zip data
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as zf:
+            zf.writestr("lambda_function.py", "def lambda_handler(event, context):\n    return 'OK'\n")
+        fake_zip = buf.getvalue()
+
+        self.service.client.get_function.return_value = {
+            "Configuration": {"Runtime": "python3.12", "Handler": "lambda_function.lambda_handler"},
+            "Code": {"Location": "https://s3.amazonaws.com/test-presigned-url"},
+        }
+
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = fake_zip
+        mock_resp.__enter__.return_value = mock_resp
+
+        with patch("urllib.request.urlopen", return_value=mock_resp):
+            res = self.service.get_lambda_source_code("test-lambda")
+
+        self.assertEqual(res["status"], "SUCCESS")
+        self.assertEqual(res["data"]["function_name"], "test-lambda")
+        self.assertIn("def lambda_handler", res["data"]["main_code"])
+
+    def test_create_lambda_function_syntax_error(self):
+        # Code Python có lỗi cú pháp
+        bad_code = "def lambda_handler(event, context)\n return 123"
+        res = self.service.create_lambda_function("bad-func", bad_code)
+        self.assertEqual(res["status"], "ERROR")
+        self.assertEqual(res["error_code"], "PythonSyntaxError")
+        self.service.client.create_function.assert_not_called()
+
+    def test_create_lambda_function_success(self):
+        good_code = "def lambda_handler(event, context):\n    return {'statusCode': 200}"
+        self.service.client.create_function.return_value = {
+            "FunctionName": "new-calc",
+            "FunctionArn": "arn:aws:lambda:us-east-1:12345:function:new-calc",
+            "Runtime": "python3.12",
+            "Handler": "lambda_function.lambda_handler",
+            "MemorySize": 256,
+            "Timeout": 20,
+            "CodeSize": 150,
+        }
+
+        res = self.service.create_lambda_function(
+            function_name="new-calc",
+            code_content=good_code,
+            memory_mb=256,
+            timeout_seconds=20,
+            role_arn="arn:aws:iam::12345:role/sample-role",
+        )
+        self.assertEqual(res["status"], "SUCCESS")
+        self.assertEqual(res["data"]["function_name"], "new-calc")
+        self.assertEqual(res["data"]["memory_mb"], 256)
+        self.service.client.create_function.assert_called_once()
+
+    def test_update_lambda_code_success(self):
+        new_code = "def lambda_handler(event, context):\n    return {'status': 'updated'}"
+        self.service.client.update_function_code.return_value = {
+            "FunctionName": "test-lambda",
+            "FunctionArn": "arn:aws:lambda:us-east-1:12345:function:test-lambda",
+            "Runtime": "python3.12",
+            "LastModified": "2026-10-25T16:00:00.000+0000",
+            "CodeSize": 200,
+        }
+
+        res = self.service.update_lambda_code("test-lambda", new_code)
+        self.assertEqual(res["status"], "SUCCESS")
+        self.assertEqual(res["data"]["function_name"], "test-lambda")
+        self.service.client.update_function_code.assert_called_once()
+
+    def test_execute_tool_requires_confirmation_for_create_and_update(self):
+        # Thử gọi create_lambda_function mà chưa confirm
+        res_create = self.service.execute_tool(
+            "create_lambda_function",
+            {"function_name": "calc", "code_content": "def lambda_handler(e, c): pass"},
+            confirmed=False,
+        )
+        self.assertEqual(res_create["status"], "CONFIRMATION_REQUIRED")
+
+        # Thử gọi update_lambda_code mà chưa confirm
+        res_update = self.service.execute_tool(
+            "update_lambda_code",
+            {"function_name": "calc", "code_content": "def lambda_handler(e, c): pass"},
+            confirmed=False,
+        )
+        self.assertEqual(res_update["status"], "CONFIRMATION_REQUIRED")
+
+        # Gọi get_lambda_source_code không cần confirm
+        self.service.get_lambda_source_code = MagicMock(return_value={"status": "SUCCESS"})
+        res_get = self.service.execute_tool(
+            "get_lambda_source_code",
+            {"function_name": "calc"},
+            confirmed=False,
+        )
+        self.assertEqual(res_get["status"], "SUCCESS")
+
+
+if __name__ == "__main__":
+    unittest.main()

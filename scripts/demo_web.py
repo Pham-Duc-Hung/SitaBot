@@ -178,6 +178,8 @@ HTML_PAGE = r"""<!DOCTYPE html>
 
     <div class="quick-prompts">
       <div class="quick-chip" onclick="fillInput('Chẩn đoán sức khỏe và rủi ro các hàm Lambda trong tài khoản giúp tôi')">🩺 Chẩn đoán sức khỏe (Health Check)</div>
+      <div class="quick-chip" onclick="fillInput('Tạo cho tôi một hàm Lambda tên order-calculator bằng Python để tính tổng tiền đơn hàng với thuế VAT 10% và phí ship 25000, cấu hình RAM 256MB')">🛠️ Tạo hàm mới (Codex)</div>
+      <div class="quick-chip" onclick="fillInput('Đọc và hiển thị mã nguồn của hàm test-lambda hiện tại trên AWS')">📄 Xem mã nguồn test-lambda</div>
       <div class="quick-chip" onclick="fillInput('Hàm test-lambda dạo này chạy chậm, hãy kiểm tra và đề xuất tối ưu giúp tôi')">⚡ Kiểm tra & Tối ưu test-lambda</div>
       <div class="quick-chip" onclick="fillInput('Liệt kê danh sách các hàm Lambda trong tài khoản')">📋 Liệt kê hàm</div>
       <div class="quick-chip" onclick="fillInput('Tạo đường dẫn Function URL công khai cho hàm test-lambda cho phép truy cập từ https://satibot.com')">🌐 Tạo Function URL</div>
@@ -332,7 +334,20 @@ HTML_PAGE = r"""<!DOCTYPE html>
           tool_name: res.tool_name,
           parameters: res.parameters
         };
-        const paramsStr = JSON.stringify(res.parameters, null, 2);
+        let codePreview = '';
+        if (res.parameters && res.parameters.code_content) {
+          codePreview = `
+            <div style="margin-top: 8px; text-align: left; background: #090d16; padding: 8px; border-radius: 4px; border: 1px solid #334155;">
+              <div style="font-size: 11px; color: #f472b6; font-weight: 700; margin-bottom: 4px;">📝 Mã nguồn AI đề xuất tạo / cập nhật:</div>
+              <pre style="margin: 0; max-height: 200px; overflow-y: auto; color: #67e8f9; font-size: 11.5px; white-space: pre-wrap;">${String(res.parameters.code_content).replace(/</g, '&lt;').replace(/>/g, '&gt;')}</pre>
+            </div>
+          `;
+        }
+        const paramsDisplay = { ...res.parameters };
+        if (paramsDisplay.code_content) {
+          paramsDisplay.code_content = `[Mã nguồn Python ${paramsDisplay.code_content.length} ký tự]`;
+        }
+        const paramsStr = JSON.stringify(paramsDisplay, null, 2);
         const msgFormatted = formatMarkdown(res.message);
         const html = `
           ${stepsHtml}
@@ -340,6 +355,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
           <div class="action-card">
             <strong>⚠️ Thao tác yêu cầu xác nhận:</strong> <code>${res.tool_name}</code>
             <pre>${paramsStr}</pre>
+            ${codePreview}
             <div class="action-buttons">
               <button class="btn btn-confirm" onclick="executeCurrentPending()">✅ Xác nhận thực thi</button>
               <button class="btn btn-cancel" onclick="cancelAction()">❌ Hủy bỏ</button>
@@ -347,9 +363,16 @@ HTML_PAGE = r"""<!DOCTYPE html>
           </div>
         `;
         addMessage('bot', html);
-      } else if (res.type === 'action_executed') {
+      } else if (res.type === 'action_executed' || res.type === 'agent_reply') {
         let extra = '';
-        if (res.data && res.data.functions) {
+        if (res.data && res.data.main_code) {
+          extra = `
+            <div style="margin-top: 10px; background: #090d16; border: 1px solid #334155; border-radius: 6px; padding: 10px;">
+              <div style="font-weight: 700; color: #38bdf8; margin-bottom: 6px; font-size: 12px;">📄 Mã nguồn thực tế trên AWS (${res.data.function_name}):</div>
+              <pre style="margin: 0; max-height: 250px; overflow-y: auto; color: #a5f3fc; font-family: monospace; font-size: 12px; white-space: pre-wrap;">${String(res.data.main_code).replace(/</g, '&lt;').replace(/>/g, '&gt;')}</pre>
+            </div>
+          `;
+        } else if (res.data && res.data.functions) {
           extra = '<ul style="margin: 8px 0 0 20px;">' + 
             res.data.functions.map(f => `<li><strong>${f.function_name}</strong> (${f.runtime}, RAM ${f.memory_mb}MB, Timeout ${f.timeout_seconds}s)</li>`).join('') + 
             '</ul>';
