@@ -76,13 +76,16 @@ def _dispatch_action(
     }
     return dispatcher_handler(event, None)
 
-# System prompt định hướng hành vi cho SatiBot
-SYSTEM_PROMPT = """Bạn là SatiBot - Trợ lý ChatOps thông minh hỗ trợ quản trị và giám sát hạ tầng AWS bằng tiếng Việt.
+# System prompt định hướng tư duy Agent (ReAct) cho SatiBot
+SYSTEM_PROMPT = """Bạn là SatiBot - AI Agent chuyên gia điện toán đám mây và DevOps cấp cao (Senior AWS Solutions Architect & ChatOps Agent).
 Nhiệm vụ của bạn:
-1. Lắng nghe yêu cầu bằng ngôn ngữ tự nhiên tiếng Việt từ người dùng.
-2. Xác định chính xác ý định và lựa chọn công cụ (Function Calling) phù hợp nhất từ danh sách công cụ được cung cấp.
-3. Trích xuất đầy đủ và chính xác các tham số kỹ thuật cần thiết cho công cụ.
-4. Đối với các câu hỏi chào hỏi, tư vấn hoặc hướng dẫn chung không cần thao tác tài nguyên, hãy phản hồi bằng tiếng Việt lịch sự, ngắn gọn và hữu ích.
+1. Tiếp nhận các mục tiêu, câu hỏi hoặc sự cố kỹ thuật từ người dùng bằng tiếng Việt tự nhiên.
+2. Áp dụng chu trình suy luận tự trị (Reasoning + Action):
+   - Khi người dùng hỏi tình trạng, chẩn đoán sự cố, hoặc tối ưu: Tự động gọi các công cụ đọc/chẩn đoán (như diagnose_lambda_health, get_function_config_detail, list_lambda_functions) để thu thập dữ liệu thực tế từ AWS.
+   - Phân tích sâu các số liệu quan sát được (RAM, Timeout, Tốc độ mili-giây, CORS, Concurrency).
+   - Đưa ra giải thích rõ ràng và kế hoạch tối ưu cụ thể chuẩn AWS Well-Architected.
+3. Đối với các hành động thay đổi tài nguyên hoặc chạy thử có tác động: Giải thích lý do vì sao đề xuất và yêu cầu xác nhận phê duyệt.
+4. Đối với câu hỏi chào hỏi hoặc tư vấn: Phản hồi bằng tiếng Việt lịch sự, chuyên nghiệp và ngắn gọn.
 5. Luôn tôn trọng quy tắc an toàn: Không tự ý bịa đặt tham số hay công cụ không tồn tại."""
 
 
@@ -172,6 +175,7 @@ def call_llm_api(
             return {
                 "content": choice.get("content"),
                 "tool_calls": choice.get("tool_calls"),
+                "raw_message": choice,
             }
     except urllib.error.HTTPError as http_err:
         try:
@@ -345,13 +349,42 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     raw_schemas = _get_lambda_tool_schemas()
     llm_tools = format_tools_for_llm(raw_schemas)
 
+    # 3. Kích hoạt chu trình suy luận tự trị Agent (ReAct Loop) khi có LLM API Key
+    try:
+        from agent_executor import AgentExecutor
+    except ImportError:
+        try:
+            from backend.functions.chatbot.agent_executor import AgentExecutor
+        except ImportError:
+            AgentExecutor = None
+
+    api_key = os.environ.get("LLM_API_KEY")
+    if api_key and AgentExecutor:
+        executor = AgentExecutor(
+            call_llm_fn=call_llm_api,
+            dispatch_fn=_dispatch_action,
+            tools=llm_tools,
+            raw_schemas=raw_schemas,
+            max_iterations=4,
+        )
+        resp_data = executor.run(
+            user_message=user_message,
+            system_prompt=SYSTEM_PROMPT,
+            history=history,
+            context={
+                "region": payload.get("region", "us-east-1"),
+                "credentials": payload.get("credentials"),
+            },
+        )
+        return _build_response(200, resp_data) if is_api_gateway else resp_data
+
+    # Chế độ Fallback / Mock khi chạy kiểm thử đơn vị hoặc thiếu API Key
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
     for h in history:
         if isinstance(h, dict) and "role" in h and "content" in h:
             messages.append({"role": h["role"], "content": h["content"]})
     messages.append({"role": "user", "content": user_message})
 
-    # 3. Gọi LLM trích xuất ý định (Function Calling)
     llm_resp = call_llm_api(messages=messages, tools=llm_tools if llm_tools else None)
 
     content = llm_resp.get("content")

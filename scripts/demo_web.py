@@ -16,11 +16,24 @@ for p in (PROJECT_ROOT, DISPATCHER_PATH):
     if p not in sys.path:
         sys.path.insert(0, p)
 
+# Tự động nạp cấu hình từ .env nếu chưa có
+env_file = os.path.join(PROJECT_ROOT, ".env")
+if os.path.exists(env_file):
+    with open(env_file, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, v = line.split("=", 1)
+                k = k.strip()
+                v = v.strip().strip("'\"")
+                if k and k not in os.environ:
+                    os.environ[k] = v
+
 from backend.functions.chatbot.index import lambda_handler
 
 PORT = 8080
 
-HTML_PAGE = """<!DOCTYPE html>
+HTML_PAGE = r"""<!DOCTYPE html>
 <html lang="vi">
 <head>
   <meta charset="UTF-8">
@@ -130,6 +143,21 @@ HTML_PAGE = """<!DOCTYPE html>
     }
     .quick-chip:hover { background: #334155; }
     pre { background: #0b0f19; padding: 8px; border-radius: 6px; font-size: 12px; overflow-x: auto; margin-top: 6px; }
+    .agent-steps {
+      background: #090e17; border-left: 3px solid #6366f1; border-radius: 8px;
+      padding: 12px 16px; margin-bottom: 12px; font-size: 13px;
+    }
+    .agent-step-item {
+      margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px dashed #1e293b; line-height: 1.5;
+    }
+    .agent-step-item:last-child { margin-bottom: 0; padding-bottom: 0; border-bottom: none; }
+    .agent-tag {
+      display: inline-block; padding: 2px 7px; border-radius: 4px; font-size: 11px;
+      font-weight: 700; text-transform: uppercase; margin-right: 6px;
+    }
+    .tag-thought { background: #312e81; color: #c7d2fe; }
+    .tag-action { background: #065f46; color: #a7f3d0; }
+    .tag-obs { background: #713f12; color: #fde047; }
   </style>
 </head>
 <body>
@@ -149,9 +177,12 @@ HTML_PAGE = """<!DOCTYPE html>
     </div>
 
     <div class="quick-prompts">
-      <div class="quick-chip" onclick="fillInput('Liệt kê danh sách các hàm Lambda trong tài khoản')">📋 Liệt kê hàm Lambda</div>
-      <div class="quick-chip" onclick="fillInput('Chạy thử hàm test-lambda với giá 100 thuế 0.1')">⚡ Chạy thử test-lambda</div>
-      <div class="quick-chip" onclick="fillInput('Tăng RAM hàm test-lambda lên 512 MB và timeout 30s')">⚙️ Tăng RAM lên 512MB</div>
+      <div class="quick-chip" onclick="fillInput('Chẩn đoán sức khỏe và rủi ro các hàm Lambda trong tài khoản giúp tôi')">🩺 Chẩn đoán sức khỏe (Health Check)</div>
+      <div class="quick-chip" onclick="fillInput('Hàm test-lambda dạo này chạy chậm, hãy kiểm tra và đề xuất tối ưu giúp tôi')">⚡ Kiểm tra & Tối ưu test-lambda</div>
+      <div class="quick-chip" onclick="fillInput('Liệt kê danh sách các hàm Lambda trong tài khoản')">📋 Liệt kê hàm</div>
+      <div class="quick-chip" onclick="fillInput('Tạo đường dẫn Function URL công khai cho hàm test-lambda cho phép truy cập từ https://satibot.com')">🌐 Tạo Function URL</div>
+      <div class="quick-chip" onclick="fillInput('Khóa khẩn cấp hàm test-lambda để chống quá tải')">🛑 Khóa khẩn cấp</div>
+      <div class="quick-chip" onclick="fillInput('Mở khóa khẩn cấp cho hàm test-lambda hoạt động trở lại')">🔓 Mở khóa</div>
     </div>
 
     <div class="chat-messages" id="messages">
@@ -164,14 +195,23 @@ HTML_PAGE = """<!DOCTYPE html>
     </div>
 
     <div class="chat-input-area">
-      <input type="text" id="userInput" class="chat-input" placeholder="Nhập yêu cầu bằng tiếng Việt (vd: Kiểm tra hàm Lambda, chạy thử hàm...)" onkeypress="if(event.key==='Enter') sendMessage()">
-      <button class="send-btn" onclick="sendMessage()">Gửi</button>
+      <input type="text" id="userInput" class="chat-input" placeholder="Nhập yêu cầu bằng tiếng Việt (vd: Kiểm tra hàm Lambda, chạy thử hàm...)" onkeydown="handleKeyDown(event)">
+      <button class="send-btn" id="sendBtn" onclick="sendMessage()">Gửi</button>
     </div>
   </div>
 
   <script>
     const messagesDiv = document.getElementById('messages');
     const input = document.getElementById('userInput');
+    const sendBtn = document.getElementById('sendBtn');
+    let conversationHistory = [];
+
+    function handleKeyDown(event) {
+      if (event.key === 'Enter' && !event.isComposing && !event.shiftKey) {
+        event.preventDefault();
+        sendMessage();
+      }
+    }
 
     function fillInput(text) {
       input.value = text;
@@ -190,6 +230,9 @@ HTML_PAGE = """<!DOCTYPE html>
       const text = input.value.trim();
       if (!text) return;
       input.value = '';
+      sendBtn.disabled = true;
+      sendBtn.style.opacity = '0.6';
+      sendBtn.innerText = 'Đang xử lý...';
       addMessage('user', text);
 
       // Loading bubble
@@ -205,28 +248,95 @@ HTML_PAGE = """<!DOCTYPE html>
         const resp = await fetch('/api/chat', {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({ message: text })
+          body: JSON.stringify({ message: text, history: conversationHistory })
         });
+        if (!resp.ok) {
+          throw new Error(`HTTP ${resp.status} - ${resp.statusText}`);
+        }
         const res = await resp.json();
-        document.getElementById(loadingId).remove();
+        const loadElem = document.getElementById(loadingId);
+        if (loadElem) loadElem.remove();
         renderBotResponse(res);
+
+        // Lưu ngữ cảnh hội thoại
+        conversationHistory.push({ role: 'user', content: text });
+        if (res.message) {
+          conversationHistory.push({ role: 'assistant', content: res.message });
+        }
+        if (conversationHistory.length > 10) {
+          conversationHistory = conversationHistory.slice(-10);
+        }
       } catch (err) {
-        document.getElementById(loadingId).remove();
-        addMessage('bot', '❌ Lỗi kết nối: ' + err.message);
+        const loadElem = document.getElementById(loadingId);
+        if (loadElem) loadElem.remove();
+        addMessage('bot', `❌ Lỗi kết nối (Cổng ${window.location.port || '8080'}): ${err.message}. Hãy kiểm tra xem server demo có đang chạy trên terminal không.`);
+      } finally {
+        sendBtn.disabled = false;
+        sendBtn.style.opacity = '1';
+        sendBtn.innerText = 'Gửi';
+        input.focus();
       }
     }
 
     let currentPending = null;
 
+    function formatInline(str) {
+      return str
+        .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+        .replace(/\*(.*?)\*/g, '<em>$1</em>')
+        .replace(/`(.*?)`/g, '<code style="background: #1e293b; padding: 2px 6px; border-radius: 4px; color: #f472b6;">$1</code>');
+    }
+
+    function formatMarkdown(text) {
+      if (!text) return '';
+      const lines = String(text).split(/\r?\n/);
+      const htmlLines = [];
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        if (line.startsWith('### ')) {
+          htmlLines.push('<h4 style="margin: 12px 0 6px 0; color: #38bdf8; font-size: 15px;">' + formatInline(line.slice(4)) + '</h4>');
+        } else if (line.startsWith('#### ')) {
+          htmlLines.push('<h5 style="margin: 10px 0 4px 0; color: #818cf8; font-size: 13.5px;">' + formatInline(line.slice(5)) + '</h5>');
+        } else if (line.startsWith('- ') || line.startsWith('* ')) {
+          htmlLines.push('<div style="margin-left: 14px;">• ' + formatInline(line.slice(2)) + '</div>');
+        } else if (line.trim() === '---') {
+          htmlLines.push('<hr style="border: 0; border-top: 1px solid #334155; margin: 10px 0;">');
+        } else if (line.trim() === '') {
+          htmlLines.push('<div style="height: 8px;"></div>');
+        } else {
+          htmlLines.push('<div>' + formatInline(line) + '</div>');
+        }
+      }
+      return htmlLines.join('');
+    }
+
     function renderBotResponse(res) {
+      let stepsHtml = '';
+      if (res.steps && res.steps.length > 0) {
+        stepsHtml = `
+          <div class="agent-steps">
+            <div style="font-weight: 700; color: #a5b4fc; margin-bottom: 8px;">🧠 Chu trình suy luận của Agent (ReAct Loop):</div>
+            ${res.steps.map(s => `
+              <div class="agent-step-item">
+                <div style="margin-bottom: 3px;"><span class="agent-tag tag-thought">Thought</span>${s.thought}</div>
+                <div style="margin-bottom: 3px;"><span class="agent-tag tag-action">Action</span><code>${s.action}</code> <span style="color:#94a3b8; font-size:11px;">${JSON.stringify(s.parameters || {})}</span></div>
+                <div><span class="agent-tag tag-obs">Observation</span><em style="color:#fde047;">${s.observation}</em></div>
+              </div>
+            `).join('')}
+          </div>
+        `;
+      }
+
       if (res.status === 'CONFIRMATION_REQUIRED') {
         currentPending = {
           tool_name: res.tool_name,
           parameters: res.parameters
         };
         const paramsStr = JSON.stringify(res.parameters, null, 2);
+        const msgFormatted = formatMarkdown(res.message);
         const html = `
-          <div>${res.message}</div>
+          ${stepsHtml}
+          <div>${msgFormatted}</div>
           <div class="action-card">
             <strong>⚠️ Thao tác yêu cầu xác nhận:</strong> <code>${res.tool_name}</code>
             <pre>${paramsStr}</pre>
@@ -246,9 +356,11 @@ HTML_PAGE = """<!DOCTYPE html>
         } else if (res.data && res.data.response_payload) {
           extra = '<pre>' + JSON.stringify(res.data.response_payload, null, 2) + '</pre>';
         }
-        addMessage('bot', `<div>✅ <strong>${res.message}</strong>${extra}</div>`);
+        const isSuccess = res.status === 'SUCCESS';
+        const icon = isSuccess ? '✅' : '❌';
+        addMessage('bot', `<div>${stepsHtml}${icon} <strong>${formatMarkdown(res.message)}</strong>${extra}</div>`);
       } else {
-        addMessage('bot', res.message || JSON.stringify(res));
+        addMessage('bot', `<div>${stepsHtml}${formatMarkdown(res.message || JSON.stringify(res))}</div>`);
       }
     }
 

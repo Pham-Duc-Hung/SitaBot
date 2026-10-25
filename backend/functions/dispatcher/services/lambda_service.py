@@ -119,6 +119,7 @@ class LambdaService:
                     "create_public_function_url": "lambda:CreateFunctionUrlConfig",
                     "delete_function_url": "lambda:DeleteFunctionUrlConfig",
                     "set_emergency_kill_switch": "lambda:PutFunctionConcurrency",
+                    "diagnose_lambda_health": "lambda:ListFunctions",
                 }
                 required_perm = action_permission_map.get(action, f"lambda:{action}")
                 msg = (
@@ -531,18 +532,128 @@ class LambdaService:
                 )
                 data = {"function_name": function_name, "is_paused": True, "reserved_concurrency": 0}
             else:
-                if restore_concurrency and restore_concurrency > 0:
-                    self.client.put_function_concurrency(
-                        FunctionName=function_name,
-                        ReservedConcurrentExecutions=restore_concurrency,
-                    )
-                    data = {"function_name": function_name, "is_paused": False, "reserved_concurrency": restore_concurrency}
-                else:
-                    self.client.delete_function_concurrency(FunctionName=function_name)
-                    data = {"function_name": function_name, "is_paused": False, "reserved_concurrency": "unreserved"}
+                # Mở khóa hoạt động
+                try:
+                    if restore_concurrency and restore_concurrency > 0:
+                        self.client.put_function_concurrency(
+                            FunctionName=function_name,
+                            ReservedConcurrentExecutions=restore_concurrency,
+                        )
+                        data = {"function_name": function_name, "is_paused": False, "reserved_concurrency": restore_concurrency}
+                    else:
+                        self.client.delete_function_concurrency(FunctionName=function_name)
+                        data = {"function_name": function_name, "is_paused": False, "reserved_concurrency": "unreserved"}
+                except ClientError as ce:
+                    # Nếu hạn mức concurrency của tài khoản không đủ, tự động xóa giới hạn để mở khóa bình thường
+                    if ce.response.get("Error", {}).get("Code") == "InvalidParameterValueException":
+                        self.client.delete_function_concurrency(FunctionName=function_name)
+                        data = {"function_name": function_name, "is_paused": False, "reserved_concurrency": "unreserved"}
+                    else:
+                        raise ce
 
-                msg = f"ĐÃ MỞ KHÓA HOẠT ĐỘNG: Hàm '{function_name}' đã được khôi phục trạng thái nhận request."
+                msg = f"ĐÃ MỞ KHÓA HOẠT ĐỘNG: Hàm '{function_name}' đã được khôi phục trạng thái nhận request bình thường."
 
+            return self._format_response("SUCCESS", action, msg, data=data)
+        except Exception as exc:
+            return self._handle_boto_error(action, exc)
+
+    def diagnose_lambda_health(self) -> Dict[str, Any]:
+        """Kịch bản chẩn đoán: Tự động rà soát toàn bộ hàm, phân tích rủi ro cấu hình & bảo mật."""
+        action = "diagnose_lambda_health"
+        try:
+            list_res = self.list_lambda_functions(max_items=100)
+            if list_res.get("status") != "SUCCESS":
+                return list_res
+
+            functions = list_res.get("data", {}).get("functions", [])
+            diagnostics = []
+            health_score = 100
+            total_warnings = 0
+            total_critical = 0
+
+            for fn in functions:
+                name = fn.get("function_name")
+                ram = fn.get("memory_mb", 128)
+                timeout = fn.get("timeout_seconds", 3)
+                issues = []
+
+                # 1. Đánh giá RAM
+                if ram < 256:
+                    issues.append({
+                        "level": "WARNING",
+                        "field": "memory_mb",
+                        "message": f"Dung lượng RAM {ram}MB ở mức tối thiểu. CPU ảo bị bóp nghẽn, nguy cơ chậm/sập khi tải cao.",
+                        "recommendation": "Khuyến nghị tăng RAM lên tối thiểu 256MB hoặc 512MB để mở thêm vCPU."
+                    })
+                    health_score -= 10
+                    total_warnings += 1
+
+                # 2. Đánh giá Timeout
+                if timeout <= 3:
+                    issues.append({
+                        "level": "WARNING",
+                        "field": "timeout_seconds",
+                        "message": f"Timeout {timeout}s là giá trị mặc định rất ngắn. Rất dễ gặp lỗi timeout khi mạng chập chờn hoặc cold start.",
+                        "recommendation": "Khuyến nghị tăng Timeout lên ít nhất 15s - 30s."
+                    })
+                    health_score -= 10
+                    total_warnings += 1
+
+                # 3. Kiểm tra Function URL nếu có
+                try:
+                    url_cfg = self.client.get_function_url_config(FunctionName=name)
+                    cors = url_cfg.get("Cors", {})
+                    origins = cors.get("AllowOrigins", [])
+                    if "*" in origins:
+                        issues.append({
+                            "level": "CRITICAL",
+                            "field": "function_url",
+                            "message": "Function URL đang mở công khai với CORS wildcard '*'. Bất kỳ trang web nào cũng có thể gọi API.",
+                            "recommendation": "Cần giới hạn danh sách AllowedOrigins cụ thể thay vì '*'."
+                        })
+                        health_score -= 20
+                        total_critical += 1
+                except Exception:
+                    pass
+
+                # 4. Kiểm tra Concurrency
+                try:
+                    conc_cfg = self.client.get_function_concurrency(FunctionName=name)
+                    reserved = conc_cfg.get("ReservedConcurrentExecutions")
+                    if reserved == 0:
+                        issues.append({
+                            "level": "CRITICAL",
+                            "field": "concurrency",
+                            "message": "Hàm đang bị KHÓA KHẨN CẤP (concurrency = 0). Hàm không tiếp nhận bất kỳ request nào.",
+                            "recommendation": "Nếu sự cố đã qua, cần mở khóa hàm để khôi phục dịch vụ."
+                        })
+                        health_score -= 25
+                        total_critical += 1
+                except Exception:
+                    pass
+
+                status_fn = "HEALTHY" if not issues else ("CRITICAL" if any(i["level"] == "CRITICAL" for i in issues) else "WARNING")
+                diagnostics.append({
+                    "function_name": name,
+                    "runtime": fn.get("runtime"),
+                    "memory_mb": ram,
+                    "timeout_seconds": timeout,
+                    "status": status_fn,
+                    "issues": issues,
+                })
+
+            health_score = max(0, min(100, health_score))
+            overall_status = "HEALTHY" if health_score >= 85 else ("WARNING" if health_score >= 60 else "CRITICAL")
+            msg = f"Đã hoàn thành chẩn đoán sức khỏe hệ thống ({len(functions)} hàm). Điểm đánh giá: {health_score}/100 [{overall_status}]."
+
+            data = {
+                "total_functions": len(functions),
+                "health_score": health_score,
+                "overall_status": overall_status,
+                "total_warnings": total_warnings,
+                "total_critical": total_critical,
+                "diagnostics": diagnostics,
+            }
             return self._format_response("SUCCESS", action, msg, data=data)
         except Exception as exc:
             return self._handle_boto_error(action, exc)
@@ -652,6 +763,7 @@ class LambdaService:
                 enable_kill_switch=p.get("enable_kill_switch", True),
                 restore_concurrency=p.get("restore_concurrency"),
             ),
+            "diagnose_lambda_health": lambda p: self.diagnose_lambda_health(),
         }
         return dispatch_map[tool_name](parameters)
 
@@ -733,9 +845,18 @@ LAMBDA_TOOL_SCHEMAS = [
             "properties": {
                 "function_name": {"type": "string", "description": "Tên của hàm AWS Lambda cần khóa/mở khóa."},
                 "enable_kill_switch": {"type": "boolean", "description": "True để khóa khẩn cấp, False để mở khóa."},
-                "restore_concurrency": {"type": "integer", "description": "Mức concurrency muốn khôi phục khi mở khóa."},
+                "restore_concurrency": {"type": "integer", "description": "Mức concurrency muốn khôi phục khi mở khóa (Khuyến nghị bỏ trống để mở khóa mặc định không giới hạn)."},
             },
             "required": ["function_name", "enable_kill_switch"],
+        },
+    },
+    {
+        "name": "diagnose_lambda_health",
+        "description": "Tự động rà soát và chẩn đoán toàn diện sức khỏe, hiệu năng, cấu hình RAM/Timeout và rủi ro bảo mật của các hàm AWS Lambda.",
+        "requires_confirmation": False,
+        "parameters": {
+            "type": "object",
+            "properties": {},
         },
     },
 ]
