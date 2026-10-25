@@ -177,10 +177,9 @@ HTML_PAGE = r"""<!DOCTYPE html>
     </div>
 
     <div class="quick-prompts">
-      <div class="quick-chip" onclick="fillInput('Chẩn đoán sức khỏe và rủi ro các hàm Lambda trong tài khoản giúp tôi')">🩺 Chẩn đoán sức khỏe (Health Check)</div>
-      <div class="quick-chip" onclick="fillInput('Tạo cho tôi một hàm Lambda tên order-calculator bằng Python để tính tổng tiền đơn hàng với thuế VAT 10% và phí ship 25000, cấu hình RAM 256MB')">🛠️ Tự động tạo hàm mới (AI Code & Deploy)</div>
-      <div class="quick-chip" onclick="fillInput('Đọc và hiển thị mã nguồn của hàm test-lambda hiện tại trên AWS')">📄 Xem mã nguồn test-lambda</div>
-      <div class="quick-chip" onclick="fillInput('Hàm test-lambda dạo này chạy chậm, hãy kiểm tra và đề xuất tối ưu giúp tôi')">⚡ Kiểm tra & Tối ưu test-lambda</div>
+      <div class="quick-chip" onclick="fillInput('Tạo cho tôi một hàm Lambda tên order-calculator bằng Python để tính tổng tiền đơn hàng với thuế VAT 10% và phí ship 25000, sau đó tự chạy test thử kiểm tra xem kết quả có đúng không và cấp Function URL công khai cho tôi')">🚀 Tạo trọn gói API (Tự code ➔ Tự test ➔ Cấp link HTTPS)</div>
+      <div class="quick-chip" onclick="fillInput('Đọc mã nguồn hàm test-lambda và chạy thử nghiệm xem hàm hoạt động ra sao, giải thích chi tiết cho tôi')">🔍 Tự động điều tra & Chạy thử test-lambda</div>
+      <div class="quick-chip" onclick="fillInput('Chẩn đoán sức khỏe và rủi ro các hàm Lambda trong tài khoản giúp tôi')">🩺 Chẩn đoán sức khỏe hệ thống</div>
       <div class="quick-chip" onclick="fillInput('Liệt kê danh sách các hàm Lambda trong tài khoản')">📋 Liệt kê hàm</div>
       <div class="quick-chip" onclick="fillInput('Tạo đường dẫn Function URL công khai cho hàm test-lambda cho phép truy cập từ https://satibot.com')">🌐 Tạo Function URL</div>
       <div class="quick-chip" onclick="fillInput('Khóa khẩn cấp hàm test-lambda để chống quá tải')">🛑 Khóa khẩn cấp</div>
@@ -332,7 +331,8 @@ HTML_PAGE = r"""<!DOCTYPE html>
       if (res.status === 'CONFIRMATION_REQUIRED') {
         currentPending = {
           tool_name: res.tool_name,
-          parameters: res.parameters
+          parameters: res.parameters,
+          agent_state: res.agent_state
         };
         let codePreview = '';
         if (res.parameters && res.parameters.code_content) {
@@ -389,9 +389,18 @@ HTML_PAGE = r"""<!DOCTYPE html>
 
     async function executeCurrentPending() {
       if (!currentPending) return;
-      const { tool_name, parameters } = currentPending;
+      const { tool_name, parameters, agent_state } = currentPending;
       currentPending = null;
       addMessage('user', '✅ Tôi xác nhận thực hiện thao tác.');
+
+      const loadingId = 'loading-' + Date.now();
+      const loadingRow = document.createElement('div');
+      loadingRow.id = loadingId;
+      loadingRow.className = 'message-row bot';
+      loadingRow.innerHTML = '<div class="bubble">⏳ <em>SatiBot đang thực thi trên AWS và tiếp tục chu trình tự động hóa...</em></div>';
+      messagesDiv.appendChild(loadingRow);
+      messagesDiv.scrollTop = messagesDiv.scrollHeight;
+
       try {
         const resp = await fetch('/api/chat', {
           method: 'POST',
@@ -400,12 +409,17 @@ HTML_PAGE = r"""<!DOCTYPE html>
             confirmed: true,
             service: 'lambda',
             tool_name: tool_name,
-            parameters: parameters
+            parameters: parameters,
+            agent_state: agent_state
           })
         });
         const res = await resp.json();
+        const loadElem = document.getElementById(loadingId);
+        if (loadElem) loadElem.remove();
         renderBotResponse(res);
       } catch (err) {
+        const loadElem = document.getElementById(loadingId);
+        if (loadElem) loadElem.remove();
         addMessage('bot', '❌ Lỗi khi thực thi: ' + err.message);
       }
     }

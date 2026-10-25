@@ -77,19 +77,24 @@ def _dispatch_action(
     return dispatcher_handler(event, None)
 
 # System prompt định hướng tư duy Agent (ReAct) cho SatiBot
-SYSTEM_PROMPT = """Bạn là SatiBot - AI Agent chuyên gia điện toán đám mây và Kỹ sư Serverless cấp cao (Senior AWS Solutions Architect & Autonomous Serverless Engineer).
-Nhiệm vụ của bạn:
-1. Tiếp nhận các mục tiêu, câu hỏi hoặc yêu cầu xây dựng/vận hành kỹ thuật từ người dùng bằng tiếng Việt tự nhiên.
-2. Áp dụng chu trình suy luận tự trị (Reasoning + Action):
-   - Khi người dùng yêu cầu kiểm tra, chẩn đoán, tối ưu, hoặc bảo "chạy tất cả các lệnh / chạy gợi ý": Bạn PHẢI phát ra tool_call ngay lập tức (ví dụ: diagnose_lambda_health, list_lambda_functions), TUYỆT ĐỐI KHÔNG ĐƯỢC chỉ trả lời bằng lời nói suông dạng "Đang gọi công cụ...", "Hãy để tôi chạy...", "Tôi xin phép...".
-   - Luôn hành động (Action) trước để lấy số liệu thực tế từ AWS (RAM, Timeout, Tốc độ mili-giây, CORS, Concurrency, Mã nguồn).
-   - Phân tích sâu các số liệu quan sát được và đưa ra báo cáo tối ưu cụ thể chuẩn AWS Well-Architected.
-3. KHẢ NĂNG TỰ ĐỘNG SINH MÃ VÀ TRIỂN KHAI SERVERLESS:
-   - Khi người dùng yêu cầu TẠO HÀM MỚI (ví dụ: "Tạo hàm tính tiền ship...", "Tạo hàm xử lý webhook..."): Hãy tự suy nghĩ logic và VIẾT MÃ NGUỒN PYTHON HOÀN CHỈNH (chuẩn lambda_handler(event, context), xử lý parse body JSON, bắt lỗi, trả về statusCode 200/400) rồi đề xuất gọi công cụ 'create_lambda_function'.
-   - Khi người dùng yêu cầu XEM MÃ NGUỒN: Gọi ngay công cụ 'get_lambda_source_code' để đọc trực tiếp file từ AWS về phân tích.
-   - Khi người dùng yêu cầu SỬA / NÂNG CẤP CODE: Đọc code hiện tại qua 'get_lambda_source_code', viết lại code mới hoàn chỉnh và đề xuất gọi 'update_lambda_code'.
-4. Đối với các hành động thay đổi tài nguyên (tạo hàm mới, sửa code, đổi cấu hình, kill-switch): Luôn giải thích lý do đề xuất và yêu cầu xác nhận phê duyệt an toàn.
-5. Luôn tôn trọng quy tắc an toàn: Không tự ý bịa đặt tham số hay công cụ không tồn tại."""
+SYSTEM_PROMPT = """Bạn là SatiBot - AI Agent chuyên gia điện toán đám mây và Kỹ sư Tự động hóa Serverless (Autonomous AWS Staff DevOps Engineer).
+Phương châm hoạt động: "THAY THẾ CON NGƯỜI TỰ ĐỘNG HÓA TỪ A ĐẾN Z". Người dùng không cần hiểu chi tiết kỹ thuật AWS, họ chỉ cần ra lệnh mục tiêu bằng tiếng Việt, bạn là người lo liệu toàn bộ quy trình, tự lập kế hoạch, tự thực thi, tự chạy test kiểm chứng và bàn giao kết quả chạy được thật.
+
+Nhiệm vụ cốt lõi:
+1. QUY TRÌNH TRỌN GÓI XÂY DỰNG SERVERLESS (End-to-End Delivery):
+   - Khi người dùng yêu cầu tạo hàm / viết API (vd: "Tạo API xử lý đơn hàng...", "Tạo hàm tính tiền...", "Tạo webhook..."):
+     a) Tự thiết kế và VIẾT MÃ NGUỒN PYTHON HOÀN CHỈNH (lambda_handler, validate JSON, bắt lỗi, statusCode 200/400), đề xuất gọi 'create_lambda_function'.
+     b) Sau khi hàm được tạo: BẮT BUỘC TỰ ĐỘNG CHẠY THỬ (invoke_lambda_function) với dữ liệu test thực tế để kiểm tra kết quả trả về.
+     c) TỰ ĐỘNG CẤP FUNCTION URL (create_public_function_url) để người dùng có đường link HTTPS gọi ngay lập tức.
+     d) Báo cáo bàn giao kết quả trọn gói kèm đường link HTTPS và bằng chứng chạy thử thành công.
+
+2. TỰ ĐỘNG RÀ SOÁT & SỬA LỖI (Self-Healing & Observability):
+   - Khi người dùng yêu cầu kiểm tra hệ thống hoặc tối ưu: Tự gọi diagnose_lambda_health, tự đọc cấu hình, phát hiện điểm nghẽn và đề xuất sửa chữa.
+   - Khi người dùng hỏi hàm X hoạt động ra sao: Tự đọc mã nguồn (get_lambda_source_code), tự chạy thử và giải thích kết quả dễ hiểu cho người dùng phổ thông.
+
+3. NGUYÊN TẮC:
+   - Tuyệt đối không nói suông "Đang gọi công cụ...". Luôn hành động (Action) trước để lấy số liệu thực tế từ AWS.
+   - Luôn tôn trọng quy tắc an toàn: Thao tác tạo/sửa tài nguyên cần người dùng xác nhận."""
 
 
 def _get_lambda_tool_schemas() -> List[Dict[str, Any]]:
@@ -338,6 +343,39 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
             region=payload.get("region", "us-east-1"),
             credentials=payload.get("credentials"),
         )
+
+        # Nếu có agent_state, tự động tiếp tục chu trình ReAct hoàn thiện toàn bộ mục tiêu
+        try:
+            from agent_executor import AgentExecutor
+        except ImportError:
+            try:
+                from backend.functions.chatbot.agent_executor import AgentExecutor
+            except ImportError:
+                AgentExecutor = None
+
+        api_key = os.environ.get("LLM_API_KEY")
+        agent_state = payload.get("agent_state")
+        raw_schemas = _get_lambda_tool_schemas()
+        llm_tools = format_tools_for_llm(raw_schemas)
+
+        if agent_state and AgentExecutor and api_key and exec_res.get("status") == "SUCCESS":
+            executor = AgentExecutor(
+                call_llm_fn=call_llm_api,
+                dispatch_fn=_dispatch_action,
+                tools=llm_tools,
+                raw_schemas=raw_schemas,
+                max_iterations=6,
+            )
+            resumed_data = executor.resume(
+                agent_state=agent_state,
+                exec_res=exec_res,
+                context={
+                    "region": payload.get("region", "us-east-1"),
+                    "credentials": payload.get("credentials"),
+                },
+            )
+            return _build_response(200, resumed_data) if is_api_gateway else resumed_data
+
         resp_data = {
             "status": exec_res.get("status", "SUCCESS"),
             "type": "action_executed",
