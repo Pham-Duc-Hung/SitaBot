@@ -36,7 +36,7 @@ class TestDispatcherLambda(unittest.TestCase):
         self.assertEqual(res["error_code"], "UnsupportedService")
 
     def test_direct_invoke_service_under_development(self):
-        event = {"service": "ec2", "action": "describe_instances"}
+        event = {"service": "iam", "action": "describe_instances"}
         res = lambda_handler(event, None)
         self.assertEqual(res["status"], "NOT_IMPLEMENTED")
         self.assertEqual(res["error_code"], "ServiceUnderDevelopment")

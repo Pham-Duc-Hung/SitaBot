@@ -186,7 +186,7 @@ def call_llm_api(
     api_key: Optional[str] = None,
     api_url: Optional[str] = None,
     model: Optional[str] = None,
-    timeout: int = 60,
+    timeout: int = 30,
 ) -> Dict[str, Any]:
     """
     Gọi API mô hình ngôn ngữ lớn (OpenAI-compatible / Gemini / REST endpoint).
@@ -195,9 +195,9 @@ def call_llm_api(
     """
     api_key = api_key or os.environ.get("LLM_API_KEY")
     api_url = api_url or os.environ.get("LLM_API_URL", "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions")
-    model = model or os.environ.get("LLM_MODEL", "gemini-3.5-flash-lite")
-    if model in ("gemini-1.5-flash", "gemini-2.5-flash", "gemini-3.5-flash", "gpt-4o-mini"):
-        model = "gemini-3.5-flash-lite"
+    model = model or os.environ.get("LLM_MODEL", "gemini-2.5-flash")
+    if model in ("gemini-1.5-flash", "gemini-3.5-flash-lite", "gemini-3.5-flash", "gpt-4o-mini"):
+        model = "gemini-2.5-flash"
 
     # Nếu không có API Key cấu hình, dùng bộ phân tích mẫu cho môi trường test
     if not api_key:
