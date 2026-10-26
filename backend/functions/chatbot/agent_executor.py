@@ -1,6 +1,6 @@
 """
 Author: Trịnh Thiên Quang
-Bộ điều phối chu trình suy luận tự trị (ReAct Agent Loop) cho trợ lý SatiBot.
+Bộ điều phối chu trình ReAct Agent Loop cho trợ lý SatiBot.
 """
 
 import ast
@@ -12,6 +12,11 @@ from typing import Any, Callable, Dict, List, Optional
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
+
+try:
+    from backend.shared.runtime import get_default_lambda_role_arn
+except ImportError:
+    from runtime import get_default_lambda_role_arn
 
 
 class AgentExecutor:
@@ -74,11 +79,9 @@ class AgentExecutor:
         properties = schema.get("properties", {})
 
         if tool_name == "create_lambda_function" and "role_arn" in properties and not parameters.get("role_arn"):
-            import os
-            parameters["role_arn"] = os.environ.get(
-                "DEFAULT_LAMBDA_ROLE_ARN",
-                "arn:aws:iam::640737808081:role/service-role/test-lambda-role-my87f8eu",
-            )
+            configured_role = get_default_lambda_role_arn()
+            if configured_role:
+                parameters["role_arn"] = configured_role
 
         if tool_name == "create_public_function_url":
             origins = parameters.get("cors_allow_origins")
@@ -129,6 +132,7 @@ class AgentExecutor:
             "tiếp đi", "chạy đi", "tạo đi", "deploy đi", "xong chưa", "nút đâu", "xác nhận",
             "đâu rồi", "thế nào rồi", "tiếp", "được chưa", "ở đâu", "bấm đâu", "bấm nút",
             "confirm đâu", "nút confirm", "sao không thấy", "chưa thấy", "đưa tôi code",
+            "lại đi", "làm lại", "làm lại đi", "thử lại", "thực hiện lại", "retry", "xóa lại",
         )
         if any(f in normalized for f in follow_ups):
             return True
@@ -291,11 +295,9 @@ class AgentExecutor:
         }
         create_props = self._schemas_by_name.get("create_lambda_function", {}).get("parameters", {}).get("properties", {})
         if "role_arn" in create_props:
-            import os
-            parameters["role_arn"] = os.environ.get(
-                "DEFAULT_LAMBDA_ROLE_ARN",
-                "arn:aws:iam::640737808081:role/service-role/test-lambda-role-my87f8eu",
-            )
+            configured_role = get_default_lambda_role_arn()
+            if configured_role:
+                parameters["role_arn"] = configured_role
         return {
             "id": f"recovered_{uuid.uuid4().hex[:10]}",
             "type": "function",
@@ -322,7 +324,7 @@ class AgentExecutor:
         history: Optional[List[Dict[str, Any]]] = None,
         context: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        """Bắt đầu chu trình suy luận tự trị đa bước từ mục tiêu của người dùng."""
+        """Bắt đầu chu trình ReAct Agent đa bước từ mục tiêu của người dùng."""
         context = context or {}
         messages: List[Dict[str, Any]] = [{"role": "system", "content": system_prompt}]
         for h in (history or []):
@@ -414,7 +416,7 @@ class AgentExecutor:
         if pending_result is not None:
             return pending_result
 
-        # Tiếp tục vòng lặp ReAct tự trị
+        # Tiếp tục vòng lặp ReAct Agent
         return self._execute_loop(
             messages=messages,
             steps_log=steps_log,
@@ -561,20 +563,14 @@ class AgentExecutor:
                             return result
 
                     if iteration == start_iteration:
-                        if hallucinated_confirm:
-                            retry_prompt = (
-                                "LỖI: Bạn vừa phản hồi bảo người dùng 'bấm nút xác nhận' hoặc mô tả kết quả, "
-                                "nhưng bạn CHƯA HỀ phát ra tool_call! Giao diện hệ thống CHỈ hiển thị nút Xác Nhận (Approve) "
-                                "khi bạn thực sự phát lệnh gọi công cụ 'create_lambda_function'. Hiện tại trên màn hình người dùng KHÔNG CÓ NÚT NÀO ĐỂ BẤM! "
-                                "Hãy phát lệnh gọi tool 'create_lambda_function' NGAY BÂY GIỜ kèm toàn bộ code Python hoàn chỉnh!"
-                            )
-                        else:
-                            retry_prompt = (
-                                "Tiếp tục run này bằng hành động thực tế. Bạn vừa mô tả hành động hoặc in mã nguồn ra chat nhưng chưa gọi công cụ. "
-                                "Đây là một agent run, không phải chat tư vấn. "
-                                "Hãy gọi ngay công cụ AWS phù hợp. Nếu mục tiêu chưa đủ cụ thể để chọn công cụ, chỉ hỏi đúng một câu "
-                                "làm rõ ngắn gọn; tuyệt đối không nói đang làm, đã làm, sẽ hiện nút xác nhận hoặc đã hoàn tất."
-                            )
+                        available_names = sorted(self._schemas_by_name)
+                        retry_prompt = (
+                            "Bạn vừa mô tả một hành động nhưng chưa phát structured tool_call, vì vậy giao diện không thể tạo nút phê duyệt. "
+                            f"Hãy chọn đúng công cụ phù hợp với mục tiêu ban đầu trong danh sách: {', '.join(available_names)}. "
+                            "Nếu có công cụ phù hợp, bắt buộc gọi công cụ đó ngay với tham số đầy đủ. "
+                            "Nếu không có công cụ phù hợp hoặc còn thiếu đúng một thông tin bắt buộc, hãy nói thẳng điều đó hoặc hỏi đúng một câu ngắn. "
+                            "Không được yêu cầu bấm nút, không nói đã thực hiện và không tự nhận thiếu thẩm quyền khi chưa thử công cụ."
+                        )
                         messages.append({
                             "role": "user",
                             "content": retry_prompt,
@@ -584,7 +580,10 @@ class AgentExecutor:
                     return {
                         "status": "NEEDS_INPUT",
                         "type": "agent_needs_input",
-                        "message": content or "Mục tiêu chưa đủ cụ thể để chọn công cụ AWS. Hãy nêu tài nguyên hoặc hành động cần thực hiện.",
+                        "message": (
+                            "Mình chưa thể tạo một hành động AWS hợp lệ từ yêu cầu này nên chưa có nút xác nhận và chưa có thay đổi nào được thực hiện. "
+                            "Hãy nêu rõ tên tài nguyên cần thao tác."
+                        ),
                         "steps": [],
                         "data": {"reason": "no_tool_selected"},
                     }

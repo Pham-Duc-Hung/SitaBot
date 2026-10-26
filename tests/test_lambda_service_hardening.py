@@ -5,7 +5,9 @@ Kiểm thử ràng buộc kiểu dữ liệu, tham số và CORS cho LambdaServi
 import os
 import sys
 import unittest
+import io
 from unittest.mock import MagicMock, Mock, patch
+from botocore.exceptions import ClientError
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 SERVICE_DIR = os.path.abspath(os.path.join(CURRENT_DIR, "..", "backend", "functions", "dispatcher", "services"))
@@ -55,6 +57,53 @@ class LambdaServiceHardeningTests(unittest.TestCase):
         result = self.service.set_emergency_kill_switch("demo", enable_kill_switch="false")
         self.assertEqual(result["status"], "ERROR")
         self.service.client.put_function_concurrency.assert_not_called()
+
+    def test_create_rejects_non_python_runtime_before_aws_call(self):
+        result = self.service.create_lambda_function(
+            "demo", "exports.handler = async () => ({})", runtime="nodejs22.x",
+            role_arn="arn:aws:iam::123456789012:role/demo",
+        )
+        self.assertEqual(result["error_code"], "UnsupportedRuntime")
+        self.service.client.create_function.assert_not_called()
+
+    def test_create_rejects_missing_handler_before_aws_call(self):
+        result = self.service.create_lambda_function(
+            "demo", "def main(event, context):\n    return {}",
+            role_arn="arn:aws:iam::123456789012:role/demo",
+        )
+        self.assertEqual(result["error_code"], "HandlerNotFound")
+        self.service.client.create_function.assert_not_called()
+
+    def test_create_rejects_unbundled_dependency(self):
+        code = "import requests\n\ndef lambda_handler(event, context):\n    return {}"
+        result = self.service.create_lambda_function(
+            "demo", code, role_arn="arn:aws:iam::123456789012:role/demo",
+        )
+        self.assertEqual(result["error_code"], "UnsupportedDependency")
+        self.service.client.create_function.assert_not_called()
+
+    def test_create_rejects_dynamic_execution(self):
+        code = "def lambda_handler(event, context):\n    return eval(event['code'])"
+        result = self.service.create_lambda_function(
+            "demo", code, role_arn="arn:aws:iam::123456789012:role/demo",
+        )
+        self.assertEqual(result["error_code"], "UnsafePythonCode")
+        self.service.client.create_function.assert_not_called()
+
+    def test_invoke_rejects_non_standard_nan_json(self):
+        result = self.service.invoke_lambda_function("demo", {"value": float("nan")})
+        self.assertEqual(result["error_code"], "InvalidPayloadFormat")
+        self.service.client.invoke.assert_not_called()
+
+    def test_invoke_truncates_oversized_response(self):
+        self.service.client.invoke.return_value = {
+            "StatusCode": 200,
+            "Payload": io.BytesIO(b"x" * 1_000_010),
+        }
+        result = self.service.invoke_lambda_function("demo", {})
+        self.assertEqual(result["status"], "SUCCESS")
+        self.assertTrue(result["data"]["response_truncated"])
+        self.assertEqual(len(result["data"]["response_payload"]), 1_000_000)
 
     def test_public_url_requires_explicit_origins(self):
         result = self.service.create_public_function_url("demo")
@@ -228,6 +277,28 @@ class LambdaServiceHardeningTests(unittest.TestCase):
         self.assertEqual(result["status"], "CONFIRMATION_REQUIRED")
         self.service.client.put_function_concurrency.assert_not_called()
         self.service.client.delete_function_concurrency.assert_not_called()
+
+    def test_delete_requires_confirmation(self):
+        result = self.service.execute_tool(
+            "delete_lambda_function", {"function_name": "demo"}, confirmed=False
+        )
+        self.assertEqual(result["status"], "CONFIRMATION_REQUIRED")
+        self.service.client.delete_function.assert_not_called()
+
+    def test_delete_executes_and_verifies_resource_is_gone(self):
+        self.service.client.get_function_configuration.side_effect = [
+            {"FunctionName": "demo", "FunctionArn": "arn:aws:lambda:us-east-1:123:function:demo"},
+            ClientError(
+                {"Error": {"Code": "ResourceNotFoundException", "Message": "gone"}},
+                "GetFunctionConfiguration",
+            ),
+        ]
+        result = self.service.execute_tool(
+            "delete_lambda_function", {"function_name": "demo"}, confirmed=True
+        )
+        self.assertEqual(result["status"], "SUCCESS")
+        self.assertTrue(result["data"]["deletion_verified"])
+        self.service.client.delete_function.assert_called_once_with(FunctionName="demo")
 
 
 if __name__ == "__main__":

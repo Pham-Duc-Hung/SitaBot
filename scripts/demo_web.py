@@ -18,7 +18,7 @@ except ImportError:
     if conda_py.exists() and sys.executable != str(conda_py):
         os.execv(str(conda_py), [str(conda_py)] + sys.argv)
 
-WEB_ROOT = PROJECT_ROOT / "scripts" / "agent_console"
+WEB_ROOT = PROJECT_ROOT / "frontend"
 DISPATCHER_PATH = PROJECT_ROOT / "backend" / "functions" / "dispatcher"
 for path in (str(PROJECT_ROOT), str(DISPATCHER_PATH)):
     if path not in sys.path:

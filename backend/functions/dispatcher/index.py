@@ -7,6 +7,11 @@ import json
 import logging
 from typing import Any, Dict
 
+try:
+    from backend.shared.runtime import get_aws_region, safe_json_for_log
+except ImportError:
+    from runtime import get_aws_region, safe_json_for_log
+
 # Import các service con (hỗ trợ cả chạy cục bộ lẫn đóng gói Lambda)
 try:
     from services import lambda_service
@@ -44,12 +49,37 @@ def _format_result(is_api_gateway: bool, http_status: int, result: Dict[str, Any
     return result
 
 
+def _http_status_for_result(result: Dict[str, Any]) -> int:
+    """Map the shared service contract to a meaningful HTTP status."""
+    if result.get("status") == "NOT_IMPLEMENTED":
+        return 501
+    if result.get("status") == "CONFIRMATION_REQUIRED":
+        return 200
+    if result.get("status") != "ERROR":
+        return 200
+    code = result.get("error_code")
+    if code in {"AccessDenied", "AccessDeniedException", "UnauthorizedOperation"}:
+        return 403
+    if code == "ResourceNotFoundException":
+        return 404
+    if code in {"ResourceConflictException", "PreconditionFailedException"}:
+        return 409
+    if code == "TooManyRequestsException":
+        return 429
+    if code in {
+        "InvalidJSON", "InvalidPayload", "InvalidParameters", "UnsupportedService",
+        "UnsupportedTool", "MissingService", "MissingAction",
+    }:
+        return 400
+    return 500
+
+
 def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     """
     Điểm tiếp nhận chính của Dispatcher Lambda:
     - Hỗ trợ cả direct invocation (từ Step Functions / SQS) lẫn API Gateway Proxy event.
     """
-    logger.info("Dispatcher received event: %s", json.dumps(event, default=str))
+    logger.info("Dispatcher received event: %s", safe_json_for_log(event))
 
     # 1. Trích xuất payload từ event
     payload = event
@@ -84,6 +114,22 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     credentials = payload.get("credentials")
     confirmed = payload.get("confirmed", False)
 
+    if not isinstance(parameters, dict):
+        return _format_result(is_api_gateway, 400, {
+            "status": "ERROR", "message": "Trường 'parameters' phải là JSON object.",
+            "error_code": "InvalidParameters",
+        })
+    if credentials is not None and not isinstance(credentials, dict):
+        return _format_result(is_api_gateway, 400, {
+            "status": "ERROR", "message": "Trường 'credentials' phải là JSON object hoặc null.",
+            "error_code": "InvalidParameters",
+        })
+    if not isinstance(confirmed, bool):
+        return _format_result(is_api_gateway, 400, {
+            "status": "ERROR", "message": "Trường 'confirmed' phải là boolean.",
+            "error_code": "InvalidParameters",
+        })
+
     if not service_name:
         return _format_result(is_api_gateway, 400, {
             "status": "ERROR",
@@ -103,7 +149,7 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         "action": action,
         "parameters": parameters,
         "confirmed": confirmed,
-        "region": payload.get("region", "us-east-1"),
+        "region": get_aws_region(payload.get("region")),
     }
 
     # 3. Phân luồng điều phối đến từng dịch vụ
@@ -140,12 +186,4 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         }
 
     # 4. Trả về kết quả
-    http_status = 200
-    if result.get("status") == "NOT_IMPLEMENTED":
-        http_status = 501
-    elif result.get("status") == "ERROR":
-        http_status = 400 if result.get("error_code") in ("InvalidParameters", "UnsupportedService", "MissingService", "MissingAction") else 500
-    elif result.get("status") == "CONFIRMATION_REQUIRED":
-        http_status = 200  # Vẫn là 200 OK nhưng body báo CONFIRMATION_REQUIRED để FE hỏi người dùng
-
-    return _format_result(is_api_gateway, http_status, result)
+    return _format_result(is_api_gateway, _http_status_for_result(result), result)

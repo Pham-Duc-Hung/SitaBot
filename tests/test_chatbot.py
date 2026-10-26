@@ -15,7 +15,7 @@ PROJECT_ROOT = os.path.abspath(os.path.join(CURRENT_DIR, ".."))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from backend.functions.chatbot.index import lambda_handler, format_tools_for_llm, call_llm_api
+from backend.functions.chatbot.index import lambda_handler, format_tools_for_llm, call_llm_api, SYSTEM_PROMPT
 
 
 class TestChatbotFunctionCalling(unittest.TestCase):
@@ -75,6 +75,30 @@ class TestChatbotFunctionCalling(unittest.TestCase):
         self.assertIn("action_id", res)
 
     @patch("backend.functions.chatbot.index.call_llm_api")
+    def test_delete_lambda_intent_returns_real_confirmation_action(self, mock_llm):
+        mock_llm.return_value = {
+            "content": "Lambda này sẽ bị xóa vĩnh viễn.",
+            "tool_calls": [{
+                "id": "call_delete_1",
+                "type": "function",
+                "function": {
+                    "name": "delete_lambda_function",
+                    "arguments": json.dumps({"function_name": "sati-store-web"}),
+                },
+            }],
+        }
+        event = {"message": "Xóa hộ hàm lambda sati-store-web"}
+        res = lambda_handler(event, None)
+        self.assertEqual(res["status"], "CONFIRMATION_REQUIRED")
+        self.assertEqual(res["type"], "action_confirmation")
+        self.assertEqual(res["tool_name"], "delete_lambda_function")
+        self.assertEqual(res["parameters"]["function_name"], "sati-store-web")
+
+    def test_system_prompt_does_not_require_repeated_self_introduction(self):
+        self.assertIn("Không tự giới thiệu ở đầu mỗi câu trả lời", SYSTEM_PROMPT)
+        self.assertNotIn('Khi giới thiệu bản thân hoặc chào hỏi, luôn xưng:', SYSTEM_PROMPT)
+
+    @patch("backend.functions.chatbot.index.call_llm_api")
     def test_external_llm_function_call_dispatch(self, mock_llm):
         mock_llm.return_value = {
             "content": None,
@@ -110,6 +134,34 @@ class TestChatbotFunctionCalling(unittest.TestCase):
         self.assertEqual(res["status"], "SUCCESS")
         self.assertEqual(res["type"], "action_executed")
         mock_dispatch.assert_called_once()
+
+    @patch("backend.functions.chatbot.index._dispatch_action")
+    def test_recoverable_conflict_returns_clickable_resolution_contract(self, mock_dispatch):
+        mock_dispatch.return_value = {
+            "status": "USER_ACTION_REQUIRED",
+            "message": "Tên Lambda đã được sử dụng. Hãy chọn cách xử lý:",
+            "data": {
+                "resolution_kind": "recoverable_conflict",
+                "resolution_options": [
+                    {"id": "update_existing", "label": "Cập nhật hàm hiện có", "changes_aws": True},
+                    {"id": "cancel", "label": "Hủy thao tác", "changes_aws": False},
+                ],
+            },
+        }
+        event = {
+            "confirmed": True,
+            "service": "lambda",
+            "tool_name": "create_lambda_function",
+            "parameters": {
+                "function_name": "sati-store-web",
+                "code_content": "def lambda_handler(event, context): return {}",
+            },
+        }
+        res = lambda_handler(event, None)
+        self.assertEqual(res["status"], "USER_ACTION_REQUIRED")
+        self.assertEqual(res["type"], "resolution_options")
+        self.assertEqual(res["data"]["resolution_kind"], "recoverable_conflict")
+        self.assertTrue(res["data"]["resolution_options"][0]["changes_aws"])
 
     def test_api_gateway_event_wrapper(self):
         event = {"body": json.dumps({"message": "Hello"})}

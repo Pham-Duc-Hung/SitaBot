@@ -4,6 +4,7 @@ Xử lý các thao tác quản trị và kiểm thử AWS Lambda bằng Boto3.
 """
 
 import ast
+import hashlib
 import io
 import json
 import time
@@ -11,11 +12,17 @@ import urllib.request
 import zipfile
 import re
 import posixpath
+import sys
 from urllib.parse import urlsplit
 from typing import Any, Dict, List, Optional
 import boto3
 from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError
+
+try:
+    from backend.shared.runtime import credential_fingerprint, get_aws_region
+except ImportError:
+    from runtime import credential_fingerprint, get_aws_region
 
 
 def _is_strict_int(value: Any) -> bool:
@@ -41,6 +48,80 @@ def _safe_zip_filename(value: Any) -> bool:
     return not normalized.startswith("../") and normalized not in (".", "..") and not normalized.startswith("/")
 
 
+MAX_INVOKE_PAYLOAD_BYTES = 5_500_000
+MAX_INVOKE_RESPONSE_BYTES = 1_000_000
+MAX_SOURCE_ZIP_BYTES = 25_000_000
+MAX_SOURCE_UNCOMPRESSED_BYTES = 50_000_000
+MAX_SOURCE_FILES = 500
+SUPPORTED_PYTHON_RUNTIMES = {"python3.10", "python3.11", "python3.12", "python3.13"}
+ALLOWED_LAMBDA_IMPORTS = set(getattr(sys, "stdlib_module_names", ())) | {"boto3", "botocore"}
+
+
+def _source_sha256(code_content: str) -> str:
+    return hashlib.sha256(code_content.encode("utf-8")).hexdigest()
+
+
+def _description_with_source_hash(description: str, source_hash: str) -> str:
+    marker = f" [satibot-sha256:{source_hash}]"
+    clean = description if isinstance(description, str) else ""
+    clean = re.sub(r"\s*\[satibot-sha256:[0-9a-f]{64}\]", "", clean)
+    return clean[: max(0, 256 - len(marker))] + marker
+
+
+def _source_hash_from_description(description: Any) -> Optional[str]:
+    match = re.search(r"\[satibot-sha256:([0-9a-f]{64})\]", description or "")
+    return match.group(1) if match else None
+
+
+def _build_python_zip(filename: str, code_content: str) -> bytes:
+    """Create deterministic ZIP bytes so identical source produces stable artifacts."""
+    info = zipfile.ZipInfo(filename, date_time=(1980, 1, 1, 0, 0, 0))
+    info.compress_type = zipfile.ZIP_DEFLATED
+    info.external_attr = 0o644 << 16
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr(info, code_content)
+    return buf.getvalue()
+
+
+def _validate_python_source(code_content: str, handler: str, filename: str) -> Optional[tuple[str, str]]:
+    """Validate syntax, handler presence, imports and obvious dynamic-code hazards."""
+    try:
+        tree = ast.parse(code_content)
+    except SyntaxError as exc:
+        return "PythonSyntaxError", f"Mã nguồn Python lỗi cú pháp tại dòng {exc.lineno}: {exc.msg}"
+
+    if not isinstance(handler, str) or not re.fullmatch(r"[A-Za-z_][\w.]*\.[A-Za-z_]\w*", handler):
+        return "InvalidHandler", "handler phải có định dạng module.function hợp lệ."
+    module_name, handler_name = handler.rsplit(".", 1)
+    expected_module = filename[:-3].replace("/", ".")
+    if module_name != expected_module:
+        return "InvalidHandler", f"Handler '{handler}' không khớp file mã nguồn '{filename}'."
+    functions = {node.name for node in tree.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    if handler_name not in functions:
+        return "HandlerNotFound", f"Không tìm thấy hàm handler '{handler_name}' trong mã nguồn."
+
+    unsupported = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            unsupported.update(alias.name.split(".", 1)[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            unsupported.add(node.module.split(".", 1)[0])
+        elif isinstance(node, ast.Call):
+            if isinstance(node.func, ast.Name) and node.func.id in {"eval", "exec", "compile", "__import__"}:
+                return "UnsafePythonCode", f"Không cho phép gọi {node.func.id} trong code được deploy tự động."
+            if isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name):
+                if (node.func.value.id, node.func.attr) in {("os", "system"), ("subprocess", "run"), ("subprocess", "Popen"), ("subprocess", "call")}:
+                    return "UnsafePythonCode", f"Không cho phép gọi {node.func.value.id}.{node.func.attr} trong code được deploy tự động."
+    unsupported -= ALLOWED_LAMBDA_IMPORTS
+    if unsupported:
+        return "UnsupportedDependency", (
+            "Gói ZIP hiện chỉ hỗ trợ Python standard library và AWS SDK có sẵn. "
+            f"Thiếu dependency đóng gói: {', '.join(sorted(unsupported))}."
+        )
+    return None
+
+
 class LambdaService:
     """
     Lớp dịch vụ quản lý AWS Lambda thông qua Boto3.
@@ -49,12 +130,13 @@ class LambdaService:
 
     def __init__(
         self,
-        region_name: str = "ap-southeast-1",
+        region_name: Optional[str] = None,
         aws_access_key_id: Optional[str] = None,
         aws_secret_access_key: Optional[str] = None,
         aws_session_token: Optional[str] = None,
         boto3_session: Optional[boto3.Session] = None,
     ) -> None:
+        region_name = get_aws_region(region_name)
         retry_config = Config(
             region_name=region_name,
             retries={"max_attempts": 3, "mode": "standard"},
@@ -83,10 +165,11 @@ class LambdaService:
         cls,
         role_arn: str,
         external_id: str,
-        region_name: str = "ap-southeast-1",
+        region_name: Optional[str] = None,
         session_name: str = "SatiBotLambdaSession",
     ) -> "LambdaService":
         """Khởi tạo service thông qua STS AssumeRole của tài khoản khách hàng."""
+        region_name = get_aws_region(region_name)
         sts_client = boto3.client("sts", region_name=region_name)
         assume_resp = sts_client.assume_role(
             RoleArn=role_arn,
@@ -141,6 +224,7 @@ class LambdaService:
                     "diagnose_lambda_health": "lambda:ListFunctions",
                     "get_lambda_source_code": "lambda:GetFunction",
                     "create_lambda_function": "lambda:CreateFunction",
+                    "delete_lambda_function": "lambda:DeleteFunction",
                     "update_lambda_code": "lambda:UpdateFunctionCode",
                     "configure_resilient_service": "lambda:PublishVersion, lambda:CreateAlias, lambda:PutFunctionEventInvokeConfig, lambda:PutFunctionConcurrency",
                 }
@@ -158,6 +242,7 @@ class LambdaService:
                 "InvalidParameterValueException": f"Tham số đầu vào không hợp lệ: {raw_msg}",
                 "TooManyRequestsException": "Hệ thống đang bị giới hạn tần suất gọi API (Rate limit). Vui lòng thử lại sau.",
                 "ResourceConflictException": f"Xung đột tài nguyên: {raw_msg}",
+                "PreconditionFailedException": "Tài nguyên đã thay đổi bởi một request khác. Hãy đọc lại trạng thái rồi thử lại.",
                 "ServiceException": "Lỗi nội bộ từ phía dịch vụ AWS Lambda. Vui lòng thử lại sau.",
             }
             msg = error_mappings.get(code, f"Lỗi AWS [{code}]: {raw_msg}")
@@ -171,6 +256,31 @@ class LambdaService:
         return self._format_response(
             "ERROR", action, f"Lỗi không xác định: {str(exc)}", error_code="UnhandledException"
         )
+
+    def _suggest_available_function_name(self, function_name: str, max_attempts: int = 50) -> str:
+        """Find the next free -vN name without producing awkward -v2-v2 chains."""
+        clean_name = function_name.rsplit(":", 1)[-1]
+        version_match = re.fullmatch(r"(.+)-v(\d+)", clean_name, re.IGNORECASE)
+        if version_match:
+            root = version_match.group(1)
+            next_version = int(version_match.group(2)) + 1
+        else:
+            root = clean_name
+            next_version = 2
+
+        for version in range(next_version, next_version + max_attempts):
+            suffix = f"-v{version}"
+            candidate = f"{root[:64 - len(suffix)]}{suffix}"
+            try:
+                self.client.get_function_configuration(FunctionName=candidate)
+            except ClientError as exc:
+                if exc.response.get("Error", {}).get("Code") == "ResourceNotFoundException":
+                    return candidate
+                raise
+
+        # Extremely unlikely fallback when a large consecutive version range exists.
+        suffix = f"-{int(time.time()) % 10_000_000:07d}"
+        return f"{root[:64 - len(suffix)]}{suffix}"
 
     def list_lambda_functions(self, max_items: int = 50) -> Dict[str, Any]:
         """Kịch bản 1: Liệt kê danh sách các hàm Lambda trong tài khoản."""
@@ -252,6 +362,46 @@ class LambdaService:
         except Exception as exc:
             return self._handle_boto_error(action, exc)
 
+    def delete_lambda_function(self, function_name: str) -> Dict[str, Any]:
+        """Delete one explicitly named Lambda after the shared confirmation gate."""
+        action = "delete_lambda_function"
+        if not _valid_function_name(function_name):
+            return self._format_response(
+                "ERROR", action, "function_name không hợp lệ.", error_code="InvalidParameters"
+            )
+        try:
+            current = self.client.get_function_configuration(FunctionName=function_name)
+            self.client.delete_function(FunctionName=function_name)
+            deletion_verified = False
+            for attempt in range(5):
+                try:
+                    self.client.get_function_configuration(FunctionName=function_name)
+                except ClientError as exc:
+                    if exc.response.get("Error", {}).get("Code") == "ResourceNotFoundException":
+                        deletion_verified = True
+                        break
+                    raise
+                if attempt < 4:
+                    time.sleep(0.2 * (attempt + 1))
+            if not deletion_verified:
+                return self._format_response(
+                    "ERROR", action,
+                    f"AWS đã nhận lệnh xóa '{function_name}' nhưng chưa xác minh được tài nguyên đã biến mất.",
+                    data={"function_name": function_name, "delete_requested": True},
+                    error_code="DeletionNotYetVerified",
+                )
+            return self._format_response(
+                "SUCCESS", action, f"Đã xóa Lambda '{function_name}' và xác minh tài nguyên không còn tồn tại.",
+                data={
+                    "function_name": function_name,
+                    "function_arn": current.get("FunctionArn"),
+                    "deleted": True,
+                    "deletion_verified": True,
+                },
+            )
+        except Exception as exc:
+            return self._handle_boto_error(action, exc)
+
     def invoke_lambda_function(
         self, function_name: str, payload: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
@@ -264,12 +414,17 @@ class LambdaService:
                 error_code="InvalidParameters",
             )
         try:
-            payload_bytes = json.dumps(payload or {}).encode("utf-8")
+            payload_bytes = json.dumps(payload or {}, allow_nan=False).encode("utf-8")
         except (TypeError, ValueError) as json_err:
             return self._format_response(
                 status="ERROR", action=action,
                 message=f"Dữ liệu payload không đúng định dạng JSON: {str(json_err)}",
                 error_code="InvalidPayloadFormat",
+            )
+        if len(payload_bytes) > MAX_INVOKE_PAYLOAD_BYTES:
+            return self._format_response(
+                "ERROR", action, "Payload invoke vượt giới hạn an toàn 5.5 MB.",
+                error_code="PayloadTooLarge",
             )
 
         start_time = time.perf_counter()
@@ -284,7 +439,10 @@ class LambdaService:
             status_code = response.get("StatusCode", 200)
             function_error = response.get("FunctionError")
 
-            raw_response_body = response["Payload"].read().decode("utf-8")
+            raw_response_bytes = response["Payload"].read(MAX_INVOKE_RESPONSE_BYTES + 1)
+            response_truncated = len(raw_response_bytes) > MAX_INVOKE_RESPONSE_BYTES
+            raw_response_bytes = raw_response_bytes[:MAX_INVOKE_RESPONSE_BYTES]
+            raw_response_body = raw_response_bytes.decode("utf-8", errors="replace")
             try:
                 response_data = json.loads(raw_response_body)
             except json.JSONDecodeError:
@@ -297,6 +455,7 @@ class LambdaService:
                 "function_error": function_error,
                 "input_payload": payload or {},
                 "response_payload": response_data,
+                "response_truncated": response_truncated,
                 "executed_version": response.get("ExecutedVersion", "$LATEST"),
             }
 
@@ -408,20 +567,31 @@ class LambdaService:
             return val_err
 
         try:
+            current = self.client.get_function_configuration(FunctionName=function_name)
             update_kwargs: Dict[str, Any] = {"FunctionName": function_name}
+            if current.get("RevisionId"):
+                update_kwargs["RevisionId"] = current["RevisionId"]
             if memory_mb is not None:
                 update_kwargs["MemorySize"] = memory_mb
             if timeout_seconds is not None:
                 update_kwargs["Timeout"] = timeout_seconds
 
             response = self.client.update_function_configuration(**update_kwargs)
+            waiter = self.client.get_waiter("function_updated_v2")
+            waiter.wait(FunctionName=function_name, WaiterConfig={"Delay": 1, "MaxAttempts": 30})
+            final = self.client.get_function_configuration(FunctionName=function_name)
             data = {
-                "function_name": response.get("FunctionName"),
-                "memory_mb": response.get("MemorySize"),
-                "timeout_seconds": response.get("Timeout"),
-                "last_modified": response.get("LastModified"),
-                "last_update_status": response.get("LastUpdateStatus"),
+                "function_name": final.get("FunctionName", response.get("FunctionName", function_name)),
+                "memory_mb": final.get("MemorySize", response.get("MemorySize")),
+                "timeout_seconds": final.get("Timeout", response.get("Timeout")),
+                "last_modified": final.get("LastModified", response.get("LastModified")),
+                "last_update_status": final.get("LastUpdateStatus", response.get("LastUpdateStatus")),
             }
+            if data["last_update_status"] == "Failed":
+                return self._format_response(
+                    "ERROR", action, f"AWS không thể áp dụng cấu hình cho '{function_name}'.",
+                    data=data, error_code="LambdaUpdateFailed",
+                )
             msg = (
                 f"Đã cập nhật cấu hình hàm '{function_name}' thành công: "
                 f"RAM = {data['memory_mb']} MB, Timeout = {data['timeout_seconds']}s."
@@ -546,7 +716,8 @@ class LambdaService:
                 status="SUCCESS", action=action, message=msg,
                 data={
                     "function_name": function_name, "function_url": func_url, "auth_type": "NONE",
-                    "is_newly_created": is_new, "url_verified": verification_status == 200,
+                    "is_newly_created": is_new,
+                    "url_verified": verification_status is not None and 200 <= verification_status < 500,
                     "verification_http_status": verification_status,
                     "verification_body_preview": verification_preview,
                 },
@@ -587,6 +758,14 @@ class LambdaService:
 
         try:
             if enable_kill_switch:
+                previous_concurrency = None
+                try:
+                    previous_concurrency = self.client.get_function_concurrency(
+                        FunctionName=function_name
+                    ).get("ReservedConcurrentExecutions")
+                except ClientError as concurrency_lookup_error:
+                    if concurrency_lookup_error.response.get("Error", {}).get("Code") != "ResourceNotFoundException":
+                        raise
                 self.client.put_function_concurrency(
                     FunctionName=function_name,
                     ReservedConcurrentExecutions=0,
@@ -595,7 +774,12 @@ class LambdaService:
                     f"ĐÃ KÍCH HOẠT KILL-SWITCH: Hàm '{function_name}' đã được đặt Reserved Concurrency = 0. "
                     "Mọi yêu cầu mới sẽ bị từ chối (HTTP 429 Too Many Requests)."
                 )
-                data = {"function_name": function_name, "is_paused": True, "reserved_concurrency": 0}
+                data = {
+                    "function_name": function_name, "is_paused": True,
+                    "reserved_concurrency": 0,
+                    "previous_reserved_concurrency": previous_concurrency,
+                    "restore_hint": previous_concurrency,
+                }
             else:
                 # Mở khóa hoạt động
                 try:
@@ -607,7 +791,11 @@ class LambdaService:
                         data = {"function_name": function_name, "is_paused": False, "reserved_concurrency": restore_concurrency}
                     else:
                         self.client.delete_function_concurrency(FunctionName=function_name)
-                        data = {"function_name": function_name, "is_paused": False, "reserved_concurrency": "unreserved"}
+                        data = {
+                            "function_name": function_name, "is_paused": False,
+                            "reserved_concurrency": "unreserved",
+                            "warning": "Không có restore_concurrency; đã mở khóa ở chế độ unreserved.",
+                        }
                 except ClientError as ce:
                     # Nếu hạn mức concurrency của tài khoản không đủ, tự động xóa giới hạn để mở khóa bình thường
                     if ce.response.get("Error", {}).get("Code") == "InvalidParameterValueException":
@@ -734,6 +922,7 @@ class LambdaService:
             cfg = fn_info.get("Configuration", {})
             runtime = cfg.get("Runtime", "unknown")
             handler = cfg.get("Handler", "lambda_function.lambda_handler")
+            handler_filename = handler.rsplit(".", 1)[0].replace(".", "/") + ".py"
             code_location = fn_info.get("Code", {}).get("Location")
 
             if not code_location:
@@ -742,24 +931,29 @@ class LambdaService:
             # Tải file zip qua URL ký trước (presigned URL)
             req = urllib.request.Request(code_location, headers={"User-Agent": "SatiBot-Agent/1.0"})
             with urllib.request.urlopen(req, timeout=30) as resp:
-                zip_data = resp.read()
+                zip_data = resp.read(MAX_SOURCE_ZIP_BYTES + 1)
 
             files = []
             main_code = ""
-            if len(zip_data) > 25_000_000:
+            if len(zip_data) > MAX_SOURCE_ZIP_BYTES:
                 return self._format_response("ERROR", action, "Gói mã nguồn vượt giới hạn đọc an toàn 25 MB.", error_code="CodePackageTooLarge")
             with zipfile.ZipFile(io.BytesIO(zip_data)) as zf:
-                total_uncompressed = sum(item.file_size for item in zf.infolist())
-                if total_uncompressed > 50_000_000 or len(zf.infolist()) > 500:
+                entries = zf.infolist()
+                total_uncompressed = sum(item.file_size for item in entries)
+                if total_uncompressed > MAX_SOURCE_UNCOMPRESSED_BYTES or len(entries) > MAX_SOURCE_FILES:
                     return self._format_response("ERROR", action, "Gói mã nguồn có kích thước giải nén hoặc số file vượt giới hạn an toàn.", error_code="UnsafeCodePackage")
-                for file_info in zf.infolist():
+                for file_info in entries:
+                    if not _safe_zip_filename(file_info.filename) or file_info.flag_bits & 0x1:
+                        return self._format_response("ERROR", action, "Gói mã nguồn chứa tên file không an toàn hoặc file mã hóa.", error_code="UnsafeCodePackage")
+                    if file_info.compress_size and file_info.file_size / file_info.compress_size > 100:
+                        return self._format_response("ERROR", action, "Gói mã nguồn có tỷ lệ nén bất thường.", error_code="UnsafeCodePackage")
                     if file_info.is_dir() or file_info.file_size > 1_000_000:
                         continue
                     fname = file_info.filename
                     try:
                         content = zf.read(fname).decode("utf-8", errors="replace")
                         files.append({"filename": fname, "content": content, "size_bytes": file_info.file_size})
-                        if fname in ("lambda_function.py", "index.py", "app.py", "handler.py") or not main_code:
+                        if fname == handler_filename or not main_code:
                             main_code = content
                     except Exception:
                         pass
@@ -794,17 +988,15 @@ class LambdaService:
             return self._format_response("ERROR", action, "function_name phải là chuỗi không rỗng.", error_code="InvalidParameters")
         if not isinstance(code_content, str) or not code_content.strip():
             return self._format_response("ERROR", action, "code_content phải là chuỗi mã nguồn Python hợp lệ.", error_code="InvalidParameters")
-
-        # Kiểm tra cú pháp Python trước khi đóng gói
-        if runtime.startswith("python"):
-            try:
-                ast.parse(code_content)
-            except SyntaxError as syn_err:
-                return self._format_response(
-                    "ERROR", action,
-                    f"Mã nguồn Python bị lỗi cú pháp tại dòng {syn_err.lineno}: {syn_err.msg}",
-                    error_code="PythonSyntaxError",
-                )
+        if runtime not in SUPPORTED_PYTHON_RUNTIMES:
+            return self._format_response(
+                "ERROR", action,
+                f"Runtime '{runtime}' chưa được hỗ trợ bởi bộ đóng gói source Python hiện tại.",
+                error_code="UnsupportedRuntime",
+            )
+        source_error = _validate_python_source(code_content, handler, "lambda_function.py")
+        if source_error:
+            return self._format_response("ERROR", action, source_error[1], error_code=source_error[0])
 
         if not _is_strict_int(memory_mb) or not (128 <= memory_mb <= 10240):
             return self._format_response("ERROR", action, "memory_mb phải từ 128 đến 10240 MB.", error_code="InvalidParameters")
@@ -812,10 +1004,9 @@ class LambdaService:
             return self._format_response("ERROR", action, "timeout_seconds phải từ 1 đến 900 giây.", error_code="InvalidParameters")
 
         # Đóng gói zip in-memory
-        buf = io.BytesIO()
-        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-            zf.writestr("lambda_function.py", code_content)
-        zip_bytes = buf.getvalue()
+        source_hash = _source_sha256(code_content)
+        zip_bytes = _build_python_zip("lambda_function.py", code_content)
+        deployment_description = _description_with_source_hash(description, source_hash)
 
         # Không tự đoán/copy role từ tài nguyên khác: caller phải chọn role rõ ràng.
         target_role = role_arn
@@ -826,6 +1017,7 @@ class LambdaService:
                 error_code="InvalidParameters",
             )
 
+        created_resource = False
         try:
             res = self.client.create_function(
                 FunctionName=function_name,
@@ -833,19 +1025,31 @@ class LambdaService:
                 Role=target_role,
                 Handler=handler,
                 Code={"ZipFile": zip_bytes},
-                Description=description,
+                Description=deployment_description,
                 Timeout=timeout_seconds,
                 MemorySize=memory_mb,
             )
+            created_resource = True
+            waiter = self.client.get_waiter("function_active_v2")
+            waiter.wait(FunctionName=function_name, WaiterConfig={"Delay": 1, "MaxAttempts": 30})
+            final = self.client.get_function_configuration(FunctionName=function_name)
+            if isinstance(final, dict) and final.get("State") == "Failed":
+                return self._format_response(
+                    "ERROR", action,
+                    f"AWS đã tạo tài nguyên nhưng Lambda chuyển sang trạng thái Failed: {final.get('StateReason', 'không rõ nguyên nhân')}",
+                    data={"function_name": function_name, "created": True, "cleanup_recommended": True},
+                    error_code="LambdaActivationFailed",
+                )
             data = {
-                "function_name": res.get("FunctionName"),
+                "function_name": final.get("FunctionName", res.get("FunctionName")) if isinstance(final, dict) else res.get("FunctionName"),
                 "function_arn": res.get("FunctionArn"),
                 "runtime": res.get("Runtime"),
                 "handler": res.get("Handler"),
                 "memory_mb": res.get("MemorySize"),
                 "timeout_seconds": res.get("Timeout"),
                 "code_size_bytes": res.get("CodeSize"),
-                "code_content": code_content,
+                "code_sha256": source_hash,
+                "created": True,
             }
             msg = f"ĐÃ TẠO THÀNH CÔNG HÀM LAMBDA '{function_name}' (Runtime {runtime}, RAM {memory_mb}MB, Timeout {timeout_seconds}s)!"
             return self._format_response("SUCCESS", action, msg, data=data)
@@ -853,6 +1057,15 @@ class LambdaService:
             if exc.response.get("Error", {}).get("Code") == "ResourceConflictException":
                 try:
                     existing = self.client.get_function_configuration(FunctionName=function_name)
+                    existing_hash = _source_hash_from_description(existing.get("Description"))
+                    same_config = all((
+                        existing_hash == source_hash,
+                        existing.get("Runtime") == runtime,
+                        existing.get("Handler") == handler,
+                        existing.get("MemorySize") == memory_mb,
+                        existing.get("Timeout") == timeout_seconds,
+                        existing.get("Role") == target_role,
+                    ))
                     data = {
                         "function_name": existing.get("FunctionName", function_name),
                         "function_arn": existing.get("FunctionArn"),
@@ -862,17 +1075,76 @@ class LambdaService:
                         "timeout_seconds": existing.get("Timeout"),
                         "created": False,
                         "already_existed": True,
+                        "requested_code_sha256": source_hash,
+                        "deployed_code_sha256": existing_hash,
+                        "same_deployment": same_config,
+                        "resolution_kind": "recoverable_conflict",
+                        "severity": "CHOICE_REQUIRED",
                     }
+                    if same_config:
+                        data["no_change"] = True
+                        return self._format_response(
+                            "SUCCESS", action,
+                            f"Hàm '{function_name}' đã tồn tại với cùng code và cấu hình; không cần triển khai lại.",
+                            data=data,
+                        )
+                    suggested_name = self._suggest_available_function_name(function_name)
+                    data["available_actions"] = [
+                        "update_existing", "create_with_new_name", "use_existing", "cancel"
+                    ]
+                    data["resolution_options"] = [
+                        {
+                            "id": "update_existing",
+                            "label": "Cập nhật hàm hiện có",
+                            "description": "Thay code của Lambda hiện tại bằng nội dung mới. Cấu hình khác được giữ nguyên.",
+                            "changes_aws": True,
+                        },
+                        {
+                            "id": "create_with_new_name",
+                            "label": f"Tạo hàm mới: {suggested_name}",
+                            "description": "Giữ nguyên Lambda hiện tại và triển khai nội dung mới dưới một tên khác.",
+                            "changes_aws": True,
+                            "suggested_function_name": suggested_name,
+                        },
+                        {
+                            "id": "use_existing",
+                            "label": "Giữ nguyên hàm hiện có",
+                            "description": "Không thay đổi tài nguyên AWS và kết thúc yêu cầu tạo mới này.",
+                            "changes_aws": False,
+                        },
+                        {
+                            "id": "cancel",
+                            "label": "Hủy thao tác",
+                            "description": "Không thực hiện thay đổi nào.",
+                            "changes_aws": False,
+                        },
+                    ]
                     return self._format_response(
-                        "SUCCESS", action,
-                        f"Hàm '{function_name}' đã tồn tại; tiếp tục deployment theo hướng idempotent.",
+                        "USER_ACTION_REQUIRED", action,
+                        f"Tên Lambda '{function_name}' đã được sử dụng, và nội dung hoặc cấu hình hiện tại khác với yêu cầu mới. Hãy chọn cách bạn muốn xử lý:",
                         data=data,
                     )
                 except Exception as lookup_exc:
                     return self._handle_boto_error(action, lookup_exc)
-            return self._handle_boto_error(action, exc)
+            result = self._handle_boto_error(action, exc)
+            if created_resource:
+                result.setdefault("data", {}).update({
+                    "function_name": function_name,
+                    "created": True,
+                    "activation_verified": False,
+                    "cleanup_recommended": True,
+                })
+            return result
         except Exception as exc:
-            return self._handle_boto_error(action, exc)
+            result = self._handle_boto_error(action, exc)
+            if created_resource:
+                result.setdefault("data", {}).update({
+                    "function_name": function_name,
+                    "created": True,
+                    "activation_verified": False,
+                    "cleanup_recommended": True,
+                })
+            return result
 
     def update_lambda_code(
         self,
@@ -886,7 +1158,7 @@ class LambdaService:
             return self._format_response("ERROR", action, "function_name phải là chuỗi không rỗng.", error_code="InvalidParameters")
         if not isinstance(code_content, str) or not code_content.strip():
             return self._format_response("ERROR", action, "code_content phải là chuỗi mã nguồn Python hợp lệ.", error_code="InvalidParameters")
-
+        completed: List[str] = []
         try:
             ast.parse(code_content)
         except SyntaxError as syn_err:
@@ -895,34 +1167,84 @@ class LambdaService:
                 f"Mã nguồn Python cập nhật bị lỗi cú pháp tại dòng {syn_err.lineno}: {syn_err.msg}",
                 error_code="PythonSyntaxError",
             )
+
         if not _safe_zip_filename(filename) or not filename.endswith(".py"):
             return self._format_response(
                 "ERROR", action, "filename phải là đường dẫn tương đối an toàn tới một file .py.",
                 error_code="InvalidParameters",
             )
 
-        buf = io.BytesIO()
-        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-            zf.writestr(filename, code_content)
-        zip_bytes = buf.getvalue()
-
         try:
+            current = self.client.get_function_configuration(FunctionName=function_name)
+            runtime = current.get("Runtime")
+            if runtime not in SUPPORTED_PYTHON_RUNTIMES:
+                return self._format_response(
+                    "ERROR", action, f"Runtime hiện tại '{runtime}' không thuộc nhóm Python được hỗ trợ.",
+                    error_code="UnsupportedRuntime",
+                )
+            handler = current.get("Handler") or f"{filename[:-3].replace('/', '.')}.lambda_handler"
+            source_error = _validate_python_source(code_content, handler, filename)
+            if source_error:
+                return self._format_response("ERROR", action, source_error[1], error_code=source_error[0])
+            source_hash = _source_sha256(code_content)
+            if _source_hash_from_description(current.get("Description")) == source_hash:
+                return self._format_response(
+                    "SUCCESS", action, f"Code của hàm '{function_name}' đã giống bản yêu cầu; không cần cập nhật.",
+                    data={"function_name": function_name, "code_sha256": source_hash, "no_change": True},
+                )
+            zip_bytes = _build_python_zip(filename, code_content)
+            update_kwargs = {"FunctionName": function_name, "ZipFile": zip_bytes}
+            if current.get("RevisionId"):
+                update_kwargs["RevisionId"] = current["RevisionId"]
             res = self.client.update_function_code(
-                FunctionName=function_name,
-                ZipFile=zip_bytes,
+                **update_kwargs,
             )
+            completed.append("code_uploaded")
+            waiter = self.client.get_waiter("function_updated_v2")
+            waiter.wait(FunctionName=function_name, WaiterConfig={"Delay": 1, "MaxAttempts": 30})
+            final = self.client.get_function_configuration(FunctionName=function_name)
+            if final.get("LastUpdateStatus") == "Failed":
+                return self._format_response(
+                    "ERROR", action, f"AWS báo cập nhật code cho '{function_name}' thất bại: {final.get('LastUpdateStatusReason', 'không rõ nguyên nhân')}",
+                    data={
+                        "function_name": function_name,
+                        "completed_before_error": completed,
+                        "partial_change": True,
+                    }, error_code="LambdaUpdateFailed",
+                )
+            completed.append("code_stabilized")
+            clean_description = re.sub(
+                r"\s*\[satibot-sha256:[0-9a-f]{64}\]", "", current.get("Description", "") or ""
+            )
+            description_kwargs = {
+                "FunctionName": function_name,
+                "Description": _description_with_source_hash(clean_description, source_hash),
+            }
+            if final.get("RevisionId"):
+                description_kwargs["RevisionId"] = final["RevisionId"]
+            self.client.update_function_configuration(**description_kwargs)
+            waiter.wait(FunctionName=function_name, WaiterConfig={"Delay": 1, "MaxAttempts": 30})
+            final = self.client.get_function_configuration(FunctionName=function_name)
+            completed.append("source_hash_recorded")
             data = {
                 "function_name": res.get("FunctionName"),
                 "function_arn": res.get("FunctionArn"),
-                "runtime": res.get("Runtime"),
+                "runtime": final.get("Runtime", res.get("Runtime")),
                 "last_modified": res.get("LastModified"),
                 "code_size_bytes": res.get("CodeSize"),
-                "code_content": code_content,
+                "code_sha256": source_hash,
+                "revision_id": final.get("RevisionId", res.get("RevisionId")),
             }
             msg = f"ĐÃ CẬP NHẬT MÃ NGUỒN CHO HÀM '{function_name}' THÀNH CÔNG!"
             return self._format_response("SUCCESS", action, msg, data=data)
         except Exception as exc:
-            return self._handle_boto_error(action, exc)
+            result = self._handle_boto_error(action, exc)
+            result.setdefault("data", {}).update({
+                "function_name": function_name,
+                "completed_before_error": completed,
+                "partial_change": bool(completed),
+            })
+            return result
 
     def configure_resilient_service(
         self,
@@ -1108,6 +1430,7 @@ class LambdaService:
         dispatch_map = {
             "list_lambda_functions": lambda p: self.list_lambda_functions(max_items=p.get("max_items", 50)),
             "get_function_config_detail": lambda p: self.get_function_config_detail(function_name=p["function_name"]),
+            "delete_lambda_function": lambda p: self.delete_lambda_function(function_name=p["function_name"]),
             "invoke_lambda_function": lambda p: self.invoke_lambda_function(
                 function_name=p["function_name"], payload=p.get("payload")
             ),
@@ -1175,6 +1498,18 @@ LAMBDA_TOOL_SCHEMAS = [
             "type": "object",
             "properties": {
                 "function_name": {"type": "string", "description": "Tên hoặc ARN của hàm AWS Lambda."}
+            },
+            "required": ["function_name"],
+        },
+    },
+    {
+        "name": "delete_lambda_function",
+        "description": "Xóa vĩnh viễn đúng một hàm AWS Lambda theo tên. Chỉ gọi khi người dùng yêu cầu xóa rõ ràng; luôn cần phê duyệt trước khi thực thi.",
+        "requires_confirmation": True,
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "function_name": {"type": "string", "description": "Tên hoặc ARN chính xác của Lambda cần xóa."},
             },
             "required": ["function_name"],
         },
@@ -1272,7 +1607,7 @@ LAMBDA_TOOL_SCHEMAS = [
                 "memory_mb": {"type": "integer", "description": "Dung lượng RAM tính bằng MB (128 đến 10240, mặc định 128)."},
                 "timeout_seconds": {"type": "integer", "description": "Thời gian timeout tối đa tính bằng giây (1 đến 900, mặc định 15)."},
                 "handler": {"type": "string", "description": "Tên handler của hàm (mặc định: 'lambda_function.lambda_handler')."},
-                "role_arn": {"type": "string", "description": "ARN IAM execution role dành cho hàm Lambda (mặc định: 'arn:aws:iam::640737808081:role/service-role/test-lambda-role-my87f8eu')."},
+                "role_arn": {"type": "string", "description": "ARN IAM execution role dành cho Lambda. Có thể bỏ qua khi Backend đã cấu hình DEFAULT_LAMBDA_ROLE_ARN."},
             },
             "required": ["function_name", "code_content"],
         },
@@ -1318,13 +1653,7 @@ _GLOBAL_LAMBDA_SERVICE_CACHE: Dict[str, "LambdaService"] = {}
 
 def _compute_cache_key(credentials: Optional[Dict[str, Any]], region: str) -> str:
     """Tính toán khóa nhận diện duy nhất cho phiên làm việc."""
-    if not credentials:
-        return f"default:{region}"
-    if credentials.get("AccessKeyId"):
-        return f"key:{credentials.get('AccessKeyId')}:{region}"
-    if credentials.get("RoleArn"):
-        return f"role:{credentials.get('RoleArn')}:{credentials.get('ExternalId', '')}:{region}"
-    return f"default:{region}"
+    return f"{credential_fingerprint(credentials)}:{get_aws_region(region)}"
 
 
 def _create_lambda_service(credentials: Optional[Dict[str, Any]], region: str) -> "LambdaService":
@@ -1381,12 +1710,31 @@ def execute(credentials: Optional[Dict[str, Any]], params: Dict[str, Any]) -> Di
         + 'parameters': Các tham số truyền vào công cụ.
         + 'confirmed': Boolean (True nếu đã được người dùng xác nhận ở bước trước).
     """
-    region = (credentials or {}).get("region_name") or params.get("region") or "us-east-1"
-    service = get_cached_lambda_service(credentials=credentials, region=region)
+    if not isinstance(params, dict):
+        return {
+            "status": "ERROR", "service": "lambda", "action": None,
+            "message": "Dispatcher params phải là JSON object.", "data": {},
+            "error_code": "InvalidParameters",
+        }
+    if credentials is not None and not isinstance(credentials, dict):
+        return {
+            "status": "ERROR", "service": "lambda", "action": params.get("action"),
+            "message": "credentials phải là JSON object hoặc null.", "data": {},
+            "error_code": "InvalidParameters",
+        }
 
     action = params.get("action") or params.get("tool_name")
     action_params = params.get("parameters", {})
     confirmed = params.get("confirmed", False)
+    if not isinstance(action_params, dict) or not isinstance(confirmed, bool):
+        return {
+            "status": "ERROR", "service": "lambda", "action": action,
+            "message": "parameters phải là object và confirmed phải là boolean.", "data": {},
+            "error_code": "InvalidParameters",
+        }
+
+    region = get_aws_region((credentials or {}).get("region_name") or params.get("region"))
+    service = get_cached_lambda_service(credentials=credentials, region=region)
 
     return service.execute_tool(
         tool_name=action,

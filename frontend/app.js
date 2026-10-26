@@ -566,6 +566,10 @@ function handleConfirmation(res, agentRow, originalPrompt) {
   card.querySelector("#confirmApprove").onclick = async () => {
     card.remove();
     setBusy(true);
+    const approvedAction = {
+      ...state.pending,
+      parameters: { ...(state.pending?.parameters || {}) }
+    };
 
     const logsBox = agentRow.querySelector(".agent-logs");
     const workingStep = document.createElement("div");
@@ -577,13 +581,12 @@ function handleConfirmation(res, agentRow, originalPrompt) {
       const execRes = await fetchChat({
         confirmed: true,
         service: "lambda",
-        tool_name: state.pending.tool_name,
-        parameters: state.pending.parameters,
-        agent_state: state.pending.agent_state
+        tool_name: approvedAction.tool_name,
+        parameters: approvedAction.parameters,
+        agent_state: approvedAction.agent_state
       });
 
       workingStep.remove();
-      state.pending = null;
 
       if (execRes.steps && execRes.steps.length > 0) {
         execRes.steps.forEach(s => {
@@ -593,10 +596,21 @@ function handleConfirmation(res, agentRow, originalPrompt) {
       }
 
       if (execRes.status === "CONFIRMATION_REQUIRED") {
+        state.pending = null;
         storeMessage("assistant", execRes.message || "SatiBot đang chờ bạn phê duyệt bước tiếp theo.");
         handleConfirmation(execRes, agentRow, originalPrompt);
         return;
       }
+
+      if (execRes.status === "USER_ACTION_REQUIRED") {
+        state.pending = approvedAction;
+        storeMessage("assistant", execRes.message || "Cần bạn chọn cách xử lý.", execRes.data || null);
+        handleResolutionOptions(execRes, agentRow, originalPrompt, approvedAction);
+        setBusy(false);
+        return;
+      }
+
+      state.pending = null;
 
       const textContainer = agentRow.querySelector(".agent-text");
       storeMessage("assistant", execRes.message || "Đã thực thi thành công.", execRes.data || null);
@@ -640,6 +654,127 @@ function handleConfirmation(res, agentRow, originalPrompt) {
     storeMessage("assistant", "Bạn đã từ chối thao tác. Không có thay đổi nào được ghi lên AWS.");
     setBusy(false);
   };
+}
+
+function handleResolutionOptions(res, agentRow, originalPrompt, pendingAction) {
+  const options = Array.isArray(res.data?.resolution_options) ? res.data.resolution_options : [];
+  const textContainer = agentRow.querySelector(".agent-text");
+  textContainer.textContent = res.message || "Yêu cầu cần thêm lựa chọn để tiếp tục.";
+
+  const card = document.createElement("div");
+  card.className = "resolution-card";
+
+  const title = document.createElement("div");
+  title.className = "resolution-title";
+  title.textContent = "Chọn cách xử lý";
+  card.append(title);
+
+  const optionList = document.createElement("div");
+  optionList.className = "resolution-options";
+  card.append(optionList);
+
+  const finishWithoutChange = message => {
+    card.remove();
+    state.pending = null;
+    textContainer.textContent = message;
+    storeMessage("assistant", message);
+    setBusy(false);
+  };
+
+  const executeChoice = async option => {
+    if (option.id === "cancel") {
+      finishWithoutChange("Đã hủy yêu cầu. Không có thay đổi nào được thực hiện trên AWS.");
+      return;
+    }
+    if (option.id === "use_existing") {
+      finishWithoutChange(`Đã giữ nguyên Lambda '${res.data?.function_name || "hiện có"}'. Không có thay đổi nào được thực hiện.`);
+      return;
+    }
+
+    let toolName;
+    let parameters;
+    if (option.id === "update_existing") {
+      toolName = "update_lambda_code";
+      parameters = {
+        function_name: res.data?.function_name || pendingAction.parameters.function_name,
+        code_content: pendingAction.parameters.code_content,
+        filename: "lambda_function.py"
+      };
+    } else if (option.id === "create_with_new_name") {
+      toolName = "create_lambda_function";
+      parameters = {
+        ...pendingAction.parameters,
+        function_name: option.suggested_function_name
+      };
+    } else {
+      return;
+    }
+
+    optionList.querySelectorAll("button").forEach(button => { button.disabled = true; });
+    setBusy(true);
+    const logsBox = agentRow.querySelector(".agent-logs");
+    const workingStep = document.createElement("div");
+    workingStep.className = "log-working";
+    workingStep.innerHTML = `<span class="working-pulse">Working • Applying selected resolution</span>`;
+    logsBox.append(workingStep);
+
+    try {
+      const result = await fetchChat({
+        confirmed: true,
+        service: "lambda",
+        tool_name: toolName,
+        parameters,
+        agent_state: pendingAction.agent_state
+      });
+      workingStep.remove();
+      card.remove();
+
+      if (result.status === "USER_ACTION_REQUIRED") {
+        state.pending = { ...pendingAction, tool_name: toolName, parameters };
+        handleResolutionOptions(result, agentRow, originalPrompt, state.pending);
+        setBusy(false);
+        return;
+      }
+      if (result.status === "CONFIRMATION_REQUIRED") {
+        state.pending = null;
+        handleConfirmation(result, agentRow, originalPrompt);
+        setBusy(false);
+        return;
+      }
+
+      state.pending = null;
+      const message = result.message || "Đã xử lý lựa chọn thành công.";
+      storeMessage("assistant", message, result.data || null);
+      state.history.push({ role: "assistant", content: message });
+      state.history = state.history.slice(-10);
+      streamText(textContainer, message);
+      setBusy(false);
+    } catch (err) {
+      workingStep.remove();
+      optionList.querySelectorAll("button").forEach(button => { button.disabled = false; });
+      textContainer.textContent = `Không thể thực hiện lựa chọn: ${err.message}`;
+      setBusy(false);
+    }
+  };
+
+  options.forEach(option => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `resolution-option ${option.changes_aws ? "changes-aws" : "no-change"}`;
+
+    const label = document.createElement("span");
+    label.className = "resolution-option-label";
+    label.textContent = option.label;
+    const description = document.createElement("span");
+    description.className = "resolution-option-description";
+    description.textContent = option.description || "";
+    button.append(label, description);
+    button.onclick = () => executeChoice(option);
+    optionList.append(button);
+  });
+
+  agentRow.append(card);
+  els.chatScroll.scrollTop = els.chatScroll.scrollHeight;
 }
 
 function resetChat() {

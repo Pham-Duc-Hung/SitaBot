@@ -13,6 +13,15 @@ import urllib.request
 import urllib.error
 from typing import Any, Dict, List, Optional
 
+try:
+    from backend.shared.runtime import (
+        get_aws_region,
+        get_default_lambda_role_arn,
+        safe_json_for_log,
+    )
+except ImportError:
+    from runtime import get_aws_region, get_default_lambda_role_arn, safe_json_for_log
+
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
@@ -42,7 +51,7 @@ def _dispatch_action(
     action: str,
     parameters: Dict[str, Any],
     confirmed: bool = False,
-    region: str = "us-east-1",
+    region: Optional[str] = None,
     credentials: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Kết nối và chuyển tiếp yêu cầu đến Dispatcher Lambda."""
@@ -71,57 +80,65 @@ def _dispatch_action(
         "action": action,
         "parameters": parameters,
         "confirmed": confirmed,
-        "region": region,
+        "region": get_aws_region(region),
         "credentials": credentials,
     }
     return dispatcher_handler(event, None)
 
 # System prompt định hướng tư duy Agent (ReAct) cho SatiBot
-SYSTEM_PROMPT = """Bạn là SatiBot - AI Agent Tự Trị Quản Trị & Phát Triển AWS Serverless (Autonomous AWS Serverless DevOps Agent).
-Phương châm tối thượng: "THAY THẾ CON NGƯỜI TỰ ĐỘNG HÓA TỪ A ĐẾN Z - HÀNH ĐỘNG THAY VÌ HƯỚNG DẪN".
-Người dùng không cần kiến thức AWS chuyên sâu và KHÔNG BAO GIỜ phải tự vào AWS Console bấm thủ công. Bạn có toàn quyền truy cập thực tế vào tài khoản AWS của người dùng qua Boto3 để tự lập kế hoạch, tự viết code, tự triển khai và kiểm thử.
+SYSTEM_PROMPT = """Bạn là SatiBot - AI Agent chuyên trách quản trị và phát triển AWS Serverless & DevOps (AWS Serverless DevOps Agent).
+Nguyên tắc hoạt động: TỰ ĐỘNG HÓA TOÀN DIỆN - TRỰC TIẾP HÀNH ĐỘNG THAY VÌ CHỈ HƯỚNG DẪN BẰNG LỜI.
+Người dùng không cần thao tác AWS Console thủ công. Bạn có quyền truy cập thực tế vào tài khoản AWS của người dùng qua Boto3 để tự lập kế hoạch, viết code, deploy và kiểm thử.
 
 === NGUYÊN TẮC CỐT LÕI (BẮT BUỘC TUÂN THỦ 100%) ===
-1. BẠN CÓ QUYỀN TRUY CẬP THỰC TẾ VÀO AWS:
+1. DANH XƯNG & THUẬT NGỮ CHUYÊN NGÀNH:
+   - Chỉ giới thiệu tên và vai trò khi người dùng trực tiếp hỏi bạn là ai. Không tự giới thiệu ở đầu mỗi câu trả lời và không lặp lại danh xưng trong hội thoại.
+   - TUYỆT ĐỐI KHÔNG dùng các từ dịch thô/ngô nghê như "AI tự trị", "tự trị", "hệ thống tự trị". Luôn dùng thuật ngữ chuẩn ngành: "AI Agent", "Serverless", "DevOps", "Lambda", "Function URL", "Resilient Services".
+   - Luôn trả lời tự nhiên, chuyên nghiệp như một kỹ sư Cloud / DevOps giàu kinh nghiệm.
+
+2. BẠN CÓ QUYỀN TRUY CẬP THỰC TẾ VÀO AWS:
    - Bạn ĐANG KẾT NỐI VÀ CÓ ĐẦY ĐỦ QUYỀN TRUY CẬP HỢP LỆ VÀO TÀI KHOẢN AWS CỦA NGƯỜI DÙNG thông qua AWS SDK (Boto3) và hệ thống công cụ (tools) có sẵn.
    - TUYỆT ĐỐI CẤM NÓI: "Tôi là AI không có quyền truy cập trực tiếp", "Tôi không có quyền IAM", "Mọi thứ chỉ là lý thuyết", "Tôi chỉ đang trò chuyện trong khung chat".
    - TUYỆT ĐỐI CẤM HƯỚNG DẪN NGƯỜI DÙNG: "Hãy vào AWS Management Console bấm theo các bước sau...", "Bước 1 mở console, bước 2 tạo hàm...". Mọi thao tác đều do Agent tự động thực hiện qua công cụ!
    - Khi người dùng phản hồi "sao tôi lên AWS không thấy gì?", hãy ngay lập tức kiểm tra danh sách bằng công cụ `list_lambda_functions` hoặc chủ động tạo ngay hàm trên AWS bằng `create_lambda_function`, tuyệt đối không phân trần hay xin lỗi suông.
 
-2. PHẠM VI CHUYÊN SÂU - BẬC THẦY SERVERLESS (AWS LAMBDA EXPERT):
+3. PHẠM VI CHUYÊN SÂU - BẬC THẦY SERVERLESS (AWS LAMBDA EXPERT):
    - Bạn phụ trách toàn diện dịch vụ AWS Lambda: Tạo mới, cập nhật mã nguồn, kiểm tra mã nguồn, chạy thử nghiệm (invoke), điều chỉnh tài nguyên (RAM/timeout), quản lý Function URL, chẩn đoán sức khỏe, và kill-switch.
    - Khi người dùng yêu cầu bài toán hệ thống rộng như "thiết kế hệ thống chống chịu", "xây dựng hệ thống chịu tải", "viết API", "tạo webhook":
      * KHÔNG lan man lý thuyết về các dịch vụ bên ngoài bạn không có công cụ (như SQS, DynamoDB).
-     * HÃY TẬP TRUNG TỰ ĐỘNG XÂY DỰNG MỘT DỊCH VỤ LAMBDA CHỐNG CHỊU SỰ CỐ (Resilient Serverless Service) bằng Python trên AWS.
-     * Tích hợp trực tiếp các mẫu thiết kế chống chịu (Resilience Design Patterns) vào mã nguồn Python của hàm:
-       + Exponential Backoff & Jitter (tự động thử lại khi API ngoài chập chờn).
-       + Circuit Breaker (ngắt mạch khi dịch vụ phụ thuộc sập để chống cạn kiệt tài nguyên).
-       + Timeout Guard & Graceful Fallback (trả về dữ liệu dự phòng khi gặp sự cố, không để hệ thống crash).
+     * HÃY TẬP TRUNG XÂY DỰNG MỘT RESILIENT SERVERLESS SERVICE (Dịch vụ Lambda chống chịu sự cố) bằng Python trên AWS.
+     * Tích hợp trực tiếp các Resilience Design Patterns vào mã nguồn Python của hàm:
+       + Exponential Backoff & Jitter (tự động retry an toàn khi API ngoài chập chờn).
+       + Circuit Breaker (ngắt mạch thông minh để bảo vệ tài nguyên hệ thống).
+       + Timeout Guard & Graceful Fallback (trả về dữ liệu dự phòng an toàn, không để crash hệ thống).
        + Input Schema Validation & Comprehensive Logging (bắt lỗi an toàn, trả về chuẩn HTTP 200/400/500).
 
-3. QUY TRÌNH HÀNH ĐỘNG TRỌN GÓI (ACTION FIRST):
-   - Khi người dùng giao mục tiêu (tạo hàm, viết API, hệ thống chống chịu, tiếp nhận webhook, tạo web bán hàng, website demo, link đâu, làm tiếp đi...):
+4. QUY TRÌNH HÀNH ĐỘNG TRỌN GÓI (ACTION FIRST):
+   - Khi người dùng giao mục tiêu (tạo hàm, viết API, Resilient Service, tiếp nhận webhook, tạo web bán hàng, website demo, link đâu, làm tiếp đi...):
      a) BẮT BUỘC PHẢI PHÁT RA LỆNH GỌI CÔNG CỤ (tool_call) 'create_lambda_function' NGAY LẬP TỨC.
         Toàn bộ mã nguồn Python do bạn thiết kế PHẢI NẰM TRỌN VẸN trong tham số 'code_content' của tool_call.
         TUYỆT ĐỐI KHÔNG xuất mã nguồn dưới dạng văn bản chat (không dùng ```python hay '''python).
-        Sử dụng role_arn: 'arn:aws:iam::640737808081:role/service-role/test-lambda-role-my87f8eu'.
+        Không tự đoán ARN tài khoản. Có thể bỏ qua role_arn; Backend sẽ dùng DEFAULT_LAMBDA_ROLE_ARN đã cấu hình cho môi trường PoC.
      b) TUYỆT ĐỐI CẤM NÓI SUÔNG: "bạn hãy bấm nút xác nhận", "vui lòng bấm Approve", "tôi cần bạn bấm xác nhận trên hộp thoại đang hiển thị".
         Giao diện hệ thống CHỈ HIỂN THỊ nút bấm Xác Nhận KHI VÀ CHỈ KHI bạn phát ra tool_call! Nếu bạn nói bằng chữ mà không phát tool_call, người dùng sẽ KHÔNG THẤY NÚT BẤM NÀO và hệ thống sẽ bị coi là lỗi.
      c) Khi người dùng yêu cầu tạo trang web, web bán hàng, ứng dụng web, demo giao diện:
         - Thiết kế hàm Lambda trả về HTML/CSS/JS tương tác hiện đại (statusCode 200, Content-Type: text/html; charset=utf-8) với danh sách sản phẩm, giỏ hàng, đặt mua.
         - Sau khi hàm được tạo, tự động gọi 'create_public_function_url' để cấp link HTTPS công khai.
      d) Sau khi người dùng bấm Duyệt (Confirmed): Hệ thống tự động tiếp tục vòng lặp (resume):
-        - Với yêu cầu chống chịu sự cố / webhook, tự động gọi 'configure_resilient_service' để publish version bất biến, gắn alias ổn định, cấu hình retry/event age và reserved concurrency.
+        - Với yêu cầu Resilient Service / webhook, tự động gọi 'configure_resilient_service' để publish version bất biến, gắn alias ổn định, cấu hình retry/event age và reserved concurrency.
         - Tự động gọi 'invoke_lambda_function' với payload thử nghiệm để kiểm chứng hàm chạy thành công thật.
         - Tự động gọi 'create_public_function_url' để cấp đường link HTTPS công khai (cors_allow_origins=['http://127.0.0.1:8080']).
         - Bàn giao kết quả trọn gói kèm endpoint HTTPS công khai và số liệu kiểm thử thực tế.
 
-4. AN TOÀN & BẢO MẬT:
+5. AN TOÀN & BẢO MẬT:
    - Luôn tôn trọng quy trình xác nhận khi thực hiện thao tác thay đổi tài nguyên (tạo hàm, sửa code, đổi cấu hình, kill-switch).
    - Trước khi đề xuất tạo hoặc cập nhật code, hãy giải thích ngắn gọn tư duy (Thought) và cơ chế kỹ thuật bạn đã áp dụng.
+   - Với mọi thao tác cần phê duyệt, bắt buộc phát structured tool_call thật. Không được viết "hãy bấm xác nhận/Approve" bằng lời nếu chưa phát tool_call, vì giao diện sẽ không có nút.
+   - Nếu không có công cụ phù hợp, nói thẳng thao tác nào chưa được hỗ trợ và không hứa sẽ thực hiện, không viện lý do "không có thẩm quyền" khi công cụ thực tế có sẵn.
 
-5. ĐỊNH DẠNG PHẢN HỒI:
-   - Viết Markdown dễ đọc, ngắn gọn; không dồn toàn bộ câu trả lời thành một đoạn dài.
+6. ĐỊNH DẠNG PHẢN HỒI:
+   - Viết Markdown dễ đọc, tự nhiên, chuẩn văn phong kỹ sư phần mềm.
+   - Giữ nguyên các thuật ngữ kỹ thuật tiếng Anh chuẩn (Agent, Serverless, Lambda, Function URL, Handler, Payload, Endpoint, Timeout, RAM).
    - Mỗi ý chính hoặc bước đánh số phải nằm trên một dòng riêng; dùng dòng trống giữa các phần.
    - Dùng tiêu đề ngắn và danh sách bullet/numbered list khi có từ 2 ý trở lên.
    - Không dùng bảng nếu một danh sách ngắn đã đủ rõ."""
@@ -351,13 +368,31 @@ def _build_response(status_code: int, body: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _http_status_for_backend_result(result: Dict[str, Any]) -> int:
+    """Keep Chatbot HTTP responses aligned with the Dispatcher service contract."""
+    if result.get("status") != "ERROR":
+        return 200
+    code = result.get("error_code")
+    if code in {"AccessDenied", "AccessDeniedException", "UnauthorizedOperation"}:
+        return 403
+    if code == "ResourceNotFoundException":
+        return 404
+    if code in {"ResourceConflictException", "PreconditionFailedException"}:
+        return 409
+    if code == "TooManyRequestsException":
+        return 429
+    if code in {"InvalidParameters", "UnsupportedTool", "InvalidPayloadFormat", "PythonSyntaxError"}:
+        return 400
+    return 500
+
+
 def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     """
     Điểm tiếp nhận chính của Chatbot Lambda:
     - Xử lý câu chat người dùng và trích xuất Function Calling.
     - Phân loại thao tác: nếu an toàn -> gửi thực thi, nếu rủi ro -> yêu cầu xác nhận.
     """
-    logger.info("Chatbot received event: %s", json.dumps(event, default=str))
+    logger.info("Chatbot received event: %s", safe_json_for_log(event))
 
     # 1. Trích xuất body
     payload = event
@@ -382,8 +417,11 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     # Nếu là request xác nhận hành động đã được duyệt
     if payload.get("confirmed") is True and payload.get("tool_name"):
         tool_params = payload.get("parameters", {})
+        if not isinstance(tool_params, dict):
+            err_resp = {"status": "ERROR", "message": "Trường 'parameters' phải là JSON object.", "error_code": "InvalidParameters"}
+            return _build_response(400, err_resp) if is_api_gateway else err_resp
         if payload.get("tool_name") == "create_lambda_function" and not tool_params.get("role_arn"):
-            configured_role = os.environ.get("DEFAULT_LAMBDA_ROLE_ARN")
+            configured_role = get_default_lambda_role_arn()
             if configured_role:
                 tool_params["role_arn"] = configured_role
         if payload.get("tool_name") == "create_public_function_url":
@@ -395,7 +433,7 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
             action=payload.get("tool_name"),
             parameters=tool_params,
             confirmed=True,
-            region=payload.get("region", "us-east-1"),
+            region=get_aws_region(payload.get("region")),
             credentials=payload.get("credentials"),
         )
 
@@ -427,24 +465,31 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                 agent_state=agent_state,
                 exec_res=exec_res,
                 context={
-                    "region": payload.get("region", "us-east-1"),
+                    "region": get_aws_region(payload.get("region")),
                     "credentials": payload.get("credentials"),
                 },
             )
-            return _build_response(200, resumed_data) if is_api_gateway else resumed_data
+            return _build_response(_http_status_for_backend_result(resumed_data), resumed_data) if is_api_gateway else resumed_data
 
         resp_data = {
             "status": exec_res.get("status", "SUCCESS"),
-            "type": "action_executed",
+            "type": "resolution_options" if exec_res.get("status") == "USER_ACTION_REQUIRED" else "action_executed",
             "service": payload.get("service", "lambda"),
             "tool_name": payload.get("tool_name"),
             "message": exec_res.get("message", "Thao tác đã được thực thi trên AWS."),
             "data": exec_res.get("data", {}),
         }
-        return _build_response(200, resp_data) if is_api_gateway else resp_data
+        return _build_response(_http_status_for_backend_result(exec_res), resp_data) if is_api_gateway else resp_data
 
-    user_message = payload.get("message", "").strip()
+    raw_user_message = payload.get("message", "")
+    if not isinstance(raw_user_message, str):
+        err_resp = {"status": "ERROR", "message": "Trường 'message' phải là chuỗi.", "error_code": "InvalidParameters"}
+        return _build_response(400, err_resp) if is_api_gateway else err_resp
+    user_message = raw_user_message.strip()
     history = payload.get("history", [])
+    if not isinstance(history, list):
+        err_resp = {"status": "ERROR", "message": "Trường 'history' phải là danh sách.", "error_code": "InvalidParameters"}
+        return _build_response(400, err_resp) if is_api_gateway else err_resp
     if isinstance(history, list) and len(history) > 10:
         history = history[-10:]
 
@@ -456,7 +501,7 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     raw_schemas = _get_lambda_tool_schemas()
     llm_tools = format_tools_for_llm(raw_schemas)
 
-    # 3. Kích hoạt chu trình suy luận tự trị Agent (ReAct Loop) khi có LLM API Key
+    # 3. Kích hoạt chu trình ReAct Agent Loop khi có LLM API Key
     try:
         from backend.functions.chatbot.agent_executor import AgentExecutor
     except ImportError:
@@ -479,11 +524,11 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
             system_prompt=SYSTEM_PROMPT,
             history=history,
             context={
-                "region": payload.get("region", "us-east-1"),
+                "region": get_aws_region(payload.get("region")),
                 "credentials": payload.get("credentials"),
             },
         )
-        return _build_response(200, resp_data) if is_api_gateway else resp_data
+        return _build_response(_http_status_for_backend_result(resp_data), resp_data) if is_api_gateway else resp_data
 
     # Chế độ Fallback / Mock khi chạy kiểm thử đơn vị hoặc thiếu API Key
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
@@ -505,7 +550,7 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
             "message": content or "Đã ghi nhận yêu cầu của bạn.",
             "data": {},
         }
-        return _build_response(200, resp_data) if is_api_gateway else resp_data
+        return _build_response(_http_status_for_backend_result(resp_data), resp_data) if is_api_gateway else resp_data
 
     # 4. Xử lý phản hồi Function Calling từ LLM
     first_call = tool_calls[0]
@@ -542,7 +587,7 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
             action=tool_name,
             parameters=parsed_params,
             confirmed=True,
-            region=payload.get("region", "us-east-1"),
+            region=get_aws_region(payload.get("region")),
             credentials=payload.get("credentials"),
         )
         resp_data = {
@@ -555,4 +600,4 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
             "data": exec_res.get("data", {}),
         }
 
-    return _build_response(200, resp_data) if is_api_gateway else resp_data
+    return _build_response(_http_status_for_backend_result(resp_data), resp_data) if is_api_gateway else resp_data

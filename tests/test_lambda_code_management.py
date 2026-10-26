@@ -4,6 +4,7 @@ Kiểm thử tính năng tự động tạo, đọc và cập nhật mã nguồn
 """
 
 import io
+import hashlib
 import unittest
 import zipfile
 from unittest.mock import MagicMock, patch
@@ -76,9 +77,12 @@ class TestLambdaCodeManagement(unittest.TestCase):
         self.assertEqual(res["status"], "SUCCESS")
         self.assertEqual(res["data"]["function_name"], "new-calc")
         self.assertEqual(res["data"]["memory_mb"], 256)
+        self.assertNotIn("code_content", res["data"])
+        self.assertEqual(len(res["data"]["code_sha256"]), 64)
+        self.assertTrue(res["data"]["created"])
         self.service.client.create_function.assert_called_once()
 
-    def test_create_lambda_function_is_idempotent_when_function_exists(self):
+    def test_create_lambda_function_reports_conflict_when_existing_deployment_differs(self):
         self.service.client.create_function.side_effect = ClientError(
             {"Error": {"Code": "ResourceConflictException", "Message": "already exists"}},
             "CreateFunction",
@@ -90,11 +94,63 @@ class TestLambdaCodeManagement(unittest.TestCase):
         res = self.service.create_lambda_function(
             "resilient-api", code, role_arn="arn:aws:iam::12345:role/sample-role"
         )
-        self.assertEqual(res["status"], "SUCCESS")
+        self.assertEqual(res["status"], "USER_ACTION_REQUIRED")
         self.assertTrue(res["data"]["already_existed"])
+        self.assertFalse(res["data"]["same_deployment"])
+        self.assertIn("update_existing", res["data"]["available_actions"])
+        self.assertIn("use_existing", res["data"]["available_actions"])
+        self.assertEqual(len(res["data"]["resolution_options"]), 4)
+
+    def test_create_lambda_function_is_no_change_only_for_same_managed_deployment(self):
+        self.service.client.create_function.side_effect = ClientError(
+            {"Error": {"Code": "ResourceConflictException", "Message": "already exists"}},
+            "CreateFunction",
+        )
+        code = "def lambda_handler(event, context):\n    return {}"
+        source_hash = hashlib.sha256(code.encode("utf-8")).hexdigest()
+        self.service.client.get_function_configuration.return_value = {
+            "FunctionName": "resilient-api", "Runtime": "python3.12",
+            "Handler": "lambda_function.lambda_handler", "MemorySize": 128,
+            "Timeout": 15, "Description": f"demo [satibot-sha256:{source_hash}]",
+            "Role": "arn:aws:iam::12345:role/sample-role",
+        }
+        res = self.service.create_lambda_function(
+            "resilient-api", code, role_arn="arn:aws:iam::12345:role/sample-role"
+        )
+        self.assertEqual(res["status"], "SUCCESS")
+        self.assertTrue(res["data"]["no_change"])
+
+    def test_name_suggestion_skips_existing_versions_without_v2_v2(self):
+        def get_configuration(*, FunctionName):
+            if FunctionName == "sati-store-web-v2":
+                return {"FunctionName": FunctionName}
+            if FunctionName == "sati-store-web-v3":
+                raise ClientError(
+                    {"Error": {"Code": "ResourceNotFoundException", "Message": "not found"}},
+                    "GetFunctionConfiguration",
+                )
+            return {"FunctionName": FunctionName}
+
+        self.service.client.get_function_configuration.side_effect = get_configuration
+        suggestion = self.service._suggest_available_function_name("sati-store-web")
+        self.assertEqual(suggestion, "sati-store-web-v3")
+
+        self.service.client.get_function_configuration.reset_mock(side_effect=True)
+        self.service.client.get_function_configuration.side_effect = get_configuration
+        suggestion_from_versioned_name = self.service._suggest_available_function_name("sati-store-web-v2")
+        self.assertEqual(suggestion_from_versioned_name, "sati-store-web-v3")
 
     def test_update_lambda_code_success(self):
         new_code = "def lambda_handler(event, context):\n    return {'status': 'updated'}"
+        self.service.client.get_function_configuration.side_effect = [
+            {
+                "FunctionName": "test-lambda", "Runtime": "python3.12",
+                "Handler": "lambda_function.lambda_handler", "RevisionId": "rev-1",
+                "Description": "demo",
+            },
+            {"FunctionName": "test-lambda", "Runtime": "python3.12", "RevisionId": "rev-2", "LastUpdateStatus": "Successful"},
+            {"FunctionName": "test-lambda", "Runtime": "python3.12", "RevisionId": "rev-3", "LastUpdateStatus": "Successful"},
+        ]
         self.service.client.update_function_code.return_value = {
             "FunctionName": "test-lambda",
             "FunctionArn": "arn:aws:lambda:us-east-1:12345:function:test-lambda",
@@ -106,6 +162,8 @@ class TestLambdaCodeManagement(unittest.TestCase):
         res = self.service.update_lambda_code("test-lambda", new_code)
         self.assertEqual(res["status"], "SUCCESS")
         self.assertEqual(res["data"]["function_name"], "test-lambda")
+        self.assertNotIn("code_content", res["data"])
+        self.assertEqual(len(res["data"]["code_sha256"]), 64)
         self.service.client.update_function_code.assert_called_once()
 
     def test_update_lambda_code_rejects_zip_slip_filename(self):

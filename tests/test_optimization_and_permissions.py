@@ -35,10 +35,14 @@ class TestOptimizationAndColdStart(unittest.TestCase):
         self.assertEqual(key_default, "default:us-east-1")
 
         key_ak = _compute_cache_key({"AccessKeyId": "AKIA123"}, "us-west-2")
-        self.assertEqual(key_ak, "key:AKIA123:us-west-2")
+        self.assertTrue(key_ak.startswith("credential:"))
+        self.assertTrue(key_ak.endswith(":us-west-2"))
+        self.assertNotIn("AKIA123", key_ak)
 
         key_role = _compute_cache_key({"RoleArn": "arn:aws:iam::123:role/test", "ExternalId": "ext1"}, "us-east-1")
-        self.assertEqual(key_role, "role:arn:aws:iam::123:role/test:ext1:us-east-1")
+        self.assertTrue(key_role.startswith("credential:"))
+        self.assertTrue(key_role.endswith(":us-east-1"))
+        self.assertNotIn("ext1", key_role)
 
     @patch("lambda_service.LambdaService")
     def test_global_context_caching_reuses_instance(self, mock_service_cls):

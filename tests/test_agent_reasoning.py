@@ -1,6 +1,6 @@
 """
 Author: Trịnh Thiên Quang
-Kiểm thử chu trình suy luận tự trị (ReAct Agent Loop) và điều phối công cụ đa bước.
+Kiểm thử chu trình ReAct Agent Loop và điều phối công cụ đa bước.
 """
 
 import json
