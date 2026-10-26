@@ -216,6 +216,11 @@ class AgentExecutor:
                     },
                 }
 
+        # On follow-ups, bare code is not evidence that a NEW Lambda is wanted.
+        # Ask the model for a structured create/update choice instead of guessing.
+        if messages and any(m.get("role") == "assistant" for m in messages):
+            return None
+
         # 3. Khôi phục từ khối code Python trực tiếp
         patterns = [
             r"```(?:python)?\s*\n?(?P<code>.*?)(?:```|$)",
@@ -235,19 +240,6 @@ class AgentExecutor:
             m = re.search(r"(?:^|\n)(?P<code>(?:import\s+|from\s+|def\s+).*)$", content, re.DOTALL)
             if m:
                 code = m.group("code").strip()
-
-        # Nếu tin nhắn hiện tại không có code nhưng có trong lịch sử hội thoại
-        if not code and messages:
-            for past_m in reversed(messages):
-                past_content = past_m.get("content", "")
-                if isinstance(past_content, str) and ("lambda_handler" in past_content or "def handler(" in past_content):
-                    for pat in patterns:
-                        m = re.search(pat, past_content, re.DOTALL | re.IGNORECASE)
-                        if m and len(m.group("code").strip()) > 20:
-                            code = m.group("code").strip()
-                            break
-                    if code:
-                        break
 
         if not code:
             return None
@@ -445,6 +437,30 @@ class AgentExecutor:
 
         for index, tool_call in enumerate(tool_calls):
             tool_name, parsed_params, validation_error = self._parse_tool_call(tool_call)
+            if not validation_error and tool_name == "update_lambda_code":
+                source = None
+                for entry in reversed(messages):
+                    if entry.get("role") != "tool" or entry.get("name") != "get_lambda_source_code":
+                        continue
+                    try:
+                        observed = json.loads(entry.get("content", "{}"))
+                    except (ValueError, TypeError):
+                        continue
+                    if observed.get("function_name") == parsed_params.get("function_name"):
+                        source = observed
+                        break
+                if source is None or not isinstance(source.get("main_code"), str):
+                    validation_error = (
+                        "Phải gọi get_lambda_source_code cho đúng function_name và đọc source đầy đủ "
+                        "trước khi đề xuất update_lambda_code. Không viết lại website từ trí nhớ."
+                    )
+                else:
+                    filename = parsed_params.get("filename")
+                    existing = source["main_code"]
+                    if filename:
+                        existing = next((f.get("content") for f in source.get("files", []) if f.get("filename") == filename), existing)
+                    if parsed_params.get("code_content", "").strip() == existing.strip():
+                        validation_error = "Code đề xuất giống hệt source hiện tại. Hãy thực hiện thay đổi theo yêu cầu mới nhất trước khi xin phê duyệt."
             call_id = tool_call.get("id", f"call_{iteration}_{index}") if isinstance(tool_call, dict) else f"call_{iteration}_{index}"
             if validation_error:
                 observation = {"status": "ERROR", "error_code": "InvalidToolCall", "message": validation_error}
@@ -454,6 +470,7 @@ class AgentExecutor:
                     "action": tool_name or "unknown",
                     "parameters": parsed_params or {},
                     "observation": validation_error,
+                    "status": "ERROR",
                 })
                 messages.append({"role": "tool", "tool_call_id": call_id, "name": tool_name or "unknown", "content": self._serialize_observation(observation)})
                 continue
@@ -505,9 +522,20 @@ class AgentExecutor:
             })
             messages.append({
                 "role": "tool", "tool_call_id": call_id, "name": tool_name,
-                "content": self._serialize_observation(exec_res.get("data", exec_res)),
+                "content": self._source_observation(exec_res) if tool_name == "get_lambda_source_code" else self._serialize_observation(exec_res),
             })
         return None
+
+    def _source_observation(self, result: Dict[str, Any]) -> str:
+        """Never silently truncate source: the model would overwrite unseen code."""
+        if result.get("status") != "SUCCESS":
+            return self._serialize_observation(result)
+        data = result.get("data", {})
+        serialized = json.dumps(data, ensure_ascii=False, default=str)
+        if len(serialized) > 200000:
+            return json.dumps({"status": "ERROR", "error_code": "SourceTooLarge", "message":
+                "Source vượt giới hạn ngữ cảnh an toàn. Không được cập nhật từ bản rút gọn; cần chia nhỏ công cụ chỉnh sửa."}, ensure_ascii=False)
+        return serialized
 
     def _execute_loop(
         self,
@@ -520,7 +548,7 @@ class AgentExecutor:
     ) -> Dict[str, Any]:
         """Vòng lặp cốt lõi: Gửi LLM -> Thực thi -> Đọc Observation -> Nghĩ tiếp."""
         original_goal = next(
-            (item.get("content", "") for item in messages if item.get("role") == "user"),
+            (item.get("content", "") for item in reversed(messages) if item.get("role") == "user"),
             "",
         )
         for iteration in range(start_iteration, self.max_iterations):

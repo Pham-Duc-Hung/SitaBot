@@ -7,12 +7,16 @@
 const $ = s => document.querySelector(s);
 const $$ = s => document.querySelectorAll(s);
 
+const VALID_MODELS = ["gemini-2.5-flash", "gemini-3.1-flash-lite", "gemini-3.5-flash-lite"];
+const initialModel = localStorage.getItem("satibot.model");
+
 const state = {
   history: [],
   pending: null,
   isBusy: false,
   controller: null,
   autoApproval: true,
+  selectedModel: VALID_MODELS.includes(initialModel) ? initialModel : "gemini-2.5-flash",
   sessions: [],
   currentSessionId: null
 };
@@ -34,7 +38,10 @@ const els = {
   promptInput: $("#promptInput"),
   sendBtn: $("#sendBtn"),
   approvalToggle: $("#approvalToggle"),
-  composerModelText: $("#composerModelText"),
+  modelPickerContainer: $("#modelPickerContainer"),
+  modelPickerBtn: $("#modelPickerBtn"),
+  currentModelLabel: $("#currentModelLabel"),
+  modelDropdownMenu: $("#modelDropdownMenu"),
   topModelText: $("#topModelText")
 };
 
@@ -199,7 +206,7 @@ function streamText(targetEl, text, onDone) {
 /**
  * Creates an interactive collapsible log item (Image 2).
  */
-function createLogItem(actionTitle, detailData) {
+function createLogItem(actionTitle, detailData, prefix = "Ran ") {
   const item = document.createElement("div");
   item.className = "log-item";
 
@@ -208,7 +215,7 @@ function createLogItem(actionTitle, detailData) {
 
   const title = document.createElement("span");
   title.className = "log-title";
-  title.textContent = `Ran ${actionTitle}`;
+  title.textContent = `${prefix}${actionTitle}`;
 
   const chevron = document.createElement("span");
   chevron.className = "log-chevron";
@@ -362,8 +369,10 @@ function setBusy(val) {
   state.isBusy = val;
   els.sendBtn.disabled = val;
   els.promptInput.disabled = val;
+  if (els.modelPickerBtn) els.modelPickerBtn.disabled = val;
   if (val) {
     els.sendBtn.classList.remove("active");
+    toggleModelMenu(false);
   } else {
     updateSendBtnState();
   }
@@ -384,7 +393,7 @@ async function fetchChat(payload) {
     const response = await fetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
+      body: JSON.stringify({ ...payload, workspace: currentSession()?.workspace || {} }),
       signal: state.controller.signal
     });
     clearTimeout(timeout);
@@ -396,6 +405,10 @@ async function fetchChat(payload) {
       throw new Error(`Server trả HTTP ${response.status} không đúng chuẩn JSON.`);
     }
 
+    if (data.workspace && currentSession()) {
+      currentSession().workspace = data.workspace;
+      saveSessions();
+    }
     if (!response.ok) {
       throw new Error(data.message || `Lỗi máy chủ: HTTP ${response.status}`);
     }
@@ -461,27 +474,34 @@ async function handleSendMessage() {
   els.conversationFeed.append(agentRow);
   els.chatScroll.scrollTop = els.chatScroll.scrollHeight;
 
-  // Dynamic log progression while thinking
-  const simulatedSteps = [
-    { title: "check health on port 8080", data: { port: 8080, status: "OK", tools: 11 } },
-    { title: "inspect AWS Lambda environment & credentials", data: { region: "us-east-1", service: "lambda" } },
-    { title: "plan execution steps & code architecture", data: { runtime: "python3.12", framework: "serverless" } }
-  ];
-
-  let simIdx = 0;
+  // Honest live telemetry: this is the real in-flight operation. Tool steps are
+  // rendered only when the backend confirms that they actually ran.
+  const requestStartedAt = performance.now();
+  const requestLog = createLogItem(
+    "Agent is processing your request (0s)",
+    { model: state.selectedModel, status: "request_in_flight" },
+    ""
+  );
+  logsBox.insertBefore(requestLog, workingStep);
   const progressTimer = setInterval(() => {
-    if (simIdx < simulatedSteps.length) {
-      const step = simulatedSteps[simIdx];
-      const item = createLogItem(step.title, step.data);
-      logsBox.insertBefore(item, workingStep);
-      simIdx++;
-      els.chatScroll.scrollTop = els.chatScroll.scrollHeight;
-    }
-  }, 2200);
+    const elapsedSeconds = Math.floor((performance.now() - requestStartedAt) / 1000);
+    const title = requestLog.querySelector(".log-title");
+    if (title) title.textContent = `Agent is processing your request (${elapsedSeconds}s)`;
+  }, 1000);
 
   try {
-    const res = await fetchChat({ message: text, history: state.history });
+    const res = await fetchChat({ message: text, history: state.history, model: state.selectedModel });
     clearInterval(progressTimer);
+
+    const elapsedMs = Math.round(performance.now() - requestStartedAt);
+    const requestTitle = requestLog.querySelector(".log-title");
+    const requestDetail = requestLog.querySelector(".log-detail");
+    if (requestTitle) requestTitle.textContent = `Response ready in ${(elapsedMs / 1000).toFixed(1)}s`;
+    if (requestDetail) requestDetail.textContent = JSON.stringify({
+      model: state.selectedModel,
+      elapsed_ms: elapsedMs,
+      status: res.status || "SUCCESS"
+    }, null, 2);
 
     // If real steps returned from backend, replace or append them
     if (res.steps && res.steps.length > 0) {
@@ -534,6 +554,9 @@ async function handleSendMessage() {
     setBusy(false);
   } catch (err) {
     clearInterval(progressTimer);
+    const elapsedMs = Math.round(performance.now() - requestStartedAt);
+    const requestTitle = requestLog.querySelector(".log-title");
+    if (requestTitle) requestTitle.textContent = `Request failed after ${(elapsedMs / 1000).toFixed(1)}s`;
     workingStep.remove();
     textContainer.innerHTML = `<span style="color:#ef4444;font-weight:600;">Lỗi: ${err.message}</span>`;
     storeMessage("assistant", `Lỗi: ${err.message}`);
@@ -546,6 +569,7 @@ function handleConfirmation(res, agentRow, originalPrompt) {
     tool_name: res.tool_name,
     parameters: res.parameters || {},
     agent_state: res.agent_state,
+    model: state.selectedModel,
     originalPrompt: originalPrompt
   };
 
@@ -583,7 +607,8 @@ function handleConfirmation(res, agentRow, originalPrompt) {
         service: "lambda",
         tool_name: approvedAction.tool_name,
         parameters: approvedAction.parameters,
-        agent_state: approvedAction.agent_state
+        agent_state: approvedAction.agent_state,
+        model: approvedAction.model || state.selectedModel
       });
 
       workingStep.remove();
@@ -724,7 +749,8 @@ function handleResolutionOptions(res, agentRow, originalPrompt, pendingAction) {
         service: "lambda",
         tool_name: toolName,
         parameters,
-        agent_state: pendingAction.agent_state
+        agent_state: pendingAction.agent_state,
+        model: pendingAction.model || state.selectedModel
       });
       workingStep.remove();
       card.remove();
@@ -799,12 +825,38 @@ async function loadHealth() {
     els.awsStatusPill.textContent = `☁️ ${data.region || "us-east-1"}`;
     els.toolsPill.textContent = `⚡ ${data.tools_loaded || 11} Tools`;
     els.topModelText.textContent = "SatiBot";
-    if (data.model) {
-      els.composerModelText.textContent = data.model;
+    if (data.model && !localStorage.getItem("satibot.model") && VALID_MODELS.includes(data.model)) {
+      setSelectedModel(data.model);
     }
   } catch {
     els.statusBadge.textContent = "Backend Offline";
   }
+}
+
+function setSelectedModel(model) {
+  if (!model || !VALID_MODELS.includes(model)) return;
+  state.selectedModel = model;
+  localStorage.setItem("satibot.model", model);
+  if (els.currentModelLabel) {
+    els.currentModelLabel.textContent = model;
+  }
+  if (els.modelDropdownMenu) {
+    els.modelDropdownMenu.querySelectorAll(".model-option").forEach(opt => {
+      const isSelected = opt.getAttribute("data-value") === model;
+      opt.classList.toggle("selected", isSelected);
+      opt.setAttribute("aria-selected", isSelected ? "true" : "false");
+    });
+  }
+}
+
+function toggleModelMenu(forceOpen) {
+  if (!els.modelDropdownMenu || !els.modelPickerBtn) return;
+  const willOpen = typeof forceOpen === "boolean"
+    ? forceOpen
+    : !els.modelDropdownMenu.classList.contains("open");
+  els.modelDropdownMenu.classList.toggle("open", willOpen);
+  els.modelPickerBtn.classList.toggle("open", willOpen);
+  els.modelPickerBtn.setAttribute("aria-expanded", willOpen ? "true" : "false");
 }
 
 // Event Listeners
@@ -825,6 +877,47 @@ els.promptInput.addEventListener("keydown", e => {
 
 els.sendBtn.onclick = handleSendMessage;
 els.newChatBtn.onclick = resetChat;
+
+if (els.modelPickerBtn) {
+  els.modelPickerBtn.addEventListener("click", e => {
+    e.stopPropagation();
+    if (!state.isBusy) {
+      toggleModelMenu();
+    }
+  });
+}
+
+if (els.modelDropdownMenu) {
+  els.modelDropdownMenu.querySelectorAll(".model-option").forEach(opt => {
+    const choose = e => {
+      e.stopPropagation();
+      const val = opt.getAttribute("data-value");
+      setSelectedModel(val);
+      toggleModelMenu(false);
+    };
+    opt.addEventListener("click", choose);
+    opt.addEventListener("keydown", e => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        choose(e);
+      }
+    });
+  });
+}
+
+document.addEventListener("click", e => {
+  if (els.modelPickerContainer && !els.modelPickerContainer.contains(e.target)) {
+    toggleModelMenu(false);
+  }
+});
+
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape") {
+    toggleModelMenu(false);
+  }
+});
+
+setSelectedModel(state.selectedModel);
 
 function toggleSidebar() {
   els.sidebar.classList.toggle("collapsed");

@@ -95,8 +95,33 @@
               </button>
             </div>
             <div class="controls-right">
-              <div class="model-select-pill" id="modelSelectPill">
-                <span id="composerModelText">gemini-2.5-flash</span>
+              <div class="model-picker-container" id="modelPickerContainer">
+                <button type="button" class="model-picker-btn" id="modelPickerBtn" aria-haspopup="listbox" aria-expanded="false" title="Chọn mô hình AI">
+                  <span class="model-picker-current" id="currentModelLabel">gemini-2.5-flash</span>
+                  <svg class="model-picker-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="6 9 12 15 18 9"></polyline>
+                  </svg>
+                </button>
+                <div class="model-dropdown-menu" id="modelDropdownMenu" role="listbox" tabindex="-1">
+                  <div class="model-option" data-value="gemini-2.5-flash" role="option" tabindex="0">
+                    <span class="model-option-name">gemini-2.5-flash</span>
+                    <svg class="model-check-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                      <polyline points="20 6 9 17 4 12"></polyline>
+                    </svg>
+                  </div>
+                  <div class="model-option" data-value="gemini-3.1-flash-lite" role="option" tabindex="0">
+                    <span class="model-option-name">gemini-3.1-flash-lite</span>
+                    <svg class="model-check-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                      <polyline points="20 6 9 17 4 12"></polyline>
+                    </svg>
+                  </div>
+                  <div class="model-option" data-value="gemini-3.5-flash-lite" role="option" tabindex="0">
+                    <span class="model-option-name">gemini-3.5-flash-lite</span>
+                    <svg class="model-check-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                      <polyline points="20 6 9 17 4 12"></polyline>
+                    </svg>
+                  </div>
+                </div>
               </div>
               <button class="send-btn" id="sendBtn" title="Gửi (Enter)" disabled>
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"></line><polyline points="5 12 12 5 19 12"></polyline></svg>

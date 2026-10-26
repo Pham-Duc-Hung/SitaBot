@@ -52,6 +52,30 @@ class TestChatbotFunctionCalling(unittest.TestCase):
         self.assertEqual(res["type"], "chat_reply")
         self.assertIn("SatiBot", res["message"])
 
+    @patch("backend.functions.chatbot.index.call_llm_api")
+    def test_selected_model_is_forwarded_to_llm(self, mock_llm):
+        mock_llm.return_value = {"content": "Xin chào", "tool_calls": None}
+
+        res = lambda_handler({"message": "hi", "model": "gemini-2.5-flash"}, None)
+
+        self.assertEqual(res["status"], "SUCCESS")
+        self.assertEqual(mock_llm.call_args.kwargs["model"], "gemini-2.5-flash")
+
+    def test_rejects_unsupported_model(self):
+        res = lambda_handler({"message": "hi", "model": "unknown-model"}, None)
+
+        self.assertEqual(res["status"], "ERROR")
+        self.assertEqual(res["error_code"], "InvalidParameters")
+
+    @patch("backend.functions.chatbot.index.call_llm_api")
+    def test_gemini_31_flash_lite_is_supported(self, mock_llm):
+        mock_llm.return_value = {"content": "OK", "tool_calls": None}
+
+        res = lambda_handler({"message": "hi", "model": "gemini-3.1-flash-lite"}, None)
+
+        self.assertEqual(res["status"], "SUCCESS")
+        self.assertEqual(mock_llm.call_args.kwargs["model"], "gemini-3.1-flash-lite")
+
     @patch("backend.functions.chatbot.index._dispatch_action")
     def test_list_lambda_intent_action_executed(self, mock_dispatch):
         mock_dispatch.return_value = {

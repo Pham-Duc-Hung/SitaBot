@@ -83,7 +83,7 @@ button, input, textarea {
 }
 
 /* ====================================================
-   LEFT SIDEBAR (Matches Codex / ChatGPT layout)
+   LEFT SIDEBAR 
    ==================================================== */
 .sidebar {
   width: 260px;
@@ -525,7 +525,7 @@ button, input, textarea {
 }
 
 /* ====================================================
-   COLLAPSIBLE TOOL LOG EXECUTION STEPS (Exact Image 2)
+   COLLAPSIBLE TOOL LOG EXECUTION STEPS
    ==================================================== */
 .agent-logs {
   display: flex;
@@ -591,7 +591,7 @@ button, input, textarea {
   white-space: pre-wrap;
 }
 
-/* Animated Working Indicator (Exact Image 2) */
+/* Animated Working Indicator */
 .log-working {
   padding: 6px 10px;
   font-size: 13.5px;
@@ -869,19 +869,134 @@ textarea#promptInput::placeholder {
   color: currentColor;
 }
 
-.model-select-pill {
+/* ====================================================
+   Model Picker Minimalist Dropdown
+   ==================================================== */
+.model-picker-container {
+  position: relative;
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  font-size: 13px;
-  color: var(--text-muted);
-  cursor: pointer;
-  padding: 4px 8px;
-  border-radius: 8px;
 }
 
-.model-select-pill:hover {
+.model-picker-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
   color: var(--text-soft);
+  font-size: 13px;
+  font-weight: 500;
+  padding: 6px 12px;
+  border-radius: 9999px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  user-select: none;
+}
+
+.model-picker-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #ffffff;
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.model-picker-btn.open {
+  background: rgba(255, 255, 255, 0.12);
+  color: #ffffff;
+  border-color: rgba(255, 255, 255, 0.28);
+}
+
+.model-picker-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.model-picker-current {
+  white-space: nowrap;
+}
+
+.model-picker-chevron {
+  color: var(--text-muted);
+  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.model-picker-btn.open .model-picker-chevron {
+  transform: rotate(180deg);
+  color: var(--text-soft);
+}
+
+/* Floating Dropdown Popover */
+.model-dropdown-menu {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  right: 0;
+  min-width: 210px;
+  background: #212121;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 14px;
+  padding: 6px;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.3);
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(6px) scale(0.98);
+  transform-origin: bottom right;
+  transition: opacity 0.15s ease, transform 0.15s cubic-bezier(0.16, 1, 0.3, 1), visibility 0.15s;
+  pointer-events: none;
+}
+
+.model-dropdown-menu.open {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0) scale(1);
+  pointer-events: auto;
+}
+
+.model-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 12px;
+  border-radius: 9px;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+  user-select: none;
+  color: var(--text-soft);
+  font-size: 13.5px;
+}
+
+.model-option:hover,
+.model-option:focus-visible {
+  background: rgba(255, 255, 255, 0.08);
+  color: #ffffff;
+  outline: none;
+}
+
+.model-option.selected {
+  color: #ffffff;
+  font-weight: 500;
+}
+
+.model-option-name {
+  white-space: nowrap;
+}
+
+.model-check-icon {
+  color: #ffffff;
+  flex-shrink: 0;
+  opacity: 0;
+  transform: scale(0.8);
+  transition: all 0.15s ease;
+}
+
+.model-option.selected .model-check-icon {
+  opacity: 1;
+  transform: scale(1);
 }
 
 .send-btn {

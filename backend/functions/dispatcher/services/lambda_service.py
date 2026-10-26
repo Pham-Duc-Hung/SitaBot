@@ -1595,7 +1595,7 @@ LAMBDA_TOOL_SCHEMAS = [
     },
     {
         "name": "create_lambda_function",
-        "description": "Tự động tạo mới một hàm AWS Lambda trên đám mây từ mã nguồn Python. Khi người dùng yêu cầu tạo hàm, viết logic mới, viết API hoặc xây dựng dịch vụ chống chịu, hãy sinh mã nguồn Python hoàn chỉnh và gọi công cụ này.",
+        "description": "Tạo tài nguyên Lambda mới từ mã Python hoàn chỉnh. Chỉ dùng khi người dùng muốn tài nguyên mới; khi chỉnh sửa website/API đã có, đọc get_lambda_source_code rồi dùng update_lambda_code cho cùng function_name, giữ endpoint hiện tại.",
         "requires_confirmation": True,
         "parameters": {
             "type": "object",
@@ -1614,7 +1614,7 @@ LAMBDA_TOOL_SCHEMAS = [
     },
     {
         "name": "update_lambda_code",
-        "description": "Sửa đổi và cập nhật trực tiếp mã nguồn Python mới lên một hàm AWS Lambda đã có.",
+        "description": "Chỉnh sửa Lambda/website/API hiện có, giữ nguyên tên và endpoint. Bắt buộc đọc get_lambda_source_code trước, giữ tính năng không liên quan và gửi code hoàn chỉnh với thay đổi thực sự theo yêu cầu mới nhất; sau đó kiểm thử.",
         "requires_confirmation": True,
         "parameters": {
             "type": "object",
