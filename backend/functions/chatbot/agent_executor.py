@@ -562,15 +562,42 @@ class AgentExecutor:
                             result["recovered_tool_call"] = True
                             return result
 
+                    # Nếu model đã phản hồi rõ ràng là yêu cầu nằm ngoài phạm vi hoặc từ chối hợp lệ (không ảo tưởng confirm)
+                    is_out_of_scope = isinstance(content, str) and any(
+                        p in content.lower() for p in (
+                            "chưa hỗ trợ", "không hỗ trợ", "ngoài phạm vi", "nằm ngoài phạm vi",
+                            "không có công cụ", "chưa có công cụ", "không thể tạo máy chủ",
+                            "không thể tạo ec2", "chưa hỗ trợ tạo ec2", "chưa hỗ trợ ec2",
+                            "tôi chưa hỗ trợ", "hiện tại tôi chưa", "chưa có tính năng",
+                            "nằm ngoài khả năng",
+                        )
+                    )
+                    if is_out_of_scope and not hallucinated_confirm:
+                        return {
+                            "status": "SUCCESS",
+                            "type": "agent_reply",
+                            "message": content,
+                            "steps": steps_log,
+                            "data": {"out_of_scope": True},
+                        }
+
                     if iteration == start_iteration:
                         available_names = sorted(self._schemas_by_name)
-                        retry_prompt = (
-                            "Bạn vừa mô tả một hành động nhưng chưa phát structured tool_call, vì vậy giao diện không thể tạo nút phê duyệt. "
-                            f"Hãy chọn đúng công cụ phù hợp với mục tiêu ban đầu trong danh sách: {', '.join(available_names)}. "
-                            "Nếu có công cụ phù hợp, bắt buộc gọi công cụ đó ngay với tham số đầy đủ. "
-                            "Nếu không có công cụ phù hợp hoặc còn thiếu đúng một thông tin bắt buộc, hãy nói thẳng điều đó hoặc hỏi đúng một câu ngắn. "
-                            "Không được yêu cầu bấm nút, không nói đã thực hiện và không tự nhận thiếu thẩm quyền khi chưa thử công cụ."
-                        )
+                        if hallucinated_confirm:
+                            retry_prompt = (
+                                "LỖI HỆ THỐNG: Bạn vừa bảo người dùng 'bấm nút xác nhận / Approve', nhưng bạn KHÔNG hề phát ra tool_call! "
+                                "Giao diện hệ thống CHỈ hiển thị nút khi bạn phát lệnh gọi công cụ. "
+                                f"Hãy chọn đúng công cụ trong danh sách: {', '.join(available_names)} hoặc nói thẳng nếu không có công cụ phù hợp. "
+                                "TUYỆT ĐỐI KHÔNG bảo người dùng bấm xác nhận nếu không gọi tool."
+                            )
+                        else:
+                            retry_prompt = (
+                                "Tiếp tục run này bằng hành động thực tế. "
+                                f"Hãy chọn đúng công cụ phù hợp trong danh sách: {', '.join(available_names)}. "
+                                "Nếu yêu cầu này nằm ngoài phạm vi các công cụ trên (ví dụ yêu cầu EC2, RDS, S3...), "
+                                "hãy nói thẳng và rõ ràng là nằm ngoài phạm vi công cụ hỗ trợ của bạn, tuyệt đối không bịa lý do nút bấm, "
+                                "và gợi ý giải pháp thay thế phù hợp bằng AWS Lambda / Serverless."
+                            )
                         messages.append({
                             "role": "user",
                             "content": retry_prompt,
@@ -581,8 +608,9 @@ class AgentExecutor:
                         "status": "NEEDS_INPUT",
                         "type": "agent_needs_input",
                         "message": (
-                            "Mình chưa thể tạo một hành động AWS hợp lệ từ yêu cầu này nên chưa có nút xác nhận và chưa có thay đổi nào được thực hiện. "
-                            "Hãy nêu rõ tên tài nguyên cần thao tác."
+                            content or
+                            "Yêu cầu này hiện nằm ngoài phạm vi công cụ hiện tại hoặc cần thêm thông tin. "
+                            "Hiện tại tôi chỉ có thể hỗ trợ các dịch vụ Serverless và AWS Lambda."
                         ),
                         "steps": [],
                         "data": {"reason": "no_tool_selected"},

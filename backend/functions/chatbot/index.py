@@ -134,7 +134,11 @@ Người dùng không cần thao tác AWS Console thủ công. Bạn có quyền
    - Luôn tôn trọng quy trình xác nhận khi thực hiện thao tác thay đổi tài nguyên (tạo hàm, sửa code, đổi cấu hình, kill-switch).
    - Trước khi đề xuất tạo hoặc cập nhật code, hãy giải thích ngắn gọn tư duy (Thought) và cơ chế kỹ thuật bạn đã áp dụng.
    - Với mọi thao tác cần phê duyệt, bắt buộc phát structured tool_call thật. Không được viết "hãy bấm xác nhận/Approve" bằng lời nếu chưa phát tool_call, vì giao diện sẽ không có nút.
-   - Nếu không có công cụ phù hợp, nói thẳng thao tác nào chưa được hỗ trợ và không hứa sẽ thực hiện, không viện lý do "không có thẩm quyền" khi công cụ thực tế có sẵn.
+   - XỬ LÝ YÊU CẦU NẰM NGOÀI PHẠM VI (Out-of-scope):
+     Khi người dùng yêu cầu thao tác trên các dịch vụ bạn chưa có công cụ hỗ trợ (ví dụ: tạo máy chủ EC2, cấu hình database RDS...):
+     * Nói thẳng, rõ ràng và trung thực rằng dịch vụ đó hiện nằm ngoài phạm vi công cụ bạn được trang bị.
+     * TUYỆT ĐỐI KHÔNG viện lý do "chưa có nút bấm xác nhận" hay "không có thẩm quyền".
+     * Chủ động phân tích và gợi ý giải pháp thay thế thông minh bằng AWS Lambda / Serverless (ví dụ: thay vì tạo máy chủ EC2 t3.micro tốn kém và phải tự quản trị OS, đề xuất giải pháp triển khai Resilient Lambda Service với Function URL endpoint tương đương).
 
 6. ĐỊNH DẠNG PHẢN HỒI:
    - Viết Markdown dễ đọc, tự nhiên, chuẩn văn phong kỹ sư phần mềm.
@@ -186,7 +190,7 @@ def call_llm_api(
     api_key: Optional[str] = None,
     api_url: Optional[str] = None,
     model: Optional[str] = None,
-    timeout: int = 30,
+    timeout: int = 60,
 ) -> Dict[str, Any]:
     """
     Gọi API mô hình ngôn ngữ lớn (OpenAI-compatible / Gemini / REST endpoint).
@@ -195,9 +199,9 @@ def call_llm_api(
     """
     api_key = api_key or os.environ.get("LLM_API_KEY")
     api_url = api_url or os.environ.get("LLM_API_URL", "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions")
-    model = model or os.environ.get("LLM_MODEL", "gemini-2.5-flash")
-    if model in ("gemini-1.5-flash", "gemini-3.5-flash-lite", "gemini-3.5-flash", "gpt-4o-mini"):
-        model = "gemini-2.5-flash"
+    model = model or os.environ.get("LLM_MODEL", "gemini-3.5-flash-lite")
+    if model in ("gemini-1.5-flash", "gemini-2.5-flash", "gemini-3.5-flash", "gpt-4o-mini"):
+        model = "gemini-3.5-flash-lite"
 
     # Nếu không có API Key cấu hình, dùng bộ phân tích mẫu cho môi trường test
     if not api_key:
