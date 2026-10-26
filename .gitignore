@@ -11,6 +11,7 @@ SigninConf.txt
 __pycache__/
 *.py[cod]
 *$py.class
+*.zip
 .venv/
 venv/
 env/
