@@ -1,8 +1,9 @@
 """
 Author: Trịnh Thiên Quang
-Kiểm thử chu trình suy luận tự trị (ReAct Agent Loop) và điều phối công cụ đa bước.
+Kiểm thử chu trình ReAct Agent Loop và điều phối công cụ đa bước.
 """
 
+import json
 import os
 import sys
 import unittest
@@ -49,6 +50,43 @@ class TestAgentReasoningLoop(unittest.TestCase):
                         "timeout_seconds": {"type": "integer"},
                     },
                     "required": ["function_name"],
+                },
+            },
+            {
+                "name": "create_lambda_function",
+                "requires_confirmation": True,
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "function_name": {"type": "string"},
+                        "code_content": {"type": "string"},
+                        "description": {"type": "string"},
+                        "runtime": {"type": "string"},
+                        "memory_mb": {"type": "integer"},
+                        "timeout_seconds": {"type": "integer"},
+                    },
+                    "required": ["function_name", "code_content"],
+                },
+            },
+            {
+                "name": "configure_resilient_service",
+                "requires_confirmation": True,
+                "parameters": {
+                    "type": "object",
+                    "properties": {"function_name": {"type": "string"}},
+                    "required": ["function_name"],
+                },
+            },
+            {
+                "name": "create_public_function_url",
+                "requires_confirmation": True,
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "function_name": {"type": "string"},
+                        "cors_allow_origins": {"type": "array", "items": {"type": "string"}},
+                    },
+                    "required": ["function_name", "cors_allow_origins"],
                 },
             },
         ]
@@ -140,6 +178,208 @@ class TestAgentReasoningLoop(unittest.TestCase):
         self.assertEqual(res["parameters"]["memory_mb"], 512)
         self.assertIn("act_", res["action_id"])
         self.mock_dispatch.assert_not_called()
+
+    def test_agent_executes_multiple_read_only_tools_in_one_turn(self):
+        self.mock_llm.side_effect = [
+            {
+                "content": "Kiểm tra song song hai nguồn dữ liệu.",
+                "tool_calls": [
+                    {"id": "call_1", "type": "function", "function": {"name": "list_lambda_functions", "arguments": "{}"}},
+                    {"id": "call_2", "type": "function", "function": {"name": "diagnose_lambda_health", "arguments": "{}"}},
+                ],
+            },
+            {"content": "Đã tổng hợp xong kết quả.", "tool_calls": None},
+        ]
+        self.mock_dispatch.side_effect = [
+            {"status": "SUCCESS", "message": "Có 2 hàm", "data": {"count": 2}},
+            {"status": "SUCCESS", "message": "Hệ thống khỏe", "data": {"health_score": 95}},
+        ]
+
+        result = self.executor.run("Kiểm tra toàn bộ Lambda", "Prompt")
+
+        self.assertEqual(result["status"], "SUCCESS")
+        self.assertEqual(self.mock_dispatch.call_count, 2)
+        self.assertEqual([step["action"] for step in result["steps"]], ["list_lambda_functions", "diagnose_lambda_health"])
+
+    def test_invalid_tool_call_is_returned_to_model_instead_of_executed(self):
+        self.mock_llm.side_effect = [
+            {"content": "", "tool_calls": [{"id": "bad", "type": "function", "function": {"name": "delete_everything", "arguments": "{}"}}]},
+            {"content": "Tôi không có công cụ đó.", "tool_calls": None},
+        ]
+
+        result = self.executor.run("Xóa hết", "Prompt")
+
+        self.assertEqual(result["status"], "SUCCESS")
+        self.mock_dispatch.assert_not_called()
+        self.assertEqual(result["steps"][0]["action"], "delete_everything")
+
+    def test_iteration_limit_is_not_reported_as_success(self):
+        self.executor.max_iterations = 1
+        self.mock_llm.return_value = {
+            "content": "Đang kiểm tra",
+            "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "list_lambda_functions", "arguments": "{}"}}],
+        }
+        self.mock_dispatch.return_value = {"status": "SUCCESS", "message": "OK", "data": {}}
+
+        result = self.executor.run("Kiểm tra", "Prompt")
+
+        self.assertEqual(result["status"], "INCOMPLETE")
+        self.assertEqual(result["type"], "agent_limit_reached")
+
+    def test_operational_request_cannot_finish_without_tool_evidence(self):
+        self.mock_llm.side_effect = [
+            {
+                "content": "Tôi đang truy cập AWS. Hãy bấm xác nhận để tôi làm tiếp.",
+                "tool_calls": None,
+            },
+            {
+                "content": "Bạn muốn tôi kiểm tra hay thay đổi Lambda nào?",
+                "tool_calls": None,
+            },
+        ]
+
+        result = self.executor.run("Truy cập vào AWS của tôi và làm đi", "Prompt")
+
+        self.assertEqual(result["status"], "NEEDS_INPUT")
+        self.assertEqual(result["type"], "agent_needs_input")
+        self.assertEqual(result["steps"], [])
+        self.mock_dispatch.assert_not_called()
+
+    def test_operational_request_retries_then_executes_real_tool(self):
+        self.mock_llm.side_effect = [
+            {"content": "Tôi sẽ kiểm tra ngay.", "tool_calls": None},
+            {
+                "content": "",
+                "tool_calls": [{
+                    "id": "call_retry",
+                    "type": "function",
+                    "function": {"name": "list_lambda_functions", "arguments": "{}"},
+                }],
+            },
+            {"content": "Đã kiểm tra AWS dựa trên dữ liệu thực tế.", "tool_calls": None},
+        ]
+        self.mock_dispatch.return_value = {
+            "status": "SUCCESS", "message": "Đã tìm thấy 2 hàm", "data": {"count": 2}
+        }
+
+        result = self.executor.run("Liệt kê Lambda trong tài khoản AWS", "Prompt")
+
+        self.assertEqual(result["status"], "SUCCESS")
+        self.assertEqual(len(result["steps"]), 1)
+        self.mock_dispatch.assert_called_once()
+
+    def test_resume_continues_resilient_deployment_after_approval(self):
+        self.mock_llm.side_effect = [
+            {
+                "content": "Tạo service trước.",
+                "tool_calls": [{
+                    "id": "create_1", "type": "function",
+                    "function": {"name": "create_lambda_function", "arguments": '{"function_name":"resilient-api","code_content":"def lambda_handler(e,c): return {}"}'},
+                }],
+            },
+            {
+                "content": "Tiếp tục cấu hình resilience.",
+                "tool_calls": [{
+                    "id": "harden_1", "type": "function",
+                    "function": {"name": "configure_resilient_service", "arguments": '{"function_name":"resilient-api"}'},
+                }],
+            },
+        ]
+
+        first = self.executor.run("Triển khai Lambda resilient", "Prompt")
+        resumed = self.executor.resume(
+            first["agent_state"],
+            {"status": "SUCCESS", "message": "Đã tạo resilient-api", "data": {"function_name": "resilient-api"}},
+        )
+
+        self.assertEqual(first["status"], "CONFIRMATION_REQUIRED")
+        self.assertEqual(resumed["status"], "CONFIRMATION_REQUIRED")
+        self.assertEqual(resumed["tool_name"], "configure_resilient_service")
+        self.assertEqual(len(resumed["steps"]), 1)
+
+    def test_invalid_tool_arguments_are_self_corrected_before_approval(self):
+        self.mock_llm.side_effect = [
+            {
+                "content": "Cấu hình resilience.",
+                "tool_calls": [{
+                    "id": "bad_args", "type": "function",
+                    "function": {"name": "configure_resilient_service", "arguments": "{}"},
+                }],
+            },
+            {
+                "content": "Đã sửa arguments.",
+                "tool_calls": [{
+                    "id": "fixed_args", "type": "function",
+                    "function": {"name": "configure_resilient_service", "arguments": '{"function_name":"resilient-api"}'},
+                }],
+            },
+        ]
+
+        result = self.executor.run("Cấu hình Lambda resilient", "Prompt")
+
+        self.assertEqual(result["status"], "CONFIRMATION_REQUIRED")
+        self.assertEqual(result["parameters"]["function_name"], "resilient-api")
+        self.assertEqual(result["steps"][0]["action"], "configure_resilient_service")
+        self.mock_dispatch.assert_not_called()
+
+    def test_plain_text_pseudo_tool_call_is_recovered(self):
+        self.mock_llm.return_value = {
+            "content": """Đang tạo service.\n```python\ndef lambda_handler(event, context):\n    return {\"statusCode\": 200}\n```\n[Tool Call: create_lambda_function(function_name='resilient-webhook-receiver', code_content='...')]""",
+            "tool_calls": None,
+        }
+
+        result = self.executor.run(
+            "Triển khai Lambda resilient-webhook-receiver trên AWS", "Prompt"
+        )
+
+        self.assertEqual(result["status"], "CONFIRMATION_REQUIRED")
+        self.assertEqual(result["tool_name"], "create_lambda_function")
+        self.assertEqual(result["parameters"]["function_name"], "resilient-webhook-receiver")
+        self.assertTrue(result["recovered_tool_call"])
+
+    def test_hallucinated_confirmation_prose_is_intercepted_and_retried_with_real_tool(self):
+        self.mock_llm.side_effect = [
+            {
+                "content": "Dạ, tôi cần bạn bấm vào nút Xác nhận (Confirm/Approve) trên hộp thoại yêu cầu gọi công cụ mà hệ thống đang hiển thị.",
+                "tool_calls": None,
+            },
+            {
+                "content": "",
+                "tool_calls": [{
+                    "id": "call_store",
+                    "type": "function",
+                    "function": {
+                        "name": "create_lambda_function",
+                        "arguments": json.dumps({
+                            "function_name": "custom-service",
+                            "code_content": "def lambda_handler(e, c): return {'statusCode': 200}",
+                        }),
+                    },
+                }],
+            },
+        ]
+
+        result = self.executor.run(
+            "Triển khai dịch vụ của tôi lên AWS", "Prompt"
+        )
+
+        self.assertEqual(result["status"], "CONFIRMATION_REQUIRED")
+        self.assertEqual(result["tool_name"], "create_lambda_function")
+        self.assertEqual(result["parameters"]["function_name"], "custom-service")
+        self.assertIn("lambda_handler", result["parameters"]["code_content"])
+
+    def test_create_public_function_url_auto_injects_cors(self):
+        tool_call = {
+            "id": "call_url",
+            "type": "function",
+            "function": {
+                "name": "create_public_function_url",
+                "arguments": json.dumps({"function_name": "web-store-demo"}),
+            },
+        }
+        tool_name, params, err = self.executor._parse_tool_call(tool_call)
+        self.assertIsNone(err)
+        self.assertEqual(params["cors_allow_origins"], ["http://127.0.0.1:8080"])
 
 
 if __name__ == "__main__":

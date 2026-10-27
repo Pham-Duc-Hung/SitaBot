@@ -15,7 +15,7 @@ PROJECT_ROOT = os.path.abspath(os.path.join(CURRENT_DIR, ".."))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from backend.functions.chatbot.index import lambda_handler, format_tools_for_llm
+from backend.functions.chatbot.index import lambda_handler, format_tools_for_llm, call_llm_api, SYSTEM_PROMPT
 
 
 class TestChatbotFunctionCalling(unittest.TestCase):
@@ -52,6 +52,30 @@ class TestChatbotFunctionCalling(unittest.TestCase):
         self.assertEqual(res["type"], "chat_reply")
         self.assertIn("SatiBot", res["message"])
 
+    @patch("backend.functions.chatbot.index.call_llm_api")
+    def test_selected_model_is_forwarded_to_llm(self, mock_llm):
+        mock_llm.return_value = {"content": "Xin chào", "tool_calls": None}
+
+        res = lambda_handler({"message": "hi", "model": "gemini-2.5-flash"}, None)
+
+        self.assertEqual(res["status"], "SUCCESS")
+        self.assertEqual(mock_llm.call_args.kwargs["model"], "gemini-2.5-flash")
+
+    def test_rejects_unsupported_model(self):
+        res = lambda_handler({"message": "hi", "model": "unknown-model"}, None)
+
+        self.assertEqual(res["status"], "ERROR")
+        self.assertEqual(res["error_code"], "InvalidParameters")
+
+    @patch("backend.functions.chatbot.index.call_llm_api")
+    def test_gemini_31_flash_lite_is_supported(self, mock_llm):
+        mock_llm.return_value = {"content": "OK", "tool_calls": None}
+
+        res = lambda_handler({"message": "hi", "model": "gemini-3.1-flash-lite"}, None)
+
+        self.assertEqual(res["status"], "SUCCESS")
+        self.assertEqual(mock_llm.call_args.kwargs["model"], "gemini-3.1-flash-lite")
+
     @patch("backend.functions.chatbot.index._dispatch_action")
     def test_list_lambda_intent_action_executed(self, mock_dispatch):
         mock_dispatch.return_value = {
@@ -73,6 +97,30 @@ class TestChatbotFunctionCalling(unittest.TestCase):
         self.assertEqual(res["type"], "action_confirmation")
         self.assertEqual(res["tool_name"], "invoke_lambda_function")
         self.assertIn("action_id", res)
+
+    @patch("backend.functions.chatbot.index.call_llm_api")
+    def test_delete_lambda_intent_returns_real_confirmation_action(self, mock_llm):
+        mock_llm.return_value = {
+            "content": "Lambda này sẽ bị xóa vĩnh viễn.",
+            "tool_calls": [{
+                "id": "call_delete_1",
+                "type": "function",
+                "function": {
+                    "name": "delete_lambda_function",
+                    "arguments": json.dumps({"function_name": "sati-store-web"}),
+                },
+            }],
+        }
+        event = {"message": "Xóa hộ hàm lambda sati-store-web"}
+        res = lambda_handler(event, None)
+        self.assertEqual(res["status"], "CONFIRMATION_REQUIRED")
+        self.assertEqual(res["type"], "action_confirmation")
+        self.assertEqual(res["tool_name"], "delete_lambda_function")
+        self.assertEqual(res["parameters"]["function_name"], "sati-store-web")
+
+    def test_system_prompt_does_not_require_repeated_self_introduction(self):
+        self.assertIn("Không tự giới thiệu ở đầu mỗi câu trả lời", SYSTEM_PROMPT)
+        self.assertNotIn('Khi giới thiệu bản thân hoặc chào hỏi, luôn xưng:', SYSTEM_PROMPT)
 
     @patch("backend.functions.chatbot.index.call_llm_api")
     def test_external_llm_function_call_dispatch(self, mock_llm):
@@ -111,12 +159,61 @@ class TestChatbotFunctionCalling(unittest.TestCase):
         self.assertEqual(res["type"], "action_executed")
         mock_dispatch.assert_called_once()
 
+    @patch("backend.functions.chatbot.index._dispatch_action")
+    def test_recoverable_conflict_returns_clickable_resolution_contract(self, mock_dispatch):
+        mock_dispatch.return_value = {
+            "status": "USER_ACTION_REQUIRED",
+            "message": "Tên Lambda đã được sử dụng. Hãy chọn cách xử lý:",
+            "data": {
+                "resolution_kind": "recoverable_conflict",
+                "resolution_options": [
+                    {"id": "update_existing", "label": "Cập nhật hàm hiện có", "changes_aws": True},
+                    {"id": "cancel", "label": "Hủy thao tác", "changes_aws": False},
+                ],
+            },
+        }
+        event = {
+            "confirmed": True,
+            "service": "lambda",
+            "tool_name": "create_lambda_function",
+            "parameters": {
+                "function_name": "sati-store-web",
+                "code_content": "def lambda_handler(event, context): return {}",
+            },
+        }
+        res = lambda_handler(event, None)
+        self.assertEqual(res["status"], "USER_ACTION_REQUIRED")
+        self.assertEqual(res["type"], "resolution_options")
+        self.assertEqual(res["data"]["resolution_kind"], "recoverable_conflict")
+        self.assertTrue(res["data"]["resolution_options"][0]["changes_aws"])
+
     def test_api_gateway_event_wrapper(self):
         event = {"body": json.dumps({"message": "Hello"})}
         res = lambda_handler(event, None)
         self.assertEqual(res["statusCode"], 200)
         body = json.loads(res["body"])
         self.assertEqual(body["status"], "SUCCESS")
+
+    @patch("backend.functions.chatbot.index.time.sleep")
+    @patch("backend.functions.chatbot.index.urllib.request.urlopen")
+    def test_llm_connection_error_retries_before_success(self, mock_urlopen, mock_sleep):
+        response = MagicMock()
+        response.read.return_value = json.dumps({
+            "choices": [{"message": {"content": "ok", "tool_calls": None}}]
+        }).encode()
+        response.__enter__.return_value = response
+        mock_urlopen.side_effect = [TimeoutError("temporary"), response]
+
+        result = call_llm_api(
+            messages=[{"role": "user", "content": "hello"}],
+            api_key="test-key",
+            api_url="https://example.test/chat",
+        )
+
+        self.assertEqual(result["content"], "ok")
+        self.assertEqual(result["llm_attempts"], 2)
+        self.assertEqual(mock_urlopen.call_count, 2)
+        mock_sleep.assert_called_once()
 
 
 if __name__ == "__main__":

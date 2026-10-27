@@ -18,6 +18,7 @@ FILES_TO_PACKAGE = [
     ("backend/functions/dispatcher/services/ec2_service.py", "services/ec2_service.py"),
     ("backend/functions/dispatcher/services/s3_service.py", "services/s3_service.py"),
     ("backend/functions/dispatcher/services/iam_service.py", "services/iam_service.py"),
+    ("backend/shared/runtime.py", "runtime.py"),
 ]
 
 
