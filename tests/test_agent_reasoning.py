@@ -1,0 +1,147 @@
+"""
+Author: Trịnh Thiên Quang
+Kiểm thử chu trình suy luận tự trị (ReAct Agent Loop) và điều phối công cụ đa bước.
+"""
+
+import os
+import sys
+import unittest
+from unittest.mock import Mock
+
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+CHATBOT_DIR = os.path.abspath(os.path.join(CURRENT_DIR, "..", "backend", "functions", "chatbot"))
+if CHATBOT_DIR not in sys.path:
+    sys.path.insert(0, CHATBOT_DIR)
+
+from agent_executor import AgentExecutor
+
+
+class TestAgentReasoningLoop(unittest.TestCase):
+    def setUp(self):
+        self.raw_schemas = [
+            {
+                "name": "list_lambda_functions",
+                "requires_confirmation": False,
+                "parameters": {"type": "object", "properties": {}},
+            },
+            {
+                "name": "get_function_config_detail",
+                "requires_confirmation": False,
+                "parameters": {
+                    "type": "object",
+                    "properties": {"function_name": {"type": "string"}},
+                    "required": ["function_name"],
+                },
+            },
+            {
+                "name": "diagnose_lambda_health",
+                "requires_confirmation": False,
+                "parameters": {"type": "object", "properties": {}},
+            },
+            {
+                "name": "update_function_resources",
+                "requires_confirmation": True,
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "function_name": {"type": "string"},
+                        "memory_mb": {"type": "integer"},
+                        "timeout_seconds": {"type": "integer"},
+                    },
+                    "required": ["function_name"],
+                },
+            },
+        ]
+        self.tools = [{"type": "function", "function": {"name": s["name"]}} for s in self.raw_schemas]
+        self.mock_llm = Mock()
+        self.mock_dispatch = Mock()
+        self.executor = AgentExecutor(
+            call_llm_fn=self.mock_llm,
+            dispatch_fn=self.mock_dispatch,
+            tools=self.tools,
+            raw_schemas=self.raw_schemas,
+            max_iterations=4,
+        )
+
+    def test_agent_smalltalk_without_tools(self):
+        """Kiểm thử khi người dùng hỏi chào hỏi, Agent phản hồi trực tiếp không qua tool."""
+        self.mock_llm.return_value = {
+            "content": "Xin chào! Tôi là SatiBot - AI Agent hỗ trợ quản trị hạ tầng AWS.",
+            "tool_calls": None,
+        }
+
+        res = self.executor.run(user_message="Xin chào bạn", system_prompt="Prompt")
+        self.assertEqual(res["status"], "SUCCESS")
+        self.assertEqual(res["type"], "agent_reply")
+        self.assertIn("Xin chào", res["message"])
+        self.assertEqual(len(res["steps"]), 0)
+        self.mock_dispatch.assert_not_called()
+
+    def test_agent_autonomous_investigation_loop(self):
+        """Kiểm thử Agent tự động tra cứu dữ liệu (Action) và đọc kết quả (Observation) để trả lời."""
+        # Vòng 1: Agent quyết định gọi get_function_config_detail
+        call_1_resp = {
+            "content": "Tôi đang tiến hành kiểm tra cấu hình hàm test-lambda...",
+            "tool_calls": [{
+                "id": "call_1",
+                "type": "function",
+                "function": {
+                    "name": "get_function_config_detail",
+                    "arguments": '{"function_name": "test-lambda"}',
+                },
+            }],
+            "raw_message": {"role": "assistant", "content": "Checking..."},
+        }
+        # Vòng 2: Sau khi đọc dữ liệu AWS, Agent phân tích và đưa ra đánh giá
+        call_2_resp = {
+            "content": "Hàm test-lambda đang cấu hình RAM 128MB và Timeout 3s. Mức này quá thấp và rất dễ bị lỗi.",
+            "tool_calls": None,
+        }
+        self.mock_llm.side_effect = [call_1_resp, call_2_resp]
+
+        self.mock_dispatch.return_value = {
+            "status": "SUCCESS",
+            "data": {"function_name": "test-lambda", "memory_mb": 128, "timeout_seconds": 3},
+            "message": "Chi tiết cấu hình hàm test-lambda",
+        }
+
+        res = self.executor.run(
+            user_message="Hàm test-lambda có bị chậm không?",
+            system_prompt="Prompt",
+        )
+
+        self.assertEqual(res["status"], "SUCCESS")
+        self.assertEqual(res["type"], "agent_reply")
+        self.assertIn("RAM 128MB", res["message"])
+        self.assertEqual(len(res["steps"]), 1)
+        self.assertEqual(res["steps"][0]["action"], "get_function_config_detail")
+
+    def test_agent_pauses_for_confirmation_on_modifications(self):
+        """Kiểm thử khi Agent quyết định hành động sửa đổi tài nguyên, phải dừng lại xin xác nhận."""
+        self.mock_llm.return_value = {
+            "content": "Tôi đề xuất nâng RAM hàm test-lambda lên 512MB để tối ưu hiệu năng.",
+            "tool_calls": [{
+                "id": "call_update",
+                "type": "function",
+                "function": {
+                    "name": "update_function_resources",
+                    "arguments": '{"function_name": "test-lambda", "memory_mb": 512, "timeout_seconds": 30}',
+                },
+            }],
+        }
+
+        res = self.executor.run(
+            user_message="Tối ưu hàm test-lambda giúp tôi",
+            system_prompt="Prompt",
+        )
+
+        self.assertEqual(res["status"], "CONFIRMATION_REQUIRED")
+        self.assertEqual(res["tool_name"], "update_function_resources")
+        self.assertEqual(res["parameters"]["memory_mb"], 512)
+        self.assertIn("act_", res["action_id"])
+        self.mock_dispatch.assert_not_called()
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)
+

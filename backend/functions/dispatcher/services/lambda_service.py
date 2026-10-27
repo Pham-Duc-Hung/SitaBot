@@ -41,6 +41,7 @@ class LambdaService:
             retries={"max_attempts": 3, "mode": "standard"},
             connect_timeout=10,
             read_timeout=60,
+            max_pool_connections=25,
         )
 
         if boto3_session is not None:
@@ -109,9 +110,28 @@ class LambdaService:
             code = err_info.get("Code", "UnknownClientError")
             raw_msg = err_info.get("Message", str(exc))
 
+            if code in ("AccessDeniedException", "AccessDenied", "UnauthorizedOperation"):
+                action_permission_map = {
+                    "list_lambda_functions": "lambda:ListFunctions",
+                    "get_function_config_detail": "lambda:GetFunctionConfiguration",
+                    "invoke_lambda_function": "lambda:InvokeFunction",
+                    "update_function_resources": "lambda:UpdateFunctionConfiguration",
+                    "create_public_function_url": "lambda:CreateFunctionUrlConfig",
+                    "delete_function_url": "lambda:DeleteFunctionUrlConfig",
+                    "set_emergency_kill_switch": "lambda:PutFunctionConcurrency",
+                    "diagnose_lambda_health": "lambda:ListFunctions",
+                }
+                required_perm = action_permission_map.get(action, f"lambda:{action}")
+                msg = (
+                    f"LỖI PHÂN QUYỀN (403): Tài khoản/Role hiện tại không đủ quyền thực hiện '{required_perm}'. "
+                    f"Chi tiết từ AWS: {raw_msg}"
+                )
+                res = self._format_response("ERROR", action, msg, error_code="AccessDeniedException")
+                res["required_permission"] = required_perm
+                return res
+
             error_mappings = {
                 "ResourceNotFoundException": "Không tìm thấy hàm Lambda được chỉ định. Vui lòng kiểm tra lại tên hàm.",
-                "AccessDeniedException": "Tài khoản không đủ quyền thực hiện thao tác này trên AWS Lambda.",
                 "InvalidParameterValueException": f"Tham số đầu vào không hợp lệ: {raw_msg}",
                 "TooManyRequestsException": "Hệ thống đang bị giới hạn tần suất gọi API (Rate limit). Vui lòng thử lại sau.",
                 "ResourceConflictException": f"Xung đột tài nguyên: {raw_msg}",
@@ -512,18 +532,128 @@ class LambdaService:
                 )
                 data = {"function_name": function_name, "is_paused": True, "reserved_concurrency": 0}
             else:
-                if restore_concurrency and restore_concurrency > 0:
-                    self.client.put_function_concurrency(
-                        FunctionName=function_name,
-                        ReservedConcurrentExecutions=restore_concurrency,
-                    )
-                    data = {"function_name": function_name, "is_paused": False, "reserved_concurrency": restore_concurrency}
-                else:
-                    self.client.delete_function_concurrency(FunctionName=function_name)
-                    data = {"function_name": function_name, "is_paused": False, "reserved_concurrency": "unreserved"}
+                # Mở khóa hoạt động
+                try:
+                    if restore_concurrency and restore_concurrency > 0:
+                        self.client.put_function_concurrency(
+                            FunctionName=function_name,
+                            ReservedConcurrentExecutions=restore_concurrency,
+                        )
+                        data = {"function_name": function_name, "is_paused": False, "reserved_concurrency": restore_concurrency}
+                    else:
+                        self.client.delete_function_concurrency(FunctionName=function_name)
+                        data = {"function_name": function_name, "is_paused": False, "reserved_concurrency": "unreserved"}
+                except ClientError as ce:
+                    # Nếu hạn mức concurrency của tài khoản không đủ, tự động xóa giới hạn để mở khóa bình thường
+                    if ce.response.get("Error", {}).get("Code") == "InvalidParameterValueException":
+                        self.client.delete_function_concurrency(FunctionName=function_name)
+                        data = {"function_name": function_name, "is_paused": False, "reserved_concurrency": "unreserved"}
+                    else:
+                        raise ce
 
-                msg = f"ĐÃ MỞ KHÓA HOẠT ĐỘNG: Hàm '{function_name}' đã được khôi phục trạng thái nhận request."
+                msg = f"ĐÃ MỞ KHÓA HOẠT ĐỘNG: Hàm '{function_name}' đã được khôi phục trạng thái nhận request bình thường."
 
+            return self._format_response("SUCCESS", action, msg, data=data)
+        except Exception as exc:
+            return self._handle_boto_error(action, exc)
+
+    def diagnose_lambda_health(self) -> Dict[str, Any]:
+        """Kịch bản chẩn đoán: Tự động rà soát toàn bộ hàm, phân tích rủi ro cấu hình & bảo mật."""
+        action = "diagnose_lambda_health"
+        try:
+            list_res = self.list_lambda_functions(max_items=100)
+            if list_res.get("status") != "SUCCESS":
+                return list_res
+
+            functions = list_res.get("data", {}).get("functions", [])
+            diagnostics = []
+            health_score = 100
+            total_warnings = 0
+            total_critical = 0
+
+            for fn in functions:
+                name = fn.get("function_name")
+                ram = fn.get("memory_mb", 128)
+                timeout = fn.get("timeout_seconds", 3)
+                issues = []
+
+                # 1. Đánh giá RAM
+                if ram < 256:
+                    issues.append({
+                        "level": "WARNING",
+                        "field": "memory_mb",
+                        "message": f"Dung lượng RAM {ram}MB ở mức tối thiểu. CPU ảo bị bóp nghẽn, nguy cơ chậm/sập khi tải cao.",
+                        "recommendation": "Khuyến nghị tăng RAM lên tối thiểu 256MB hoặc 512MB để mở thêm vCPU."
+                    })
+                    health_score -= 10
+                    total_warnings += 1
+
+                # 2. Đánh giá Timeout
+                if timeout <= 3:
+                    issues.append({
+                        "level": "WARNING",
+                        "field": "timeout_seconds",
+                        "message": f"Timeout {timeout}s là giá trị mặc định rất ngắn. Rất dễ gặp lỗi timeout khi mạng chập chờn hoặc cold start.",
+                        "recommendation": "Khuyến nghị tăng Timeout lên ít nhất 15s - 30s."
+                    })
+                    health_score -= 10
+                    total_warnings += 1
+
+                # 3. Kiểm tra Function URL nếu có
+                try:
+                    url_cfg = self.client.get_function_url_config(FunctionName=name)
+                    cors = url_cfg.get("Cors", {})
+                    origins = cors.get("AllowOrigins", [])
+                    if "*" in origins:
+                        issues.append({
+                            "level": "CRITICAL",
+                            "field": "function_url",
+                            "message": "Function URL đang mở công khai với CORS wildcard '*'. Bất kỳ trang web nào cũng có thể gọi API.",
+                            "recommendation": "Cần giới hạn danh sách AllowedOrigins cụ thể thay vì '*'."
+                        })
+                        health_score -= 20
+                        total_critical += 1
+                except Exception:
+                    pass
+
+                # 4. Kiểm tra Concurrency
+                try:
+                    conc_cfg = self.client.get_function_concurrency(FunctionName=name)
+                    reserved = conc_cfg.get("ReservedConcurrentExecutions")
+                    if reserved == 0:
+                        issues.append({
+                            "level": "CRITICAL",
+                            "field": "concurrency",
+                            "message": "Hàm đang bị KHÓA KHẨN CẤP (concurrency = 0). Hàm không tiếp nhận bất kỳ request nào.",
+                            "recommendation": "Nếu sự cố đã qua, cần mở khóa hàm để khôi phục dịch vụ."
+                        })
+                        health_score -= 25
+                        total_critical += 1
+                except Exception:
+                    pass
+
+                status_fn = "HEALTHY" if not issues else ("CRITICAL" if any(i["level"] == "CRITICAL" for i in issues) else "WARNING")
+                diagnostics.append({
+                    "function_name": name,
+                    "runtime": fn.get("runtime"),
+                    "memory_mb": ram,
+                    "timeout_seconds": timeout,
+                    "status": status_fn,
+                    "issues": issues,
+                })
+
+            health_score = max(0, min(100, health_score))
+            overall_status = "HEALTHY" if health_score >= 85 else ("WARNING" if health_score >= 60 else "CRITICAL")
+            msg = f"Đã hoàn thành chẩn đoán sức khỏe hệ thống ({len(functions)} hàm). Điểm đánh giá: {health_score}/100 [{overall_status}]."
+
+            data = {
+                "total_functions": len(functions),
+                "health_score": health_score,
+                "overall_status": overall_status,
+                "total_warnings": total_warnings,
+                "total_critical": total_critical,
+                "diagnostics": diagnostics,
+            }
             return self._format_response("SUCCESS", action, msg, data=data)
         except Exception as exc:
             return self._handle_boto_error(action, exc)
@@ -633,6 +763,7 @@ class LambdaService:
                 enable_kill_switch=p.get("enable_kill_switch", True),
                 restore_concurrency=p.get("restore_concurrency"),
             ),
+            "diagnose_lambda_health": lambda p: self.diagnose_lambda_health(),
         }
         return dispatch_map[tool_name](parameters)
 
@@ -714,17 +845,85 @@ LAMBDA_TOOL_SCHEMAS = [
             "properties": {
                 "function_name": {"type": "string", "description": "Tên của hàm AWS Lambda cần khóa/mở khóa."},
                 "enable_kill_switch": {"type": "boolean", "description": "True để khóa khẩn cấp, False để mở khóa."},
-                "restore_concurrency": {"type": "integer", "description": "Mức concurrency muốn khôi phục khi mở khóa."},
+                "restore_concurrency": {"type": "integer", "description": "Mức concurrency muốn khôi phục khi mở khóa (Khuyến nghị bỏ trống để mở khóa mặc định không giới hạn)."},
             },
             "required": ["function_name", "enable_kill_switch"],
+        },
+    },
+    {
+        "name": "diagnose_lambda_health",
+        "description": "Tự động rà soát và chẩn đoán toàn diện sức khỏe, hiệu năng, cấu hình RAM/Timeout và rủi ro bảo mật của các hàm AWS Lambda.",
+        "requires_confirmation": False,
+        "parameters": {
+            "type": "object",
+            "properties": {},
         },
     },
 ]
 
 
 # =============================================================================
-# HÀM ENTRYPOINT CỦA DISPATCHER DÀNH CHO LAMBDA_SERVICE
+# HÀM ENTRYPOINT CỦA DISPATCHER DÀNH CHO LAMBDA_SERVICE (CÓ GLOBAL CONTEXT CACHE)
 # =============================================================================
+_GLOBAL_LAMBDA_SERVICE_CACHE: Dict[str, "LambdaService"] = {}
+
+
+def _compute_cache_key(credentials: Optional[Dict[str, Any]], region: str) -> str:
+    """Tính toán khóa nhận diện duy nhất cho phiên làm việc."""
+    if not credentials:
+        return f"default:{region}"
+    if credentials.get("AccessKeyId"):
+        return f"key:{credentials.get('AccessKeyId')}:{region}"
+    if credentials.get("RoleArn"):
+        return f"role:{credentials.get('RoleArn')}:{credentials.get('ExternalId', '')}:{region}"
+    return f"default:{region}"
+
+
+def _create_lambda_service(credentials: Optional[Dict[str, Any]], region: str) -> "LambdaService":
+    """Tạo mới một đối tượng LambdaService."""
+    if credentials and credentials.get("AccessKeyId"):
+        return LambdaService(
+            region_name=region,
+            aws_access_key_id=credentials.get("AccessKeyId"),
+            aws_secret_access_key=credentials.get("SecretAccessKey"),
+            aws_session_token=credentials.get("SessionToken"),
+        )
+    if credentials and credentials.get("RoleArn"):
+        return LambdaService.from_assumed_role(
+            role_arn=credentials["RoleArn"],
+            external_id=credentials.get("ExternalId", ""),
+            region_name=region,
+        )
+    return LambdaService(region_name=region)
+
+
+def get_cached_lambda_service(
+    credentials: Optional[Dict[str, Any]] = None,
+    region: str = "us-east-1",
+    enable_cache: bool = True,
+) -> "LambdaService":
+    """
+    Tái sử dụng hoặc khởi tạo mới đối tượng LambdaService (Global Context Caching).
+    Giúp giảm thời gian khởi tạo từ hàng trăm ms xuống vài ms trong các lần gọi Warm Start.
+    """
+    if not enable_cache:
+        return _create_lambda_service(credentials, region)
+
+    cache_key = _compute_cache_key(credentials, region)
+    if cache_key in _GLOBAL_LAMBDA_SERVICE_CACHE:
+        return _GLOBAL_LAMBDA_SERVICE_CACHE[cache_key]
+
+    service = _create_lambda_service(credentials, region)
+    _GLOBAL_LAMBDA_SERVICE_CACHE[cache_key] = service
+    return service
+
+
+def clear_service_cache() -> None:
+    """Xóa bộ nhớ đệm dịch vụ (phục vụ kiểm thử hoặc làm mới session)."""
+    global _GLOBAL_LAMBDA_SERVICE_CACHE
+    _GLOBAL_LAMBDA_SERVICE_CACHE.clear()
+
+
 def execute(credentials: Optional[Dict[str, Any]], params: Dict[str, Any]) -> Dict[str, Any]:
     """
     Hàm thực thi chuẩn hóa được Dispatcher Lambda gọi đến:
@@ -735,24 +934,7 @@ def execute(credentials: Optional[Dict[str, Any]], params: Dict[str, Any]) -> Di
         + 'confirmed': Boolean (True nếu đã được người dùng xác nhận ở bước trước).
     """
     region = (credentials or {}).get("region_name") or params.get("region") or "us-east-1"
-    
-    # Khởi tạo service với credentials truyền vào
-    if credentials and credentials.get("AccessKeyId"):
-        service = LambdaService(
-            region_name=region,
-            aws_access_key_id=credentials.get("AccessKeyId"),
-            aws_secret_access_key=credentials.get("SecretAccessKey"),
-            aws_session_token=credentials.get("SessionToken"),
-        )
-    elif credentials and credentials.get("RoleArn"):
-        service = LambdaService.from_assumed_role(
-            role_arn=credentials["RoleArn"],
-            external_id=credentials.get("ExternalId", ""),
-            region_name=region,
-        )
-    else:
-        # Dùng session môi trường hiện tại (Local PoC hoặc Lambda Execution Role)
-        service = LambdaService(region_name=region)
+    service = get_cached_lambda_service(credentials=credentials, region=region)
 
     action = params.get("action") or params.get("tool_name")
     action_params = params.get("parameters", {})
