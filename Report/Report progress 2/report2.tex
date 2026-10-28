@@ -651,15 +651,14 @@ Web Client $\leftrightarrow$ AppSync & GraphQL Subscription / WSS & Cognito User
 
 \subsubsection{CI/CD}
 
-Quy trình CI/CD của SatiBot bắt đầu khi lập trình viên phát triển chức năng trên nhánh riêng, đẩy mã nguồn lên GitHub và tạo Pull Request. AWS CodeConnections theo dõi nhánh \texttt{main} và thông báo cho AWS CodePipeline khi xuất hiện commit mới. CodePipeline tiếp nhận mã nguồn và kích hoạt giai đoạn tích hợp liên tục thông qua AWS CodeBuild. Trong môi trường build tạm thời, CodeBuild cài đặt các thư viện Python cần thiết, chạy toàn bộ bộ kiểm thử bằng \texttt{pytest} và dừng pipeline, đồng thời phát thông báo lỗi nếu có ca kiểm thử thất bại. Nếu các kiểm thử đều thành công, CodeBuild chạy lệnh \texttt{cdk synth} để kiểm tra mã hạ tầng và chuyển các AWS CDK Stack thành CloudFormation Template cùng các artifact cần thiết cho bước triển khai.
+Quy trình CI/CD của SatiBot bắt đầu khi lập trình viên đẩy mã nguồn lên GitHub và tạo Pull Request. Mã nguồn được các thành viên trong nhóm xem xét, chạy kiểm thử đơn vị và chỉ được hợp nhất vào nhánh \texttt{main} khi đáp ứng yêu cầu. AWS CodeConnections theo dõi nhánh \texttt{main} và kích hoạt AWS CodePipeline khi xuất hiện commit mới. Trong giai đoạn tích hợp liên tục, AWS CodeBuild cài đặt Python cùng các thư viện cần thiết, chạy toàn bộ bộ kiểm thử bằng \texttt{pytest}, sau đó thực hiện \texttt{cdk synth} với hai biến cấu hình \texttt{PRIMARY\_REGION=ap-southeast-1} và \texttt{SECONDARY\_REGION=us-east-1}. Nếu quá trình build hoặc kiểm thử thất bại, pipeline dừng và phát thông báo lỗi; nếu thành công, quy trình chuyển sang bước phê duyệt thủ công. Khi yêu cầu triển khai được chấp thuận, AWS CDK và AWS CloudFormation tiến hành tạo mới hoặc cập nhật các tài nguyên AWS theo cấu hình đã khai báo.
 
-Sau khi hoàn thành giai đoạn kiểm thử, pipeline chuyển sang giai đoạn triển khai liên tục và tạm dừng tại bước phê duyệt thủ công. Nếu người phụ trách từ chối, quá trình triển khai kết thúc mà không làm thay đổi tài nguyên đang hoạt động; nếu được đồng ý, AWS CDK và AWS CloudFormation tạo mới hoặc cập nhật các thành phần sửa đổi của SitaBot. Đối với các hàm Lambda quan trọng, AWS CodeDeploy thực hiện triển khai theo chiến lược canary bằng cách chỉ chuyển một phần lưu lượng sang phiên bản mới trước. 
-Trong suốt quá trình kiểm thử, Amazon CloudWatch thu thập log, metric và theo dõi các cảnh báo đã cấu hình. Nếu phiên bản mới hoạt động ổn định, CodeDeploy tiếp tục chuyển toàn bộ lưu lượng sang phiên bản mới; ngược lại, khi CloudWatch phát hiện lỗi, CodeDeploy tự động rollback về phiên bản Lambda trước đó.
+Trong giai đoạn triển khai liên tục, hạ tầng được chia thành ba nhóm tài nguyên. Primary Stack tại \texttt{ap-southeast-1} chứa website chính và backend của SatiBot, bao gồm CloudFront, S3, API Gateway, WAF, Lambda, Cognito, IAM và DynamoDB. Các phiên bản Lambda mới được AWS CodeDeploy triển khai theo chiến lược canary; CloudWatch Logs và Alarm theo dõi trạng thái để chuyển toàn bộ lưu lượng sang phiên bản mới khi không có lỗi hoặc tự động rollback khi phát hiện sự cố. Error Page Stack tại \texttt{us-east-1} chỉ sử dụng S3 và CloudFront để cung cấp một trang thông báo lỗi độc lập, không cần đồng bộ dữ liệu ứng dụng với region chính. DNS/Failover Stack sử dụng Amazon Route~53 Health Check và chính sách Failover Routing để theo dõi hệ thống: khi region chính hoạt động bình thường, người dùng được điều hướng đến website tại \texttt{ap-southeast-1}; khi region này gặp sự cố, Route~53 chuyển kết quả phân giải DNS sang trang thông báo lỗi tại \texttt{us-east-1}.
 
 \begin{figure}[H]
 \centering
-\IfFileExists{cicd.png}{
-  \includegraphics[width=0.98\textwidth]{cicd.png}
+\IfFileExists{cicd.jpg}{
+  \includegraphics[width=0.95\textwidth,height=0.78\textheight,keepaspectratio]{cicd.jpg}
 }{
   \fbox{\parbox[c][7cm][c]{0.92\textwidth}{\centering Sơ đồ quy trình CI/CD của hệ thống SatiBot}}
 }
