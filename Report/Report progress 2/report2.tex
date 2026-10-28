@@ -585,6 +585,27 @@ Web Client $\leftrightarrow$ AppSync & GraphQL Subscription / WSS & Cognito User
 \label{fig:so_do_erd}
 \end{figure}
 
+\subsection{Các chi tiết cần thiết khác trong giải pháp của dự án}
+
+\subsubsection{CI/CD}
+
+Quy trình CI/CD của SatiBot bắt đầu khi lập trình viên phát triển chức năng trên nhánh riêng, đẩy mã nguồn lên GitHub và tạo Pull Request. Mã nguồn được thành viên trong nhóm xem xét, chạy kiểm thử đơn vị và chỉ được hợp nhất vào nhánh \texttt{main} khi đáp ứng yêu cầu. AWS CodeConnections theo dõi nhánh \texttt{main} và thông báo cho AWS CodePipeline khi xuất hiện commit mới. CodePipeline tiếp nhận mã nguồn và kích hoạt giai đoạn tích hợp liên tục thông qua AWS CodeBuild. Trong môi trường build tạm thời, CodeBuild cài đặt các thư viện Python cần thiết, chạy toàn bộ bộ kiểm thử bằng \texttt{pytest} và dừng pipeline, đồng thời phát thông báo lỗi nếu có ca kiểm thử thất bại. Nếu các kiểm thử đều thành công, CodeBuild chạy lệnh \texttt{cdk synth} để kiểm tra mã hạ tầng và chuyển các AWS CDK Stack thành CloudFormation Template cùng các artifact cần thiết cho bước triển khai.
+
+Sau khi hoàn thành giai đoạn kiểm thử, pipeline chuyển sang giai đoạn triển khai liên tục và tạm dừng tại bước phê duyệt thủ công. Nếu người phụ trách từ chối, quá trình triển khai kết thúc mà không làm thay đổi tài nguyên đang hoạt động; nếu được đồng ý, AWS CDK và AWS CloudFormation tạo mới hoặc cập nhật các thành phần của SitaBot như AWS Lambda, API Gateway, DynamoDB, Amazon SQS, Amazon Cognito, S3 và CloudFront. Đối với các hàm Lambda quan trọng, AWS CodeDeploy thực hiện triển khai theo chiến lược canary bằng cách chỉ chuyển một phần lưu lượng sang phiên bản mới trước. Trong quá trình này, Amazon CloudWatch thu thập log, metric và theo dõi các cảnh báo đã cấu hình. Nếu phiên bản mới hoạt động ổn định, CodeDeploy tiếp tục chuyển toàn bộ lưu lượng sang phiên bản mới; ngược lại, khi CloudWatch phát hiện lỗi, CodeDeploy tự động rollback về phiên bản Lambda trước đó nhằm duy trì tính ổn định của hệ thống.
+
+Quy trình tổng thể được minh họa trong Hình~\ref{fig:cicd_pipeline}.
+
+\begin{figure}[H]
+\centering
+\IfFileExists{cicd.png}{
+  \includegraphics[width=0.98\textwidth]{cicd.png}
+}{
+  \fbox{\parbox[c][7cm][c]{0.92\textwidth}{\centering Sơ đồ quy trình CI/CD của hệ thống SatiBot}}
+}
+\caption{Quy trình tích hợp, kiểm thử và triển khai liên tục của hệ thống SatiBot}
+\label{fig:cicd_pipeline}
+\end{figure}
+
 
 
 \subsection{Các chi tiết cần thiết khác trong giải pháp của dự án}
