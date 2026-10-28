@@ -538,10 +538,71 @@ Luồng hoạt động và giao tiếp giữa các thành phần gồm bốn bư
   \item \textbf{Ghi nhận và trả kết quả:} Formatter Lambda publish thông báo real-time qua AWS AppSync. AppSync duy trì kết nối WebSocket persistent và đẩy thông báo trực tiếp về cho Client/Web
 \end{enumerate}
 
-\subsubsection{Một số tài liệu triển khai hệ thống liên quan}
+\subsection{Đặc tả chi tiết cần thiết trong giải pháp của dự án}
+\subsubsection{Đặc tả cấu hình dịch vụ Bảo mật và Điều hướng}
+
+\textbf{1. Amazon Route 53}
+\begin{itemize}[leftmargin=*]
+    \item \textbf{Tên miền \& Subdomain:} 
+    \begin{itemize}[label=--]
+        \item \code{satibot.id.vn} (Giao diện Web).
+        \item \code{api.satibot.id.vn} (API Gateway Endpoint).
+    \end{itemize}
+    
+    \item \textbf{Loại bản ghi:} Alias Record (trỏ tới CloudFront Distribution).
+    
+    \item \textbf{Chứng chỉ SSL/TLS:} AWS Certificate Manager (ACM).
+    \begin{itemize}[label=--]
+        \item Loại chứng chỉ: Wildcard (\code{*.satibot.id.vn}).
+        \item Region cấp phát: \code{us-east-1}.
+    \end{itemize}
+     
+    
+    \item \textbf{Chính sách định tuyến:} Failover Routing.
+    
+    \item \textbf{Cấu hình bản ghi Primary:} Trỏ đến CloudFront Distribution (Region: \code{ap-southeast-1}).
+    
+    \item \textbf{Cấu hình bản ghi Secondary:} Trỏ đến CloudFront Distribution (Region: \code{us-east-1}; Origin: S3 Bucket chứa tệp \code{error.html}).
+    
+    \item \textbf{Cấu hình Health Check (áp dụng cho bản ghi Primary):}
+    \begin{itemize}[label=--]
+        \item Protocol: HTTPS.
+        \item Path: \code{/health}.
+        \item Request Interval: 10 giây.
+        \item Failure Threshold: 3 lần.
+    \end{itemize}
+    
+    \item \textbf{TTL:} 60 giây.
+\end{itemize}
+
+\vspace{0.5cm}
+
+\textbf{2. AWS WAF (Web Application Firewall)}
+\begin{itemize}[leftmargin=*]
+    \item \textbf{Vị trí tích hợp:} Gắn vào CloudFront Distribution.
+    
+    \item \textbf{Cấu hình Web ACL:}
+    \begin{itemize}[label=--]
+        \item \textbf{Managed Rule Groups:}
+        \begin{itemize}[label=]
+            \item \code{AWSManagedRulesCommonRuleSet}: Action = Block.
+            \item \code{AWSManagedRulesSQLiRuleSet}: Action = Block.
+        \end{itemize}
+        
+        \item \textbf{Rate-based Rule:}
+        \begin{itemize}[label=]
+            \item Threshold: 100 requests / 5 phút / 1 IP.
+            \item Action: Block.
+        \end{itemize}
+        
+        \item \textbf{IP Sets:} Không cấu hình.
+    \end{itemize}
+\end{itemize}
+
+\subsubsection{Giao diện và giao thức tương tác giữa các components}
 \begin{table}[H]
 \centering
-\caption{Đặc tả giao diện và giao thức tương tác giữa các thành phần}
+\caption{Đặc tả giao diện và giao thức tương tác giữa các components}
 \label{tab:inter_service_interfaces}
 \begingroup
 \renewcommand{\arraystretch}{1.12}
@@ -566,6 +627,7 @@ Web Client $\leftrightarrow$ AppSync & GraphQL Subscription / WSS & Cognito User
 \endgroup
 \end{table}
 
+\subsubsection{Cơ sở dữ liệu hệ thống}
 \begin{figure}[H]
 \centering
 \IfFileExists{so_do_erd.jpg}{
@@ -581,19 +643,18 @@ Web Client $\leftrightarrow$ AppSync & GraphQL Subscription / WSS & Cognito User
     }
   }
 }
-\caption{Sơ đồ thực thể liên kết (ERD) cơ sở dữ liệu hệ thống}
+\caption{ERD cơ sở dữ liệu hệ thống}
 \label{fig:so_do_erd}
 \end{figure}
 
-\subsection{Các chi tiết cần thiết khác trong giải pháp của dự án}
+
 
 \subsubsection{CI/CD}
 
-Quy trình CI/CD của SatiBot bắt đầu khi lập trình viên phát triển chức năng trên nhánh riêng, đẩy mã nguồn lên GitHub và tạo Pull Request. Mã nguồn được thành viên trong nhóm xem xét, chạy kiểm thử đơn vị và chỉ được hợp nhất vào nhánh \texttt{main} khi đáp ứng yêu cầu. AWS CodeConnections theo dõi nhánh \texttt{main} và thông báo cho AWS CodePipeline khi xuất hiện commit mới. CodePipeline tiếp nhận mã nguồn và kích hoạt giai đoạn tích hợp liên tục thông qua AWS CodeBuild. Trong môi trường build tạm thời, CodeBuild cài đặt các thư viện Python cần thiết, chạy toàn bộ bộ kiểm thử bằng \texttt{pytest} và dừng pipeline, đồng thời phát thông báo lỗi nếu có ca kiểm thử thất bại. Nếu các kiểm thử đều thành công, CodeBuild chạy lệnh \texttt{cdk synth} để kiểm tra mã hạ tầng và chuyển các AWS CDK Stack thành CloudFormation Template cùng các artifact cần thiết cho bước triển khai.
+Quy trình CI/CD của SatiBot bắt đầu khi lập trình viên phát triển chức năng trên nhánh riêng, đẩy mã nguồn lên GitHub và tạo Pull Request. AWS CodeConnections theo dõi nhánh \texttt{main} và thông báo cho AWS CodePipeline khi xuất hiện commit mới. CodePipeline tiếp nhận mã nguồn và kích hoạt giai đoạn tích hợp liên tục thông qua AWS CodeBuild. Trong môi trường build tạm thời, CodeBuild cài đặt các thư viện Python cần thiết, chạy toàn bộ bộ kiểm thử bằng \texttt{pytest} và dừng pipeline, đồng thời phát thông báo lỗi nếu có ca kiểm thử thất bại. Nếu các kiểm thử đều thành công, CodeBuild chạy lệnh \texttt{cdk synth} để kiểm tra mã hạ tầng và chuyển các AWS CDK Stack thành CloudFormation Template cùng các artifact cần thiết cho bước triển khai.
 
-Sau khi hoàn thành giai đoạn kiểm thử, pipeline chuyển sang giai đoạn triển khai liên tục và tạm dừng tại bước phê duyệt thủ công. Nếu người phụ trách từ chối, quá trình triển khai kết thúc mà không làm thay đổi tài nguyên đang hoạt động; nếu được đồng ý, AWS CDK và AWS CloudFormation tạo mới hoặc cập nhật các thành phần của SitaBot như AWS Lambda, API Gateway, DynamoDB, Amazon SQS, Amazon Cognito, S3 và CloudFront. Đối với các hàm Lambda quan trọng, AWS CodeDeploy thực hiện triển khai theo chiến lược canary bằng cách chỉ chuyển một phần lưu lượng sang phiên bản mới trước. Trong quá trình này, Amazon CloudWatch thu thập log, metric và theo dõi các cảnh báo đã cấu hình. Nếu phiên bản mới hoạt động ổn định, CodeDeploy tiếp tục chuyển toàn bộ lưu lượng sang phiên bản mới; ngược lại, khi CloudWatch phát hiện lỗi, CodeDeploy tự động rollback về phiên bản Lambda trước đó nhằm duy trì tính ổn định của hệ thống.
-
-Quy trình tổng thể được minh họa trong Hình~\ref{fig:cicd_pipeline}.
+Sau khi hoàn thành giai đoạn kiểm thử, pipeline chuyển sang giai đoạn triển khai liên tục và tạm dừng tại bước phê duyệt thủ công. Nếu người phụ trách từ chối, quá trình triển khai kết thúc mà không làm thay đổi tài nguyên đang hoạt động; nếu được đồng ý, AWS CDK và AWS CloudFormation tạo mới hoặc cập nhật các thành phần sửa đổi của SitaBot. Đối với các hàm Lambda quan trọng, AWS CodeDeploy thực hiện triển khai theo chiến lược canary bằng cách chỉ chuyển một phần lưu lượng sang phiên bản mới trước. 
+Trong suốt quá trình kiểm thử, Amazon CloudWatch thu thập log, metric và theo dõi các cảnh báo đã cấu hình. Nếu phiên bản mới hoạt động ổn định, CodeDeploy tiếp tục chuyển toàn bộ lưu lượng sang phiên bản mới; ngược lại, khi CloudWatch phát hiện lỗi, CodeDeploy tự động rollback về phiên bản Lambda trước đó.
 
 \begin{figure}[H]
 \centering
@@ -605,11 +666,6 @@ Quy trình tổng thể được minh họa trong Hình~\ref{fig:cicd_pipeline}.
 \caption{Quy trình tích hợp, kiểm thử và triển khai liên tục của hệ thống SatiBot}
 \label{fig:cicd_pipeline}
 \end{figure}
-
-
-
-\subsection{Các chi tiết cần thiết khác trong giải pháp của dự án}
-\label{sec:solution_details}
 
 \subsubsection{Phân quyền cho các hàm Lambda}
 
@@ -664,8 +720,6 @@ Quyền phụ thuộc mã ứng dụng; ví dụ \path{s3:GetObject} khi hàm c�
 
 Để thao tác trên tài khoản AWS của người dùng, Connector và Dispatcher sử dụng role do chủ tài khoản cho phép SatiBot truy cập. Connector kiểm tra kết nối; Dispatcher nhận quyền tạm thời qua STS để thực hiện các thao tác được role đó cho phép. Lambda ứng dụng của người dùng có quyền chạy riêng, tùy theo mã ứng dụng. Các Lambda ghi log được cấp thêm quyền ghi CloudWatch Logs để theo dõi lỗi.
 
-Quyền IAM trong bảng cho phép Lambda truy cập dịch vụ AWS. Backend vẫn phải kiểm tra dữ liệu thuộc người dùng đang đăng nhập. Ví dụ, dù History có quyền đọc ActionHistory, mỗi yêu cầu chỉ được trả về lịch sử của chính người gửi. Tương tự, Dispatcher phải kiểm tra hành động và kết nối AWS thuộc cùng người dùng trước khi thực thi.
-
 \subsubsection{Tích hợp LLM qua Gemini API}
 \label{sec:llm_integration}
 
@@ -712,18 +766,14 @@ Nhận từ Gemini & \texttt{content} & Nội dung trả lời hoặc câu hỏi
 \end{tabularx}
 \end{table}
 
-Danh sách hàm được khai báo trước cho bốn module EC2, S3, IAM và Lambda. Mỗi khai báo mô tả một thao tác và các tham số bắt buộc, kiểu dữ liệu, giá trị cho phép. Khi nhận \texttt{tool\_calls}, Chatbot kiểm tra tên hàm và tham số theo khai báo, rồi ánh xạ sang thao tác tương ứng của Dispatcher. Ví dụ như yêu cầu dừng máy ảo phải xác định được instance ID và region. Nếu thiếu thông tin, hệ thống hỏi lại người dùng. Các thao tác cần xác nhận được lưu vào PendingAction; sau xác nhận, Dispatcher sử dụng đúng nội dung đã lưu để thực thi.
+Danh sách hàm được khai báo trước cho bốn module EC2, S3, IAM và Lambda. Mỗi khai báo mô tả một thao tác và các tham số bắt buộc, kiểu dữ liệu, giá trị cho phép. Khi nhận \texttt{tool\_calls}, Chatbot kiểm tra tên hàm và tham số theo khai báo, rồi ánh xạ sang thao tác tương ứng của Dispatcher.
 
 Formatter gửi kết quả AWS cho LLM để tạo lời đáp dễ đọc, không cần cung cấp danh sách hàm quản trị. Trạng thái thực thi, định danh tài nguyên và số liệu được lấy từ kết quả AWS; nội dung do LLM diễn giải không thay thế các dữ liệu này. Nếu bước diễn giải lỗi, Formatter trả kết quả theo mẫu có sẵn.
 
 Mỗi lần gọi LLM có thời gian chờ và số lần thử lại giới hạn. Phản hồi sai cấu trúc không được chuyển sang thực thi. Ngữ cảnh hội thoại được giới hạn số lượt và dung lượng; credential AWS không được gửi tới mô hình. Lỗi kết nối hoặc lỗi tạo lời đáp không làm chạy lại thao tác thay đổi tài nguyên đã thực hiện.
 
-\subsection{Đặc tả kỹ thuật các điểm cuối API Gateway (POST /chat và POST /confirm)}
-\label{sec:api_endpoints}
 
-Để đảm bảo tính nhất quán, an toàn và khả năng mở rộng của hệ thống ChatOps SatiBot, nhóm đã thiết kế hai điểm cuối giao tiếp cốt lõi (Core Endpoints) tại tầng Amazon API Gateway gồm: \textbf{Chat Endpoint} (\texttt{POST /chat}) và \textbf{Confirm Endpoint} (\texttt{POST /confirm}). Các điểm cuối này hiện thực hóa mô hình Single Entrypoint Gateway kết hợp cơ chế kiểm soát có con người tham gia, phục vụ điều phối tập trung cho toàn bộ các dịch vụ AWS được hỗ trợ (Amazon EC2, Amazon S3, AWS IAM, AWS Lambda) và ngăn ngừa các thao tác thay đổi hạ tầng ngoài ý muốn.
-
-\subsubsection{Điểm cuối tiếp nhận hội thoại và trích xuất ý định (POST /chat)}
+\subsubsection{Endpoint tiếp nhận hội thoại và trích xuất ý định (POST /chat)}
 
 \textbf{1. Thông tin chung:}
 \begin{itemize}
@@ -818,11 +868,7 @@ Mẫu JSON Response trả về từ hệ thống. Do thao tác \texttt{create\_i
 \endgroup
 \end{table}
 
-\textbf{4. Luồng xử lý nghiệp vụ:}
-
-Khi người dùng gửi yêu cầu qua giao diện chat, API Gateway tiếp nhận và xác thực chữ ký số JWT thông qua Amazon Cognito. Chatbot Lambda phân tích câu lệnh bằng cách kết hợp ngữ cảnh được truy vấn từ bảng \texttt{SessionState} với danh mục Tool Schemas gửi đến mô hình LLM. Khi phát hiện yêu cầu thuộc danh mục tác vụ thay đổi trạng thái hạ tầng, Chatbot Lambda chủ động tạm dừng luồng thực thi, tạo một bản ghi giao dịch chờ với khóa \texttt{action\_id} lưu trong bảng \texttt{PendingAction} của DynamoDB và phản hồi trạng thái \texttt{CONFIRMATION\_REQUIRED} tới người dùng.
-
-\subsubsection{Điểm cuối xác nhận và thực thi tài nguyên (POST /confirm)}
+\subsubsection{Endpoint xác nhận và thực thi tài nguyên (POST /confirm)}
 
 \textbf{1. Thông tin chung:}
 \begin{itemize}
@@ -916,10 +962,6 @@ Mẫu JSON Response trả về ngay lập tức sau khi Dispatcher Lambda và Mo
 \end{tabularx}
 \endgroup
 \end{table}
-
-\textbf{4. Luồng xử lý nghiệp vụ:}
-
-Khi nhận được yêu cầu xác nhận mang cờ \texttt{confirmed: true}, hệ thống đối soát \texttt{action\_id} với dữ liệu lưu trữ trong bảng \texttt{PendingAction}. Sau khi hợp thức hóa, yêu cầu được chuyển giao cho Dispatcher Lambda để kích hoạt module chuyên trách tương ứng. Module thực hiện các bước bảo vệ FinOps Guardrail và Idempotency (kiểm tra trùng lặp tên thông qua tag \texttt{Name}) trước khi gọi hàm \texttt{ec2.run\_instances()} qua Boto3 SDK trên Region chỉ định. Kết quả khởi tạo tức thời được trả về cho người dùng với trạng thái \texttt{pending} bất đồng bộ. Cuối cùng, hệ thống cập nhật trạng thái bản ghi trong \texttt{PendingAction} và ghi lại toàn bộ nhật ký kiểm toán vào bảng \texttt{ActionHistory} trong Amazon DynamoDB để phục vụ công tác truy vết và quản trị an toàn thông tin.
 
 
 \section{KẾ HOẠCH TRIỂN KHAI DỰ ÁN}
