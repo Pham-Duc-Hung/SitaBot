@@ -133,11 +133,19 @@
 \rule{5cm}{0.4pt}\par
 \vspace{0.5cm}
 
-\IfFileExists{Report progress 1/logo.png}{
-  \includegraphics[width=3.8cm,height=3.8cm,keepaspectratio]{Report progress 1/logo.png}
+\IfFileExists{logo.png}{
+  \includegraphics[width=3.8cm,height=3.8cm,keepaspectratio]{logo.png}
 }{
-  \fbox{\parbox[c][3.4cm][c]{3.4cm}{\centering
-    \fontsize{11}{14}\selectfont LOGO TRƯỜNG}}
+  \IfFileExists{Report progress 2/logo.png}{
+    \includegraphics[width=3.8cm,height=3.8cm,keepaspectratio]{Report progress 2/logo.png}
+  }{
+    \IfFileExists{Report progress 1/logo.png}{
+      \includegraphics[width=3.8cm,height=3.8cm,keepaspectratio]{Report progress 1/logo.png}
+    }{
+      \fbox{\parbox[c][3.4cm][c]{3.4cm}{\centering
+        \fontsize{11}{14}\selectfont LOGO TRƯỜNG}}
+    }
+  }
 }\par
 \vspace{0.7cm}
 {\fontsize{22}{27}\selectfont\bfseries\LoaiBaoCao\par}
@@ -395,10 +403,18 @@ Dịch vụ điện toán không máy chủ (AWS Lambda) cho phép chạy mã ng
 
 \begin{figure}[H]
 \centering
-\IfFileExists{Report progress 1/So_do_kien_truc_tinh_nang.jpg}{
-  \includegraphics[width=0.8\textwidth]{Report progress 1/So_do_kien_truc_tinh_nang.jpg}
+\IfFileExists{So_do_kien_truc_tinh_nang.jpg}{
+  \includegraphics[width=0.8\textwidth]{So_do_kien_truc_tinh_nang.jpg}
 }{
-  \fbox{\parbox[c][6.5cm][c]{0.88\textwidth}{\centering Sơ đồ kiến trúc tính năng hệ thống SatiBot}}
+  \IfFileExists{Report progress 2/So_do_kien_truc_tinh_nang.jpg}{
+    \includegraphics[width=0.8\textwidth]{Report progress 2/So_do_kien_truc_tinh_nang.jpg}
+  }{
+    \IfFileExists{Report progress 1/So_do_kien_truc_tinh_nang.jpg}{
+      \includegraphics[width=0.8\textwidth]{Report progress 1/So_do_kien_truc_tinh_nang.jpg}
+    }{
+      \fbox{\parbox[c][6.5cm][c]{0.88\textwidth}{\centering Sơ đồ kiến trúc tính năng hệ thống SatiBot}}
+    }
+  }
 }
 \caption{Sơ đồ kiến trúc tính năng và luồng xử lý nghiệp vụ của SatiBot}
 \label{fig:kientruc_tinhnang}
@@ -413,10 +429,18 @@ Các tính năng hệ thống cung cấp bao gồm:
 
   \begin{figure}[H]
   \centering
-  \IfFileExists{Report progress 1/sequence3.jpg}{
-    \includegraphics[width=0.78\textwidth]{Report progress 1/sequence3.jpg}
+  \IfFileExists{sequence3.jpg}{
+    \includegraphics[width=0.78\textwidth]{sequence3.jpg}
   }{
-    \fbox{\parbox[c][5cm][c]{0.88\textwidth}{\centering Sơ đồ tuần tự quy trình kết nối tài khoản AWS}}
+    \IfFileExists{Report progress 2/sequence3.jpg}{
+      \includegraphics[width=0.78\textwidth]{Report progress 2/sequence3.jpg}
+    }{
+      \IfFileExists{Report progress 1/sequence3.jpg}{
+        \includegraphics[width=0.78\textwidth]{Report progress 1/sequence3.jpg}
+      }{
+        \fbox{\parbox[c][5cm][c]{0.88\textwidth}{\centering Sơ đồ tuần tự quy trình kết nối tài khoản AWS}}
+      }
+    }
   }
   \caption{Sơ đồ tuần tự quy trình kết nối và xác thực tài khoản AWS mục tiêu}
   \label{fig:sequence_connect}
@@ -426,9 +450,17 @@ Các tính năng hệ thống cung cấp bao gồm:
 
   \begin{figure}[H]
   \centering
-  \IfFileExists{Report progress 1/sequence1.jpg}{
-    \includegraphics[width=0.8\textwidth]{Report progress 1/sequence1.jpg}
+  \IfFileExists{sequence1.jpg}{
+    \includegraphics[width=0.8\textwidth]{sequence1.jpg}
   }{
+    \IfFileExists{Report progress 2/sequence1.jpg}{
+      \includegraphics[width=0.8\textwidth]{Report progress 2/sequence1.jpg}
+    }{
+      \IfFileExists{Report progress 1/sequence1.jpg}{
+        \includegraphics[width=0.8\textwidth]{Report progress 1/sequence1.jpg}
+      }{
+      }
+    }
   }
   \caption{Sơ đồ tuần tự quy trình điều phối và thực thi tác vụ ChatOps}
   \label{fig:sequence_chatops}
@@ -457,7 +489,7 @@ Amazon Cognito & Quản lý đăng ký, đăng nhập và cấp JWT để xác t
 AWS STS & Cấp quyền truy cập tạm thời (Temporary Credentials). \\
 Amazon API Gateway & Tiếp nhận API từ frontend, xác thực JWT và định tuyến yêu cầu chat, xác nhận thao tác hoặc tra cứu lịch sử.\\
 AWS Step Functions & Điều phối luồng thực thi sau khi người dùng xác nhận, gồm ChatBot, Dispatcher và Formatter Lambda.\\
-AWS Lambda & Thực hiện các nghiệp vụ: Chatbot, Dispatcher, Formatter, Connector, History và tạo External ID.\\
+AWS Lambda & Thực hiện các nghiệp vụ: Chatbot, Dispatcher, Formatter, Connector và History; Connector đảm nhiệm tạo ExternalId và kiểm tra kết nối AWS.\\
 Mô hình LLM & Phân tích câu lệnh tiếng Việt và trả về ý định, tham số theo Function Calling Schema; không trực tiếp gọi API AWS.\\
 AWS STS và Boto3 & STS cấp thông tin xác thực tạm thời cho tài khoản đích; Boto3 dùng thông tin này để gọi API tài nguyên.\\
 Amazon DynamoDB & Lưu hồ sơ người dùng, kết nối AWS, lịch sử hội thoại, hành động chờ xác nhận và lịch sử thao tác.\\
@@ -472,10 +504,18 @@ CI/CD Pipeline (GitHub, CodePipeline, CodeBuild) & Tự động hóa quy trình 
 
 \begin{figure}[H]
 \centering
-\IfFileExists{Report progress 2/so_do_kien_truc.jpg}{
-  \includegraphics[width=0.82\textwidth]{Report progress 2/so_do_kien_truc.jpg}
+\IfFileExists{so_do_kien_truc.jpg}{
+  \includegraphics[width=0.82\textwidth]{so_do_kien_truc.jpg}
 }{
-  \fbox{\parbox[c][6.5cm][c]{0.88\textwidth}{\centering Sơ đồ kiến trúc triển khai tổng thể hệ thống SatiBot}}
+  \IfFileExists{Report progress 2/so_do_kien_truc.jpg}{
+    \includegraphics[width=0.82\textwidth]{Report progress 2/so_do_kien_truc.jpg}
+  }{
+    \IfFileExists{Report progress 1/so_do_kien_truc.jpg}{
+      \includegraphics[width=0.82\textwidth]{Report progress 1/so_do_kien_truc.jpg}
+    }{
+      \fbox{\parbox[c][6.5cm][c]{0.88\textwidth}{\centering Sơ đồ kiến trúc triển khai tổng thể hệ thống SatiBot}}
+    }
+  }
 }
 \caption{Sơ đồ kiến trúc triển khai tổng thể hệ thống SatiBot}
 \label{fig:so_do_kien_truc}
@@ -528,15 +568,134 @@ Web Client $\leftrightarrow$ AppSync & GraphQL Subscription / WSS & Cognito User
 
 \begin{figure}[H]
 \centering
-\IfFileExists{Report progress 1/so_do_erd.jpg}{
-  \includegraphics[width=0.9\textwidth]{Report progress 1/so_do_erd.jpg}
+\IfFileExists{so_do_erd.jpg}{
+  \includegraphics[width=0.9\textwidth]{so_do_erd.jpg}
 }{
-  \fbox{\parbox[c][6.5cm][c]{0.88\textwidth}{\centering Sơ đồ thực thể liên kết ERD}}
+  \IfFileExists{Report progress 2/so_do_erd.jpg}{
+    \includegraphics[width=0.9\textwidth]{Report progress 2/so_do_erd.jpg}
+  }{
+    \IfFileExists{Report progress 1/so_do_erd.jpg}{
+      \includegraphics[width=0.9\textwidth]{Report progress 1/so_do_erd.jpg}
+    }{
+      \fbox{\parbox[c][6.5cm][c]{0.88\textwidth}{\centering Sơ đồ thực thể liên kết ERD}}
+    }
+  }
 }
 \caption{Sơ đồ thực thể liên kết (ERD) cơ sở dữ liệu hệ thống}
 \label{fig:so_do_erd}
 \end{figure}
 
+
+
+\subsection{Các chi tiết cần thiết khác trong giải pháp của dự án}
+\label{sec:solution_details}
+
+\subsubsection{Phân quyền cho các hàm Lambda}
+
+SatiBot phân quyền theo nhiệm vụ của từng Lambda. Mỗi hàm backend được gắn một IAM role để AWS xác định hàm được phép thực hiện thao tác nào và trên tài nguyên nào. Việc cấp quyền riêng giúp giới hạn tác động khi một hàm gặp lỗi hoặc xử lý sai yêu cầu.
+
+Bảng~\ref{tab:lambda_permissions} trình bày các quyền theo thiết kế cho năm Lambda backend và Lambda ứng dụng trong tài khoản người dùng. Các quyền đọc, ghi được giới hạn vào đúng bảng dữ liệu; quyền đọc khóa Gemini API chỉ được cấp cho những hàm sử dụng mô hình.
+
+\begingroup
+\setlength{\tabcolsep}{5pt}
+\renewcommand{\arraystretch}{1.17}
+\fontsize{10.5}{14}\selectfont
+\begin{longtable}{@{}>{\raggedright\arraybackslash}p{2.25cm}>{\raggedright\arraybackslash}p{3.35cm}>{\raggedright\arraybackslash}p{9.05cm}@{}}
+\caption{Nhiệm vụ và quyền IAM của các Lambda}\label{tab:lambda_permissions}\\
+\toprule
+\textbf{Lambda} & \textbf{Nhiệm vụ} & \textbf{IAM Action cần cấp và nơi sử dụng}\\
+\midrule
+\endfirsthead
+\toprule
+\textbf{Lambda} & \textbf{Nhiệm vụ} & \textbf{IAM Action cần cấp và nơi sử dụng}\\
+\midrule
+\endhead
+\endfoot
+\bottomrule
+\endlastfoot
+Chatbot & Xử lý câu chat; lưu phiên và hành động chờ xác nhận. &
+\path{dynamodb:GetItem}: đọc SessionState, PendingAction và AwsConnections.\par
+\path{dynamodb:PutItem}, \path{dynamodb:UpdateItem}: ghi SessionState và PendingAction.\par
+\path{secretsmanager:GetSecretValue}: đọc khóa Gemini API.\\
+\midrule
+Dispatcher & Thực thi hành động đã duyệt trên tài khoản AWS đích. &
+\path{dynamodb:GetItem}: đọc PendingAction và AwsConnections.\par
+\path{dynamodb:UpdateItem}: cập nhật PendingAction.\par
+\path{sts:AssumeRole}: nhận quyền tạm thời từ role trong tài khoản đích.\\
+\midrule
+Formatter & Tạo lời đáp; lưu và gửi kết quả. &
+\path{dynamodb:PutItem}, \path{dynamodb:UpdateItem}: ghi ActionHistory.\par
+\path{appsync:GraphQL}: phát kết quả qua AppSync.\par
+\path{secretsmanager:GetSecretValue}: đọc khóa Gemini API.\\
+\midrule
+Connector & Tạo ExternalId; lưu và kiểm tra kết nối AWS. &
+\path{dynamodb:GetItem}, \path{dynamodb:PutItem}, \path{dynamodb:UpdateItem}: quản lý AwsConnections.\par
+\path{sts:AssumeRole}: kiểm tra role người dùng cung cấp.\\
+\midrule
+History & Liệt kê và xem chi tiết lịch sử. &
+\path{dynamodb:Query}: liệt kê bản ghi trong ActionHistory.\par
+\path{dynamodb:GetItem}: đọc một bản ghi trong ActionHistory.\\
+\midrule
+Lambda của người dùng & Chạy mã ứng dụng trong tài khoản AWS đích. &
+Quyền phụ thuộc mã ứng dụng; ví dụ \path{s3:GetObject} khi hàm cần đọc tệp S3. Quyền quản lý hàm, như \path{lambda:InvokeFunction} hoặc \path{lambda:UpdateFunctionConfiguration}, nằm trong role đích mà Dispatcher đảm nhận.\\
+\end{longtable}
+\endgroup
+
+Để thao tác trên tài khoản AWS của người dùng, Connector và Dispatcher sử dụng role do chủ tài khoản cho phép SatiBot truy cập. Connector kiểm tra kết nối; Dispatcher nhận quyền tạm thời qua STS để thực hiện các thao tác được role đó cho phép. Lambda ứng dụng của người dùng có quyền chạy riêng, tùy theo mã ứng dụng. Các Lambda ghi log được cấp thêm quyền ghi CloudWatch Logs để theo dõi lỗi.
+
+Quyền IAM trong bảng cho phép Lambda truy cập dịch vụ AWS. Backend vẫn phải kiểm tra dữ liệu thuộc người dùng đang đăng nhập. Ví dụ, dù History có quyền đọc ActionHistory, mỗi yêu cầu chỉ được trả về lịch sử của chính người gửi. Tương tự, Dispatcher phải kiểm tra hành động và kết nối AWS thuộc cùng người dùng trước khi thực thi.
+
+\subsubsection{Tích hợp LLM qua Gemini API}
+\label{sec:llm_integration}
+
+Hệ thống sử dụng mô hình Gemini của Google qua Gemini API. Tại Chatbot Lambda, mô hình chuyển câu chat tiếng Việt thành yêu cầu gọi hàm quản trị AWS; tại Formatter Lambda, mô hình diễn giải kết quả thực thi. Việc thao tác tài nguyên do Dispatcher thực hiện bằng Boto3 theo luồng ở Hình~\ref{fig:sequence_chatops}.
+
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[x=1cm,y=1cm,
+box/.style={draw,rounded corners,align=center,text width=3.6cm,minimum height=1cm,font=\small},
+lab/.style={font=\footnotesize,align=center,fill=white,inner sep=2pt}]
+\node[box] (chat) at (0,0) {Chatbot Lambda\\Chuẩn bị yêu cầu};
+\node[box] (llm) at (8,0) {Gemini API\\Chọn hàm và tham số};
+\node[box] (check) at (0,-2.5) {Chatbot Lambda\\Kiểm tra, yêu cầu xác nhận};
+\node[box] (dispatch) at (8,-2.5) {Dispatcher Lambda\\Boto3 gọi AWS};
+\draw[->,thick] (chat.north east) -- ++(0,.6) -| node[lab,pos=.25,above] {Câu chat, ngữ cảnh, danh sách hàm} (llm.north);
+\draw[->,thick] (llm.west) -- node[lab,above] {Tên hàm và tham số} (chat.east);
+\draw[->,thick] (chat) -- (check);
+\draw[->,thick] (check) -- node[lab,above] {Hành động đủ điều kiện\\thực thi} (dispatch);
+\end{tikzpicture}
+\caption{Tích hợp Gemini API với các Lambda xử lý yêu cầu}
+\label{fig:llm_integration}
+\end{figure}
+
+Backend gọi Gemini API bằng HTTP POST qua HTTPS, sử dụng endpoint Chat Completions do Google cung cấp. Nội dung request và response có định dạng JSON; khóa API được gửi trong header Authorization. Endpoint và mã model là cấu hình backend, model cần hỗ trợ Function Calling. Theo phương án triển khai, khóa API được lưu trong Secrets Manager và chỉ các Lambda cần gọi LLM được quyền đọc.
+
+\begin{table}[H]
+\centering
+\caption{Dữ liệu trao đổi giữa Chatbot Lambda và Gemini API}
+\label{tab:llm_exchange}
+\fontsize{11}{14}\selectfont
+\begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}p{2.4cm}>{\raggedright\arraybackslash}p{3.2cm}Y@{}}
+\toprule
+\textbf{Chiều trao đổi} & \textbf{Trường dữ liệu} & \textbf{Nội dung}\\
+\midrule
+Gửi tới Gemini & \texttt{model} & Mã mô hình Gemini được cấu hình cho hệ thống.\\
+ & \texttt{messages} & Chỉ dẫn hệ thống, câu chat hiện tại và ngữ cảnh hội thoại cần thiết.\\
+ & \texttt{tools} & Danh sách hàm được phép gọi: tên, mô tả và JSON Schema quy định tham số.\\
+ & \texttt{tool\_choice} & Giá trị \texttt{auto}: cho phép mô hình trả lời hoặc đề xuất gọi hàm theo yêu cầu.\\
+\midrule
+Nhận từ Gemini & \texttt{content} & Nội dung trả lời hoặc câu hỏi bổ sung khi chưa đủ thông tin.\\
+ & \texttt{tool\_calls} & Danh sách lời gọi hàm; mỗi lời gọi có tên hàm và các tham số.\\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+Danh sách hàm được khai báo trước cho bốn module EC2, S3, IAM và Lambda. Mỗi khai báo mô tả một thao tác và các tham số bắt buộc, kiểu dữ liệu, giá trị cho phép. Khi nhận \texttt{tool\_calls}, Chatbot kiểm tra tên hàm và tham số theo khai báo, rồi ánh xạ sang thao tác tương ứng của Dispatcher. Ví dụ như yêu cầu dừng máy ảo phải xác định được instance ID và region. Nếu thiếu thông tin, hệ thống hỏi lại người dùng. Các thao tác cần xác nhận được lưu vào PendingAction; sau xác nhận, Dispatcher sử dụng đúng nội dung đã lưu để thực thi.
+
+Formatter gửi kết quả AWS cho LLM để tạo lời đáp dễ đọc, không cần cung cấp danh sách hàm quản trị. Trạng thái thực thi, định danh tài nguyên và số liệu được lấy từ kết quả AWS; nội dung do LLM diễn giải không thay thế các dữ liệu này. Nếu bước diễn giải lỗi, Formatter trả kết quả theo mẫu có sẵn.
+
+Mỗi lần gọi LLM có thời gian chờ và số lần thử lại giới hạn. Phản hồi sai cấu trúc không được chuyển sang thực thi. Ngữ cảnh hội thoại được giới hạn số lượt và dung lượng; credential AWS không được gửi tới mô hình. Lỗi kết nối hoặc lỗi tạo lời đáp không làm chạy lại thao tác thay đổi tài nguyên đã thực hiện.
 
 \section{KẾ HOẠCH TRIỂN KHAI DỰ ÁN}
 
