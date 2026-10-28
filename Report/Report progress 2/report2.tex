@@ -718,6 +718,210 @@ Formatter gửi kết quả AWS cho LLM để tạo lời đáp dễ đọc, kh�
 
 Mỗi lần gọi LLM có thời gian chờ và số lần thử lại giới hạn. Phản hồi sai cấu trúc không được chuyển sang thực thi. Ngữ cảnh hội thoại được giới hạn số lượt và dung lượng; credential AWS không được gửi tới mô hình. Lỗi kết nối hoặc lỗi tạo lời đáp không làm chạy lại thao tác thay đổi tài nguyên đã thực hiện.
 
+\subsection{Đặc tả kỹ thuật các điểm cuối API Gateway (POST /chat và POST /confirm)}
+\label{sec:api_endpoints}
+
+Để đảm bảo tính nhất quán, an toàn và khả năng mở rộng của hệ thống ChatOps SatiBot, nhóm đã thiết kế hai điểm cuối giao tiếp cốt lõi (Core Endpoints) tại tầng Amazon API Gateway gồm: \textbf{Chat Endpoint} (\texttt{POST /chat}) và \textbf{Confirm Endpoint} (\texttt{POST /confirm}). Các điểm cuối này hiện thực hóa mô hình Single Entrypoint Gateway kết hợp cơ chế kiểm soát có con người tham gia, phục vụ điều phối tập trung cho toàn bộ các dịch vụ AWS được hỗ trợ (Amazon EC2, Amazon S3, AWS IAM, AWS Lambda) và ngăn ngừa các thao tác thay đổi hạ tầng ngoài ý muốn.
+
+\subsubsection{Điểm cuối tiếp nhận hội thoại và trích xuất ý định (POST /chat)}
+
+\textbf{1. Thông tin chung:}
+\begin{itemize}
+    \item \textbf{Đường dẫn (Path):} \texttt{/chat} (hoặc \texttt{/api/chat} trên giao diện Web Client).
+    \item \textbf{Phương thức HTTP:} \texttt{POST}.
+    \item \textbf{Cơ chế xác thực:} Bearer JWT Token thông qua HTTP Header \texttt{Authorization: Bearer <Token>}. Amazon API Gateway sử dụng Cognito User Pool Authorizer để giải mã và kiểm tra tính hợp lệ của token trước khi kích hoạt hàm xử lý phía sau.
+    \item \textbf{Thành phần tiếp nhận:} Amazon API Gateway $\rightarrow$ Chatbot Lambda (tích hợp mô hình ngôn ngữ lớn LLM với cơ chế Function Calling).
+\end{itemize}
+
+\textbf{2. Dữ liệu trao đổi thực tế (Kịch bản khởi tạo máy chủ ảo EC2):}
+
+Mẫu JSON Request gửi từ Web Client khi người dùng gửi câu lệnh khởi tạo máy chủ EC2 bằng ngôn ngữ tự nhiên tiếng Việt:
+
+\begin{verbatim}
+{
+  "message": "Tạo cho tôi một máy chủ EC2 Ubuntu có tên 'web-demo'",
+  "history": [
+    {
+      "role": "user",
+      "content": "Xin chào SatiBot"
+    },
+    {
+      "role": "assistant",
+      "content": "Xin chào! Tôi là SatiBot - Trợ lý ChatOps quản trị AWS."
+    }
+  ],
+  "region": "ap-southeast-2"
+}
+\end{verbatim}
+
+Mẫu JSON Response trả về từ hệ thống. Do thao tác \texttt{create\_instance} là hành động làm thay đổi tài nguyên hạ tầng và phát sinh chi phí, hệ thống trả về mã trạng thái \texttt{CONFIRMATION\_REQUIRED} kèm mã giao dịch \texttt{action\_id} để yêu cầu xác nhận:
+
+\begin{verbatim}
+{
+  "status": "CONFIRMATION_REQUIRED",
+  "type": "action_confirmation",
+  "action_id": "act_8f3a9e1b2c4d",
+  "service": "ec2",
+  "tool_name": "create_instance",
+  "parameters": {
+    "instance_name": "web-demo",
+    "os_type": "ubuntu",
+    "instance_type": "t3.micro"
+  },
+  "message": "Thao tác 'create_instance' làm thay đổi cấu hình hoặc kích hoạt"
+             " tài nguyên. Bạn có chắc chắn muốn thực hiện không?"
+}
+\end{verbatim}
+
+\textbf{3. Bảng giải thích chi tiết các trường dữ liệu:}
+
+\begin{table}[H]
+\centering
+\caption{Mô tả các trường trong Request Body của Endpoint \texttt{POST /chat}}
+\label{tab:chat_request}
+\begingroup
+\renewcommand{\arraystretch}{1.12}
+\fontsize{10}{13}\selectfont
+\begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}p{2.5cm}>{\raggedright\arraybackslash}p{2.3cm}>{\centering\arraybackslash}p{1.8cm}Y@{}}
+\toprule
+\textbf{Tên trường} & \textbf{Kiểu dữ liệu} & \textbf{Bắt buộc} & \textbf{Mô tả ý nghĩa và nguồn gốc dữ liệu} \\
+\midrule
+\texttt{message} & String & Có & Nội dung câu lệnh bằng ngôn ngữ tự nhiên tiếng Việt của người dùng gửi từ giao diện. \\
+\texttt{history} & Array[Object] & Không & Lịch sử hội thoại nhiều lượt gồm các cặp \texttt{role} và \texttt{content}, đồng bộ từ bảng \texttt{SessionState} trong DynamoDB. \\
+\texttt{region} & String & Không & Khu vực AWS mục tiêu thực hiện tác vụ (mặc định: \texttt{ap-southeast-2}). \\
+\texttt{credentials} & Object & Không & Thông tin xác thực AWS cục bộ. \\
+\bottomrule
+\end{tabularx}
+\endgroup
+\end{table}
+
+\begin{table}[H]
+\centering
+\caption{Mô tả các trường trong Response Body của Endpoint \texttt{POST /chat}}
+\label{tab:chat_response}
+\begingroup
+\renewcommand{\arraystretch}{1.12}
+\fontsize{10}{13}\selectfont
+\begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}p{2.8cm}>{\raggedright\arraybackslash}p{2.2cm}>{\centering\arraybackslash}p{1.8cm}Y@{}}
+\toprule
+\textbf{Tên trường} & \textbf{Kiểu dữ liệu} & \textbf{Bắt buộc} & \textbf{Mô tả ý nghĩa và nguồn gốc dữ liệu} \\
+\midrule
+\texttt{status} & String & Có & Trạng thái phản hồi của hệ thống (\texttt{CONFIRMATION\_REQUIRED} khi cần duyệt, hoặc \texttt{SUCCESS} khi chỉ truy vấn dữ liệu). \\
+\texttt{type} & String & Có & Loại phản hồi định hướng hiển thị phía Client (\texttt{action\_confirmation} hoặc \texttt{chat\_reply}). \\
+\texttt{action\_id} & String & Có & Mã định danh duy nhất cho hành động chờ duyệt, được lưu làm Partition Key trong bảng \texttt{PendingAction} với thời gian TTL 15 phút. \\
+\texttt{service} & String & Có & Dịch vụ AWS mục tiêu (ví dụ: \texttt{ec2}, \texttt{s3}, \texttt{lambda}, \texttt{iam}) do LLM Function Calling trích xuất. \\
+\texttt{tool\_name} & String & Có & Tên hành động kỹ thuật được trích xuất (ví dụ: \texttt{create\_instance}, \texttt{manage\_power}). \\
+\texttt{parameters} & Object & Có & Cấu trúc tham số kỹ thuật chi tiết trích xuất từ câu lệnh tự nhiên của người dùng. \\
+\texttt{message} & String & Có & Lời nhắn tiếng Việt thân thiện gửi người dùng để thông báo hoặc yêu cầu xác nhận an toàn. \\
+\bottomrule
+\end{tabularx}
+\endgroup
+\end{table}
+
+\textbf{4. Luồng xử lý nghiệp vụ:}
+
+Khi người dùng gửi yêu cầu qua giao diện chat, API Gateway tiếp nhận và xác thực chữ ký số JWT thông qua Amazon Cognito. Chatbot Lambda phân tích câu lệnh bằng cách kết hợp ngữ cảnh được truy vấn từ bảng \texttt{SessionState} với danh mục Tool Schemas gửi đến mô hình LLM. Khi phát hiện yêu cầu thuộc danh mục tác vụ thay đổi trạng thái hạ tầng, Chatbot Lambda chủ động tạm dừng luồng thực thi, tạo một bản ghi giao dịch chờ với khóa \texttt{action\_id} lưu trong bảng \texttt{PendingAction} của DynamoDB và phản hồi trạng thái \texttt{CONFIRMATION\_REQUIRED} tới người dùng.
+
+\subsubsection{Điểm cuối xác nhận và thực thi tài nguyên (POST /confirm)}
+
+\textbf{1. Thông tin chung:}
+\begin{itemize}
+    \item \textbf{Đường dẫn (Path):} \texttt{/confirm} (hoặc gửi tới \texttt{/chat} với tham số \texttt{confirmed: true}).
+    \item \textbf{Phương thức HTTP:} \texttt{POST}.
+    \item \textbf{Cơ chế xác thực:} Bearer JWT Token của Amazon Cognito trong Header \texttt{Authorization}.
+    \item \textbf{Thành phần tiếp nhận:} Amazon API Gateway $\rightarrow$ Chatbot Lambda / Step Functions $\rightarrow$ Dispatcher Lambda $\rightarrow$ EC2 Service (\texttt{boto3.client('ec2')}) $\rightarrow$ Amazon DynamoDB (\texttt{ActionHistory}).
+\end{itemize}
+
+\textbf{2. Dữ liệu trao đổi thực tế (Kịch bản người dùng chấp thuận tạo máy ảo):}
+
+Mẫu JSON Request gửi từ Web Client khi người dùng nhấn nút ``Xác nhận thực thi'' trên giao diện:
+
+\begin{verbatim}
+{
+  "confirmed": true,
+  "action_id": "act_8f3a9e1b2c4d",
+  "service": "ec2",
+  "tool_name": "create_instance",
+  "parameters": {
+    "instance_name": "web-demo",
+    "os_type": "ubuntu",
+    "instance_type": "t3.micro"
+  },
+  "region": "ap-southeast-2"
+}
+\end{verbatim}
+
+Mẫu JSON Response trả về ngay lập tức sau khi Dispatcher Lambda và Module EC2 Service thực thi gọi Boto3 SDK thành công trên AWS Sydney:
+
+\begin{verbatim}
+{
+  "status": "SUCCESS",
+  "type": "action_executed",
+  "service": "ec2",
+  "tool_name": "create_instance",
+  "message": "Đã gửi yêu cầu khởi tạo máy chủ 'web-demo' (i-015aad95042137744)"
+             " thành công với trạng thái 'pending'.",
+  "data": {
+    "instance_id": "i-015aad95042137744",
+    "instance_name": "web-demo",
+    "state": "pending",
+    "instance_type": "t3.micro",
+    "image_id": "ami-0af9110f0ec0820e2"
+  }
+}
+\end{verbatim}
+
+\textbf{3. Bảng giải thích chi tiết các trường dữ liệu:}
+
+\begin{table}[H]
+\centering
+\caption{Mô tả các trường trong Request Body của Endpoint \texttt{POST /confirm}}
+\label{tab:confirm_request}
+\begingroup
+\renewcommand{\arraystretch}{1.12}
+\fontsize{10}{13}\selectfont
+\begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}p{2.5cm}>{\raggedright\arraybackslash}p{2.3cm}>{\centering\arraybackslash}p{1.8cm}Y@{}}
+\toprule
+\textbf{Tên trường} & \textbf{Kiểu dữ liệu} & \textbf{Bắt buộc} & \textbf{Mô tả ý nghĩa và nguồn gốc dữ liệu} \\
+\midrule
+\texttt{confirmed} & Boolean & Có & Cờ xác nhận mang giá trị \texttt{true}, khẳng định người dùng đã trực tiếp phê duyệt hành động. \\
+\texttt{action\_id} & String & Có & Mã hành động tương ứng đã tạo ở bước \texttt{/chat}, dùng để đối soát trạng thái trong bảng \texttt{PendingAction}. \\
+\texttt{service} & String & Có & Dịch vụ AWS đích cần điều phối thực thi (\texttt{ec2}, \texttt{s3}, \texttt{lambda}, \texttt{iam}). \\
+\texttt{tool\_name} & String & Có & Tên hành động kỹ thuật cần thực thi (\texttt{create\_instance}, v.v.). \\
+\texttt{parameters} & Object & Có & Tập tham số kỹ thuật đã qua rà soát của người quản trị. \\
+\texttt{region} & String & Không & Khu vực thực thi lệnh trên đám mây AWS (mặc định: \texttt{ap-southeast-2}). \\
+\bottomrule
+\end{tabularx}
+\endgroup
+\end{table}
+
+\begin{table}[H]
+\centering
+\caption{Mô tả các trường trong Response Body của Endpoint \texttt{POST /confirm}}
+\label{tab:confirm_response}
+\begingroup
+\renewcommand{\arraystretch}{1.12}
+\fontsize{10}{13}\selectfont
+\begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}p{3.2cm}>{\raggedright\arraybackslash}p{2.0cm}>{\centering\arraybackslash}p{1.8cm}Y@{}}
+\toprule
+\textbf{Tên trường} & \textbf{Kiểu dữ liệu} & \textbf{Bắt buộc} & \textbf{Mô tả ý nghĩa và nguồn gốc dữ liệu} \\
+\midrule
+\texttt{status} & String & Có & Kết quả xử lý hạ tầng tổng thể (\texttt{SUCCESS} hoặc \texttt{ERROR}). \\
+\texttt{type} & String & Có & Phân loại giao diện (\texttt{action\_executed}) để Web Client cập nhật trạng thái thẻ hiển thị sang hoàn tất. \\
+\texttt{service} & String & Có & Tên dịch vụ AWS đã thực thi hoàn tất (\texttt{ec2}). \\
+\texttt{tool\_name} & String & Có & Tên công cụ kỹ thuật đã chạy (\texttt{create\_instance}). \\
+\texttt{message} & String & Có & Thông báo tổng kết kỹ thuật bằng tiếng Việt kèm mã ID và trạng thái máy ảo. \\
+\texttt{data} & Object & Có & Đối tượng chứa dữ liệu chi tiết trả về từ Boto3 SDK gồm: \texttt{instance\_id}, \texttt{instance\_name}, \texttt{state} (trạng thái \texttt{pending} non-blocking), \texttt{instance\_type} và mã \texttt{image\_id} chính thức của hệ điều hành. \\
+\bottomrule
+\end{tabularx}
+\endgroup
+\end{table}
+
+\textbf{4. Luồng xử lý nghiệp vụ:}
+
+Khi nhận được yêu cầu xác nhận mang cờ \texttt{confirmed: true}, hệ thống đối soát \texttt{action\_id} với dữ liệu lưu trữ trong bảng \texttt{PendingAction}. Sau khi hợp thức hóa, yêu cầu được chuyển giao cho Dispatcher Lambda để kích hoạt module chuyên trách tương ứng. Module thực hiện các bước bảo vệ FinOps Guardrail và Idempotency (kiểm tra trùng lặp tên thông qua tag \texttt{Name}) trước khi gọi hàm \texttt{ec2.run\_instances()} qua Boto3 SDK trên Region chỉ định. Kết quả khởi tạo tức thời được trả về cho người dùng với trạng thái \texttt{pending} bất đồng bộ. Cuối cùng, hệ thống cập nhật trạng thái bản ghi trong \texttt{PendingAction} và ghi lại toàn bộ nhật ký kiểm toán vào bảng \texttt{ActionHistory} trong Amazon DynamoDB để phục vụ công tác truy vết và quản trị an toàn thông tin.
+
+
 \section{KẾ HOẠCH TRIỂN KHAI DỰ ÁN}
 
 \subsection{Kế hoạch triển khai theo từng giai đoạn (05 tuần)}
