@@ -149,7 +149,7 @@ Người dùng không cần thao tác AWS Console thủ công. Bạn có quyền
    - Trước khi đề xuất tạo hoặc cập nhật code, hãy giải thích ngắn gọn tư duy (Thought) và cơ chế kỹ thuật bạn đã áp dụng.
    - Với mọi thao tác cần phê duyệt, bắt buộc phát structured tool_call thật. Không được viết "hãy bấm xác nhận/Approve" bằng lời nếu chưa phát tool_call, vì giao diện sẽ không có nút.
    - XỬ LÝ YÊU CẦU NẰM NGOÀI PHẠM VI (Out-of-scope):
-     Khi người dùng yêu cầu thao tác trên các dịch vụ bạn chưa có công cụ hỗ trợ (ví dụ: tạo máy chủ EC2, cấu hình database RDS...):
+     Khi người dùng yêu cầu thao tác trên các dịch vụ bạn chưa có công cụ hỗ trợ (ví dụ: cấu hình database RDS, SQS, DynamoDB...):
      * Nói thẳng, rõ ràng và trung thực rằng dịch vụ đó hiện nằm ngoài phạm vi công cụ bạn được trang bị.
      * TUYỆT ĐỐI KHÔNG viện lý do "chưa có nút bấm xác nhận" hay "không có thẩm quyền".
      * Chủ động phân tích và gợi ý giải pháp thay thế thông minh bằng AWS Lambda / Serverless (ví dụ: thay vì tạo máy chủ EC2 t3.micro tốn kém và phải tự quản trị OS, đề xuất giải pháp triển khai Resilient Lambda Service với Function URL endpoint tương đương).
@@ -160,6 +160,40 @@ Người dùng không cần thao tác AWS Console thủ công. Bạn có quyền
    - Mỗi ý chính hoặc bước đánh số phải nằm trên một dòng riêng; dùng dòng trống giữa các phần.
    - Dùng tiêu đề ngắn và danh sách bullet/numbered list khi có từ 2 ý trở lên.
    - Không dùng bảng nếu một danh sách ngắn đã đủ rõ."""
+
+
+def _get_ec2_tool_schemas() -> List[Dict[str, Any]]:
+    """Tải schemas công cụ của EC2 Service."""
+    try:
+        from services.ec2_service import EC2_TOOL_SCHEMAS
+        return EC2_TOOL_SCHEMAS
+    except ImportError:
+        try:
+            from backend.functions.dispatcher.services.ec2_service import EC2_TOOL_SCHEMAS
+            return EC2_TOOL_SCHEMAS
+        except ImportError:
+            return []
+
+
+def _get_all_tool_schemas() -> List[Dict[str, Any]]:
+    """Tải toàn bộ schemas công cụ được hỗ trợ (Lambda, EC2...)."""
+    schemas = []
+    schemas.extend(_get_lambda_tool_schemas())
+    schemas.extend(_get_ec2_tool_schemas())
+    return schemas
+
+
+def _resolve_service_for_tool(tool_name: str, raw_schemas: Optional[List[Dict[str, Any]]] = None) -> str:
+    """Xác định dịch vụ AWS tương ứng cho công cụ kỹ thuật."""
+    if raw_schemas:
+        for s in raw_schemas:
+            if s.get("name") == tool_name and s.get("service"):
+                return s.get("service")
+    if "ec2" in tool_name or tool_name in (
+        "create_instance", "list_instances", "get_instance", "manage_power", "terminate_instance", "get_metrics"
+    ):
+        return "ec2"
+    return "lambda"
 
 
 def _get_lambda_tool_schemas() -> List[Dict[str, Any]]:
@@ -463,7 +497,7 @@ def _handle_request(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
             if not isinstance(origins, list) or not origins or any(not isinstance(o, str) or o == "*" or not o.startswith("http") for o in origins):
                 tool_params["cors_allow_origins"] = ["http://127.0.0.1:8080"]
         exec_res = _dispatch_action(
-            service=payload.get("service", "lambda"),
+            service=payload.get("service") or _resolve_service_for_tool(payload.get("tool_name")),
             action=payload.get("tool_name"),
             parameters=tool_params,
             confirmed=True,
@@ -484,7 +518,7 @@ def _handle_request(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
 
         api_key = os.environ.get("LLM_API_KEY")
         agent_state = payload.get("agent_state")
-        raw_schemas = _get_lambda_tool_schemas()
+        raw_schemas = _get_all_tool_schemas()
         llm_tools = format_tools_for_llm(raw_schemas)
 
         if agent_state and AgentExecutor and api_key and exec_res.get("status") == "SUCCESS":
@@ -508,7 +542,7 @@ def _handle_request(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         resp_data = {
             "status": exec_res.get("status", "SUCCESS"),
             "type": "resolution_options" if exec_res.get("status") == "USER_ACTION_REQUIRED" else "action_executed",
-            "service": payload.get("service", "lambda"),
+            "service": payload.get("service") or _resolve_service_for_tool(payload.get("tool_name")),
             "tool_name": payload.get("tool_name"),
             "message": exec_res.get("message", "Thao tác đã được thực thi trên AWS."),
             "data": exec_res.get("data", {}),
@@ -532,7 +566,7 @@ def _handle_request(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         return _build_response(400, err_resp) if is_api_gateway else err_resp
 
     # 2. Chuẩn bị ngữ cảnh hội thoại & danh sách công cụ
-    raw_schemas = _get_lambda_tool_schemas()
+    raw_schemas = _get_all_tool_schemas()
     llm_tools = format_tools_for_llm(raw_schemas)
 
     # 3. Kích hoạt chu trình ReAct Agent Loop khi có LLM API Key
@@ -606,7 +640,7 @@ def _handle_request(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
             "status": "CONFIRMATION_REQUIRED",
             "type": "action_confirmation",
             "action_id": action_id,
-            "service": "lambda",
+            "service": _resolve_service_for_tool(tool_name, raw_schemas),
             "tool_name": tool_name,
             "parameters": parsed_params,
             "message": (
@@ -617,7 +651,7 @@ def _handle_request(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     else:
         # Tác vụ chỉ đọc (an toàn): Tự động điều phối gọi Dispatcher lấy dữ liệu AWS thật
         exec_res = _dispatch_action(
-            service="lambda",
+            service=_resolve_service_for_tool(tool_name, raw_schemas),
             action=tool_name,
             parameters=parsed_params,
             confirmed=True,
@@ -627,7 +661,7 @@ def _handle_request(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         resp_data = {
             "status": exec_res.get("status", "SUCCESS"),
             "type": "action_executed",
-            "service": "lambda",
+            "service": _resolve_service_for_tool(tool_name, raw_schemas),
             "tool_name": tool_name,
             "parameters": parsed_params,
             "message": exec_res.get("message", f"Đã thực thi công cụ '{tool_name}'."),

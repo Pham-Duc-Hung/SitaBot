@@ -24,11 +24,13 @@ from services.ec2_service import (
     DEFAULT_AMIS,
     DEFAULT_REGION,
     SUPPORTED_ACTIONS,
+    EC2_TOOL_SCHEMAS,
     _build_response,
     _extract_name_tag,
     _format_datetime,
     execute,
     get_ec2_client,
+    get_cloudwatch_client,
 )
 
 
@@ -864,20 +866,307 @@ def test_manage_power_missing_required_params(mock_credentials, mock_boto_ec2, m
     mock_client.describe_instances.assert_not_called()
 
 
-# --- Tests for Other Placeholders (terminate_instance, get_metrics) ---
+# --- Tests for Scenario 4: terminate_instance ---
 
-@pytest.mark.parametrize("action_name", [
-    "terminate_instance",
-    "get_metrics",
-])
-def test_execute_routing_to_other_placeholders(mock_credentials, mock_boto_ec2, action_name):
-    """Verify remaining actions route to their placeholders pending future steps."""
-    params = {"action": action_name, "instance_id": "i-mock123"}
-    res = execute(mock_credentials, params)
+def test_terminate_instance_missing_id(mock_credentials, mock_boto_ec2):
+    """Verify terminate_instance rejects requests with missing or empty instance_id."""
+    mock_client = mock_boto_ec2.return_value
+    res = execute(mock_credentials, {"action": "terminate_instance", "instance_id": ""})
 
-    assert isinstance(res, dict)
+    assert res["success"] is False
+    assert res["action"] == "terminate_instance"
+    assert "Missing or invalid 'instance_id'" in res["error"]
+    mock_client.describe_instances.assert_not_called()
+
+
+def test_terminate_instance_not_found(mock_credentials, mock_boto_ec2):
+    """Verify terminate_instance returns not found when instance does not exist."""
+    mock_client = mock_boto_ec2.return_value
+    mock_client.describe_instances.return_value = {"Reservations": []}
+
+    res = execute(mock_credentials, {"action": "terminate_instance", "instance_id": "i-999999"})
+
+    assert res["success"] is False
+    assert res["action"] == "terminate_instance"
+    assert "InstanceNotFound" in res["error"]
+    assert "Không tìm thấy" in res["message"]
+
+
+def test_terminate_instance_already_terminated(mock_credentials, mock_boto_ec2):
+    """Verify terminate_instance rejects if instance is already in terminated state."""
+    mock_client = mock_boto_ec2.return_value
+    mock_client.describe_instances.return_value = {
+        "Reservations": [{"Instances": [{"InstanceId": "i-123", "State": {"Name": "terminated"}, "Tags": []}]}]
+    }
+
+    res = execute(mock_credentials, {"action": "terminate_instance", "instance_id": "i-123"})
+
+    assert res["success"] is False
+    assert res["action"] == "terminate_instance"
+    assert "InstanceAlreadyTerminated" in res["error"]
+    assert "đã ở trạng thái đã xóa" in res["message"]
+    mock_client.terminate_instances.assert_not_called()
+
+
+def test_terminate_instance_protection_enabled(mock_credentials, mock_boto_ec2):
+    """Verify terminate_instance is blocked if Termination Protection is active."""
+    mock_client = mock_boto_ec2.return_value
+    mock_client.describe_instances.return_value = {
+        "Reservations": [{"Instances": [{"InstanceId": "i-123", "State": {"Name": "running"}, "Tags": [{"Key": "Name", "Value": "prod-app"}]}]}]
+    }
+    mock_client.describe_instance_attribute.return_value = {
+        "DisableApiTermination": {"Value": True}
+    }
+
+    res = execute(mock_credentials, {"action": "terminate_instance", "instance_id": "i-123", "confirm": True})
+
+    assert res["success"] is False
+    assert res["action"] == "terminate_instance"
+    assert "TerminationProtectionEnabled" in res["error"]
+    assert "bảo vệ chống xóa" in res["message"]
+    mock_client.terminate_instances.assert_not_called()
+
+
+def test_terminate_instance_requires_confirmation(mock_credentials, mock_boto_ec2):
+    """Verify terminate_instance warns and requires confirm=True before destroying."""
+    mock_client = mock_boto_ec2.return_value
+    mock_client.describe_instances.return_value = {
+        "Reservations": [{"Instances": [{"InstanceId": "i-123", "State": {"Name": "running"}, "Tags": [{"Key": "Name", "Value": "web-demo"}]}]}]
+    }
+    mock_client.describe_instance_attribute.return_value = {
+        "DisableApiTermination": {"Value": False}
+    }
+
+    # Calling without confirm=True
+    res = execute(mock_credentials, {"action": "terminate_instance", "instance_id": "i-123"})
+
+    assert res["success"] is False
+    assert res["action"] == "terminate_instance"
+    assert "ConfirmationRequired" in res["error"]
+    assert "Cảnh báo rủi ro cao" in res["message"]
+    assert res["data"]["confirmation_required"] is True
+    mock_client.terminate_instances.assert_not_called()
+
+
+def test_terminate_instance_success(mock_credentials, mock_boto_ec2):
+    """Verify terminate_instance successfully destroys instance when confirm=True."""
+    mock_client = mock_boto_ec2.return_value
+    mock_client.describe_instances.return_value = {
+        "Reservations": [{"Instances": [{"InstanceId": "i-123", "State": {"Name": "running"}, "Tags": [{"Key": "Name", "Value": "web-demo"}]}]}]
+    }
+    mock_client.describe_instance_attribute.return_value = {
+        "DisableApiTermination": {"Value": False}
+    }
+    mock_client.terminate_instances.return_value = {
+        "TerminatingInstances": [{
+            "InstanceId": "i-123",
+            "PreviousState": {"Name": "running"},
+            "CurrentState": {"Name": "shutting-down"}
+        }]
+    }
+
+    res = execute(mock_credentials, {"action": "terminate_instance", "instance_id": "i-123", "confirm": True})
+
     assert res["success"] is True
-    assert res["action"] == action_name
-    assert "data" in res
-    assert "message" in res
-    assert res["error"] is None
+    assert res["action"] == "terminate_instance"
+    assert res["data"]["instance_id"] == "i-123"
+    assert res["data"]["previous_state"] == "running"
+    assert res["data"]["current_state"] == "shutting-down"
+    assert "thành công" in res["message"]
+    mock_client.terminate_instances.assert_called_once_with(InstanceIds=["i-123"])
+
+
+def test_terminate_instance_namespaced_alias(mock_credentials, mock_boto_ec2):
+    """Verify calling terminate_ec2_instance alias also succeeds."""
+    mock_client = mock_boto_ec2.return_value
+    mock_client.describe_instances.return_value = {
+        "Reservations": [{"Instances": [{"InstanceId": "i-123", "State": {"Name": "stopped"}, "Tags": []}]}]
+    }
+    mock_client.describe_instance_attribute.return_value = {"DisableApiTermination": {"Value": False}}
+    mock_client.terminate_instances.return_value = {
+        "TerminatingInstances": [{
+            "InstanceId": "i-123",
+            "PreviousState": {"Name": "stopped"},
+            "CurrentState": {"Name": "shutting-down"}
+        }]
+    }
+
+    res = execute(mock_credentials, {"action": "terminate_ec2_instance", "instance_id": "i-123", "confirmed": True})
+    assert res["success"] is True
+    assert res["data"]["current_state"] == "shutting-down"
+
+
+# --- Tests for Scenario 5: get_metrics & FinOps ---
+
+def test_get_metrics_missing_id(mock_credentials, mock_boto_ec2):
+    """Verify get_metrics rejects requests without instance_id."""
+    res = execute(mock_credentials, {"action": "get_metrics", "instance_id": ""})
+
+    assert res["success"] is False
+    assert res["action"] == "get_metrics"
+    assert "Missing or invalid 'instance_id'" in res["error"]
+
+
+def test_get_metrics_not_found(mock_credentials, mock_boto_ec2):
+    """Verify get_metrics returns error when instance does not exist."""
+    mock_client = mock_boto_ec2.return_value
+    mock_client.describe_instances.return_value = {"Reservations": []}
+
+    res = execute(mock_credentials, {"action": "get_metrics", "instance_id": "i-nonexist"})
+
+    assert res["success"] is False
+    assert res["action"] == "get_metrics"
+    assert "InstanceNotFound" in res["error"]
+
+
+def test_get_metrics_no_datapoints(mock_credentials, mock_boto_ec2):
+    """Verify get_metrics handles newly launched or stopped instances with no metrics."""
+    mock_client = mock_boto_ec2.return_value
+    mock_client.describe_instances.return_value = {
+        "Reservations": [{
+            "Instances": [{
+                "InstanceId": "i-123",
+                "InstanceType": "t3.micro",
+                "State": {"Name": "stopped"},
+                "Tags": [{"Key": "Name", "Value": "demo-server"}]
+            }]
+        }]
+    }
+    mock_client.get_metric_statistics.return_value = {"Datapoints": []}
+
+    res = execute(mock_credentials, {"action": "get_metrics", "instance_id": "i-123", "period_hours": 24})
+
+    assert res["success"] is True
+    assert res["action"] == "get_metrics"
+    assert res["data"]["recommendation_type"] == "no_data"
+    assert res["data"]["average_cpu"] == 0.0
+    assert "chưa ghi nhận" in res["message"]
+
+
+def test_get_metrics_idle_waste_recommendation(mock_credentials, mock_boto_ec2):
+    """Verify get_metrics detects low CPU utilization and warns idle waste."""
+    mock_client = mock_boto_ec2.return_value
+    mock_client.describe_instances.return_value = {
+        "Reservations": [{
+            "Instances": [{
+                "InstanceId": "i-123",
+                "InstanceType": "t3.micro",
+                "State": {"Name": "running"},
+                "Tags": [{"Key": "Name", "Value": "idle-server"}]
+            }]
+        }]
+    }
+    # Mock CPU averaging 1.8%
+    mock_client.get_metric_statistics.return_value = {
+        "Datapoints": [
+            {"Average": 1.2, "Maximum": 2.5, "Timestamp": datetime.now(timezone.utc)},
+            {"Average": 2.4, "Maximum": 3.0, "Timestamp": datetime.now(timezone.utc)}
+        ]
+    }
+
+    res = execute(mock_credentials, {"action": "get_metrics", "instance_id": "i-123"})
+
+    assert res["success"] is True
+    assert res["data"]["recommendation_type"] == "idle_waste"
+    assert res["data"]["average_cpu"] < 5.0
+    assert "Cảnh báo lãng phí FinOps" in res["message"]
+    assert "Tắt máy chủ" in res["data"]["recommendation"]
+
+
+def test_get_metrics_overloaded_recommendation(mock_credentials, mock_boto_ec2):
+    """Verify get_metrics detects high CPU utilization (> 80%) and warns overload."""
+    mock_client = mock_boto_ec2.return_value
+    mock_client.describe_instances.return_value = {
+        "Reservations": [{
+            "Instances": [{
+                "InstanceId": "i-123",
+                "InstanceType": "t3.micro",
+                "State": {"Name": "running"},
+                "Tags": [{"Key": "Name", "Value": "busy-server"}]
+            }]
+        }]
+    }
+    # Mock CPU averaging 89.5%
+    mock_client.get_metric_statistics.return_value = {
+        "Datapoints": [
+            {"Average": 85.0, "Maximum": 94.0, "Timestamp": datetime.now(timezone.utc)},
+            {"Average": 94.0, "Maximum": 98.0, "Timestamp": datetime.now(timezone.utc)}
+        ]
+    }
+
+    res = execute(mock_credentials, {"action": "get_metrics", "instance_id": "i-123"})
+
+    assert res["success"] is True
+    assert res["data"]["recommendation_type"] == "overloaded"
+    assert res["data"]["average_cpu"] > 80.0
+    assert "Cảnh báo hiệu năng" in res["message"]
+    assert "nâng cấp cấu hình máy chủ" in res["data"]["recommendation"]
+
+
+def test_get_metrics_optimal_recommendation(mock_credentials, mock_boto_ec2):
+    """Verify get_metrics detects optimal CPU utilization (5% <= CPU <= 80%)."""
+    mock_client = mock_boto_ec2.return_value
+    mock_client.describe_instances.return_value = {
+        "Reservations": [{
+            "Instances": [{
+                "InstanceId": "i-123",
+                "InstanceType": "t3.micro",
+                "State": {"Name": "running"},
+                "Tags": []
+            }]
+        }]
+    }
+    # Mock CPU averaging 45.0%
+    mock_client.get_metric_statistics.return_value = {
+        "Datapoints": [
+            {"Average": 40.0, "Maximum": 55.0, "Timestamp": datetime.now(timezone.utc)},
+            {"Average": 50.0, "Maximum": 60.0, "Timestamp": datetime.now(timezone.utc)}
+        ]
+    }
+
+    res = execute(mock_credentials, {"action": "get_ec2_metrics", "instance_id": "i-123"})
+
+    assert res["success"] is True
+    assert res["data"]["recommendation_type"] == "optimal"
+    assert res["data"]["average_cpu"] == 45.0
+    assert "Hiệu năng tối ưu" in res["message"]
+
+
+# --- Tests for EC2 Tool Schemas (AI Agent Function Calling) ---
+
+def test_ec2_tool_schemas_structure():
+    """Verify all EC2 tool schemas have required keys and correct specifications."""
+    assert len(EC2_TOOL_SCHEMAS) == 6
+
+    expected_names = {
+        "create_ec2_instance",
+        "list_ec2_instances",
+        "get_ec2_instance_detail",
+        "manage_ec2_power",
+        "terminate_ec2_instance",
+        "get_ec2_metrics",
+    }
+    actual_names = {schema["name"] for schema in EC2_TOOL_SCHEMAS}
+    assert actual_names == expected_names
+
+    for schema in EC2_TOOL_SCHEMAS:
+        assert schema.get("service") == "ec2"
+        assert isinstance(schema.get("description"), str) and len(schema["description"]) > 10
+        assert "parameters" in schema
+        assert schema["parameters"]["type"] == "object"
+        assert "properties" in schema["parameters"]
+
+
+def test_ec2_tool_schemas_confirmation_flags():
+    """Verify high-impact actions require confirmation while queries do not."""
+    confirmation_map = {s["name"]: s["requires_confirmation"] for s in EC2_TOOL_SCHEMAS}
+
+    # Mutations must require confirmation
+    assert confirmation_map["create_ec2_instance"] is True
+    assert confirmation_map["manage_ec2_power"] is True
+    assert confirmation_map["terminate_ec2_instance"] is True
+
+    # Read-only queries must not block on confirmation
+    assert confirmation_map["list_ec2_instances"] is False
+    assert confirmation_map["get_ec2_instance_detail"] is False
+    assert confirmation_map["get_ec2_metrics"] is False

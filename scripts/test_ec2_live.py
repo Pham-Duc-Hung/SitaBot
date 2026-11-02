@@ -78,10 +78,12 @@ CHỌN THAO TÁC EC2 ĐỂ TEST TRỰC TIẾP TRÊN AWS:
   3. Xem chi tiết máy chủ theo ID (get_instance)
   4. Khởi tạo máy ảo chuẩn FinOps (create_instance - t3.micro)
   5. Điều khiển nguồn máy ảo (manage_power: start / stop / reboot)
+  6. Giám sát hiệu năng CPU & Đề xuất FinOps (get_metrics)
+  7. Xóa máy ảo an toàn có bảo vệ & xác nhận (terminate_instance)
   0. Thoát
 -----------------------------------------------------------
 """)
-        choice = input("Lựa chọn của bạn (0-5): ").strip()
+        choice = input("Lựa chọn của bạn (0-7): ").strip()
 
         if choice == "1":
             print("\n⏳ Đang gọi ec2.describe_instances() trên AWS...")
@@ -123,6 +125,30 @@ CHỌN THAO TÁC EC2 ĐỂ TEST TRỰC TIẾP TRÊN AWS:
                 "operation": op
             })
             print_result(f"Điều khiển nguồn: {op}", res)
+
+        elif choice == "6":
+            inst_id = input("Nhập Instance ID cần xem số liệu CPU & FinOps: ").strip()
+            hours_str = input("Nhập số giờ muốn thống kê (mặc định 24): ").strip()
+            hours = int(hours_str) if hours_str.isdigit() and int(hours_str) > 0 else 24
+            print(f"\n⏳ Đang truy vấn CloudWatch CPU metrics cho máy {inst_id} ({hours} giờ)...")
+            res = execute(creds, {
+                "action": "get_metrics",
+                "instance_id": inst_id,
+                "period_hours": hours
+            })
+            print_result("Giám sát CPU & Khuyến nghị FinOps", res)
+
+        elif choice == "7":
+            inst_id = input("Nhập Instance ID muốn xóa vĩnh viễn: ").strip()
+            confirm_input = input("⚠️ Bạn có chắc chắn muốn xóa không? Nhập 'yes' để xác nhận: ").strip().lower()
+            is_confirmed = confirm_input in ["yes", "y", "true"]
+            print(f"\n⏳ Đang kiểm tra và thực hiện xóa máy {inst_id} (confirm={is_confirmed})...")
+            res = execute(creds, {
+                "action": "terminate_instance",
+                "instance_id": inst_id,
+                "confirm": is_confirmed
+            })
+            print_result("Xóa máy chủ EC2", res)
 
         elif choice == "0":
             print("Tạm biệt!")

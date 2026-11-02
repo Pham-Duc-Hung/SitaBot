@@ -3,7 +3,7 @@ Amazon EC2 Service Handler for SatiBot ChatOps.
 Author: Nguyen Duc Huy (Group 10 - Cloud Computing - UET/VNU)
 """
 
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 import logging
 import boto3
 from botocore.exceptions import ClientError
@@ -24,11 +24,18 @@ DEFAULT_AMIS = {
 
 SUPPORTED_ACTIONS = {
     'create_instance',
+    'create_ec2_instance',
     'list_instances',
+    'list_ec2_instances',
     'get_instance',
+    'get_ec2_instance',
+    'get_ec2_instance_detail',
     'manage_power',
+    'manage_ec2_power',
     'terminate_instance',
+    'terminate_ec2_instance',
     'get_metrics',
+    'get_ec2_metrics',
 }
 
 
@@ -87,6 +94,23 @@ def get_ec2_client(credentials: dict):
     creds = credentials or {}
     return boto3.client(
         'ec2',
+        aws_access_key_id=creds.get('AccessKeyId'),
+        aws_secret_access_key=creds.get('SecretAccessKey'),
+        aws_session_token=creds.get('SessionToken'),
+        region_name=creds.get('Region', DEFAULT_REGION)
+    )
+
+
+def get_cloudwatch_client(credentials: dict):
+    """
+    Initialize a Boto3 CloudWatch client using STS temporary credentials.
+
+    :param credentials: Dict containing AccessKeyId, SecretAccessKey, SessionToken, and optional Region.
+    :return: Boto3 CloudWatch client instance.
+    """
+    creds = credentials or {}
+    return boto3.client(
+        'cloudwatch',
         aws_access_key_id=creds.get('AccessKeyId'),
         aws_secret_access_key=creds.get('SecretAccessKey'),
         aws_session_token=creds.get('SessionToken'),
@@ -467,32 +491,379 @@ def _handle_manage_power(client, params: dict) -> dict:
 
 
 def _handle_terminate_instance(client, params: dict) -> dict:
-    """Placeholder for scenario 4: Safely terminate instance."""
+    """
+    Scenario 4: Safely terminate an EC2 instance:
+      - Validates instance_id.
+      - Checks current state (reject if already terminated).
+      - Checks Termination Protection (DisableApiTermination attribute).
+      - Requires confirmation (confirm=True / confirmed=True) before calling terminate_instances.
+    """
+    instance_id = params.get("instance_id") or params.get("id")
+    if not instance_id or not isinstance(instance_id, str) or not instance_id.strip():
+        return _build_response(
+            success=False,
+            action="terminate_instance",
+            data=None,
+            message="Vui lòng cung cấp 'instance_id' để thực hiện thao tác xóa máy chủ.",
+            error="Missing or invalid 'instance_id' parameter"
+        )
+    instance_id = instance_id.strip()
+
+    # Pre-check instance existence and current status
+    describe_resp = client.describe_instances(InstanceIds=[instance_id])
+    instances = []
+    for res in describe_resp.get("Reservations", []):
+        instances.extend(res.get("Instances", []))
+
+    if not instances:
+        return _build_response(
+            success=False,
+            action="terminate_instance",
+            data=None,
+            message=f"Không tìm thấy máy chủ với ID '{instance_id}'.",
+            error=f"InstanceNotFound: {instance_id}"
+        )
+
+    instance = instances[0]
+    current_state = instance.get("State", {}).get("Name", "").lower()
+    instance_name = _extract_name_tag(instance.get("Tags", []))
+
+    if current_state == "terminated":
+        return _build_response(
+            success=False,
+            action="terminate_instance",
+            data={"instance_id": instance_id, "current_state": "terminated"},
+            message=f"Máy chủ '{instance_id}' đã ở trạng thái đã xóa ('terminated') trước đó.",
+            error="InstanceAlreadyTerminated"
+        )
+
+    # Check Termination Protection
+    attr_resp = client.describe_instance_attribute(
+        InstanceId=instance_id,
+        Attribute="disableApiTermination"
+    )
+    is_protected = attr_resp.get("DisableApiTermination", {}).get("Value", False)
+    if is_protected:
+        return _build_response(
+            success=False,
+            action="terminate_instance",
+            data={
+                "instance_id": instance_id,
+                "instance_name": instance_name,
+                "current_state": current_state,
+                "disable_api_termination": True
+            },
+            message=(
+                f"Không thể xóa máy chủ '{instance_id}' do đang bật tính năng bảo vệ chống xóa "
+                "(Termination Protection - DisableApiTermination=True). "
+                "Vui lòng tắt tính năng bảo vệ này trước khi thực hiện xóa."
+            ),
+            error="TerminationProtectionEnabled"
+        )
+
+    # Human-in-the-loop Guardrail: Require explicit confirmation
+    is_confirmed = params.get("confirm") is True or params.get("confirmed") is True
+    if not is_confirmed:
+        name_str = f" ('{instance_name}')" if instance_name else ""
+        warning_msg = (
+            f"Cảnh báo rủi ro cao: Thao tác xóa máy chủ '{instance_id}'{name_str} "
+            f"đang ở trạng thái '{current_state}' sẽ xóa vĩnh viễn máy chủ và giải phóng toàn bộ dữ liệu ổ đĩa gốc (EBS Root Volume). "
+            "Hành động này KHÔNG THỂ HOÀN TÁC. Vui lòng gửi kèm 'confirm=True' để xác nhận thực hiện."
+        )
+        return _build_response(
+            success=False,
+            action="terminate_instance",
+            data={
+                "instance_id": instance_id,
+                "instance_name": instance_name,
+                "current_state": current_state,
+                "confirmation_required": True
+            },
+            message=warning_msg,
+            error="ConfirmationRequired"
+        )
+
+    # Execute termination via Boto3
+    term_resp = client.terminate_instances(InstanceIds=[instance_id])
+    terminating = term_resp.get("TerminatingInstances", [{}])[0] if term_resp.get("TerminatingInstances") else {}
+    prev_state = terminating.get("PreviousState", {}).get("Name", current_state)
+    new_state = terminating.get("CurrentState", {}).get("Name", "shutting-down")
+
+    name_str = f" '{instance_name}'" if instance_name else ""
     return _build_response(
         success=True,
         action="terminate_instance",
-        data={},
-        message="Hành động 'terminate_instance' đang trong quá trình phát triển."
+        data={
+            "instance_id": instance_id,
+            "instance_name": instance_name,
+            "previous_state": prev_state,
+            "current_state": new_state,
+        },
+        message=f"Đã gửi yêu cầu xóa vĩnh viễn máy chủ{name_str} ({instance_id}) thành công với trạng thái '{new_state}'."
     )
 
 
 def _handle_get_metrics(credentials: dict, params: dict) -> dict:
-    """Placeholder for scenario 5: Get CloudWatch CPU metrics and FinOps suggestions."""
+    """
+    Scenario 5: Retrieve Amazon CloudWatch CPUUtilization metrics for the instance
+    over a specified period (default 24h) and provide intelligent FinOps recommendations.
+      - Idle waste (< 5% avg CPU): Recommend stopping the instance.
+      - Overloaded (> 80% avg CPU): Recommend upgrading instance type or auto-scaling.
+      - Optimal: Operating within normal cost-effective parameters.
+    """
+    instance_id = params.get("instance_id") or params.get("id")
+    if not instance_id or not isinstance(instance_id, str) or not instance_id.strip():
+        return _build_response(
+            success=False,
+            action="get_metrics",
+            data=None,
+            message="Vui lòng cung cấp 'instance_id' để kiểm tra số liệu hiệu năng.",
+            error="Missing or invalid 'instance_id' parameter"
+        )
+    instance_id = instance_id.strip()
+
+    period_hours = params.get("period_hours", 24)
+    if not isinstance(period_hours, int) or period_hours < 1:
+        period_hours = 24
+    if period_hours > 168:
+        period_hours = 168
+
+    # Query EC2 to fetch instance metadata
+    ec2_client = get_ec2_client(credentials)
+    describe_resp = ec2_client.describe_instances(InstanceIds=[instance_id])
+    instances = []
+    for res in describe_resp.get("Reservations", []):
+        instances.extend(res.get("Instances", []))
+
+    if not instances:
+        return _build_response(
+            success=False,
+            action="get_metrics",
+            data=None,
+            message=f"Không tìm thấy máy chủ với ID '{instance_id}'.",
+            error=f"InstanceNotFound: {instance_id}"
+        )
+
+    instance = instances[0]
+    current_state = instance.get("State", {}).get("Name", "").lower()
+    instance_name = _extract_name_tag(instance.get("Tags", []))
+    instance_type = instance.get("InstanceType", "unknown")
+
+    # Query CloudWatch for CPU metrics
+    cw_client = get_cloudwatch_client(credentials)
+    end_time = datetime.now(timezone.utc)
+    start_time = end_time - timedelta(hours=period_hours)
+
+    metric_resp = cw_client.get_metric_statistics(
+        Namespace="AWS/EC2",
+        MetricName="CPUUtilization",
+        Dimensions=[{"Name": "InstanceId", "Value": instance_id}],
+        StartTime=start_time,
+        EndTime=end_time,
+        Period=3600,
+        Statistics=["Average", "Maximum"]
+    )
+
+    datapoints = metric_resp.get("Datapoints", [])
+
+    if not datapoints:
+        avg_cpu = 0.0
+        max_cpu = 0.0
+        rec_type = "no_data"
+        suggestion = (
+            f"Máy chủ '{instance_id}' (loại {instance_type}, trạng thái: {current_state}) chưa ghi nhận "
+            f"số liệu CPU trong {period_hours} giờ qua. Có thể máy mới khởi tạo hoặc đang ở trạng thái tắt (stopped)."
+        )
+    else:
+        avg_cpu = sum(d.get("Average", 0.0) for d in datapoints) / len(datapoints)
+        max_cpu = max(d.get("Maximum", d.get("Average", 0.0)) for d in datapoints)
+
+        if avg_cpu < 5.0:
+            rec_type = "idle_waste"
+            suggestion = (
+                f"Cảnh báo lãng phí FinOps: Mức sử dụng CPU trung bình ({avg_cpu:.1f}%) "
+                f"rất thấp (< 5%) trong {period_hours} giờ qua. Máy chủ đang nhàn rỗi (Idle). "
+                f"Khuyến nghị: Tắt máy chủ ('manage_power' với operation='stop') khi không sử dụng để tiết kiệm chi phí."
+            )
+        elif avg_cpu > 80.0:
+            rec_type = "overloaded"
+            suggestion = (
+                f"Cảnh báo hiệu năng: Mức sử dụng CPU trung bình ({avg_cpu:.1f}%) "
+                f"vượt ngưỡng 80% (đỉnh đạt {max_cpu:.1f}%). Máy chủ có nguy cơ nghẽn tải. "
+                f"Khuyến nghị: Cân nhắc nâng cấp cấu hình máy chủ lên loại cao hơn hoặc cấu hình Auto Scaling."
+            )
+        else:
+            rec_type = "optimal"
+            suggestion = (
+                f"Hiệu năng tối ưu: Mức sử dụng CPU trung bình {avg_cpu:.1f}% "
+                f"(đỉnh {max_cpu:.1f}%) trong {period_hours} giờ qua nằm trong ngưỡng vận hành an toàn và tiết kiệm."
+            )
+
     return _build_response(
         success=True,
         action="get_metrics",
-        data={},
-        message="Hành động 'get_metrics' đang trong quá trình phát triển."
+        data={
+            "instance_id": instance_id,
+            "instance_name": instance_name,
+            "instance_type": instance_type,
+            "current_state": current_state,
+            "period_hours": period_hours,
+            "datapoints_count": len(datapoints),
+            "average_cpu": round(avg_cpu, 2),
+            "max_cpu": round(max_cpu, 2),
+            "recommendation_type": rec_type,
+            "recommendation": suggestion,
+        },
+        message=suggestion
     )
 
 
 ACTION_HANDLERS = {
     'create_instance': _handle_create_instance,
+    'create_ec2_instance': _handle_create_instance,
     'list_instances': _handle_list_instances,
+    'list_ec2_instances': _handle_list_instances,
     'get_instance': _handle_get_instance,
+    'get_ec2_instance': _handle_get_instance,
+    'get_ec2_instance_detail': _handle_get_instance,
     'manage_power': _handle_manage_power,
+    'manage_ec2_power': _handle_manage_power,
     'terminate_instance': _handle_terminate_instance,
+    'terminate_ec2_instance': _handle_terminate_instance,
+    'get_metrics': _handle_get_metrics,
+    'get_ec2_metrics': _handle_get_metrics,
 }
+
+# --- Tool Schemas for LLM Function Calling (ChatOps AI Agent) ---
+EC2_TOOL_SCHEMAS = [
+    {
+        "name": "create_ec2_instance",
+        "service": "ec2",
+        "description": "Khởi tạo một máy chủ ảo Amazon EC2 mới chuẩn hóa với cấu hình tiết kiệm FinOps (t2.micro/t3.micro), tự động gắn thẻ quản lý và bảo vệ trùng lặp tên.",
+        "requires_confirmation": True,
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "instance_name": {
+                    "type": "string",
+                    "description": "Tên định danh của máy chủ ảo (gắn vào tag Name). Ví dụ: 'web-demo', 'staging-server'."
+                },
+                "os_type": {
+                    "type": "string",
+                    "enum": ["ubuntu", "amazon-linux"],
+                    "description": "Hệ điều hành máy chủ: 'ubuntu' (Ubuntu 22.04 LTS) hoặc 'amazon-linux' (Amazon Linux 2023). Mặc định: 'ubuntu'."
+                },
+                "instance_type": {
+                    "type": "string",
+                    "enum": ["t2.micro", "t3.micro", "t3.small"],
+                    "description": "Loại cấu hình phần cứng theo chuẩn FinOps. Mặc định: 't3.micro'."
+                },
+                "key_name": {
+                    "type": "string",
+                    "description": "Tên khóa SSH Key Pair đã có trên AWS để kết nối vào máy chủ."
+                },
+                "force": {
+                    "type": "boolean",
+                    "description": "Bỏ qua cảnh báo trùng tên và tiếp tục khởi tạo nếu đã tồn tại máy chủ cùng tên."
+                }
+            },
+            "required": ["instance_name"]
+        }
+    },
+    {
+        "name": "list_ec2_instances",
+        "service": "ec2",
+        "description": "Liệt kê danh sách các máy chủ EC2 trong tài khoản AWS, hỗ trợ lọc theo trạng thái hoạt động (running, stopped, all).",
+        "requires_confirmation": False,
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "state_filter": {
+                    "type": "string",
+                    "enum": ["all", "running", "stopped", "pending", "shutting-down", "terminated"],
+                    "description": "Lọc theo trạng thái máy chủ (mặc định 'all' để xem tất cả)."
+                }
+            }
+        }
+    },
+    {
+        "name": "get_ec2_instance_detail",
+        "service": "ec2",
+        "description": "Xem thông tin cấu hình chi tiết của một máy chủ EC2 cụ thể theo Instance ID (VPC, Subnet, IP công khai/nội bộ, Security Groups, thời gian chạy).",
+        "requires_confirmation": False,
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "instance_id": {
+                    "type": "string",
+                    "description": "Mã định danh duy nhất của máy chủ EC2 (ví dụ: 'i-015aad95042137744')."
+                }
+            },
+            "required": ["instance_id"]
+        }
+    },
+    {
+        "name": "manage_ec2_power",
+        "service": "ec2",
+        "description": "Điều khiển trạng thái nguồn của máy chủ EC2 (Bật - 'start', Tắt - 'stop', hoặc Khởi động lại - 'reboot') kèm kiểm tra tiền điều kiện an toàn.",
+        "requires_confirmation": True,
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "instance_id": {
+                    "type": "string",
+                    "description": "Mã định danh duy nhất của máy chủ EC2 cần điều khiển (ví dụ: 'i-015aad95042137744')."
+                },
+                "operation": {
+                    "type": "string",
+                    "enum": ["start", "stop", "reboot"],
+                    "description": "Thao tác nguồn muốn thực hiện: 'start' (bật máy khi đang stopped), 'stop' (tắt máy khi đang running), 'reboot' (khởi động lại khi đang running)."
+                }
+            },
+            "required": ["instance_id", "operation"]
+        }
+    },
+    {
+        "name": "terminate_ec2_instance",
+        "service": "ec2",
+        "description": "Xóa vĩnh viễn một máy chủ EC2 và giải phóng tài nguyên ổ đĩa lưu trữ. Thao tác có rủi ro cao, bắt buộc xác nhận an toàn.",
+        "requires_confirmation": True,
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "instance_id": {
+                    "type": "string",
+                    "description": "Mã định danh duy nhất của máy chủ EC2 cần xóa vĩnh viễn."
+                },
+                "confirm": {
+                    "type": "boolean",
+                    "description": "Cờ xác nhận đồng ý xóa máy chủ vĩnh viễn (bắt buộc True để thực thi)."
+                }
+            },
+            "required": ["instance_id"]
+        }
+    },
+    {
+        "name": "get_ec2_metrics",
+        "service": "ec2",
+        "description": "Truy vấn số liệu giám sát CPU qua Amazon CloudWatch trong 24 giờ qua của máy chủ EC2 và đưa ra khuyến nghị tối ưu chi phí (FinOps).",
+        "requires_confirmation": False,
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "instance_id": {
+                    "type": "string",
+                    "description": "Mã định danh duy nhất của máy chủ EC2 cần xem báo cáo hiệu năng."
+                },
+                "period_hours": {
+                    "type": "integer",
+                    "description": "Khoảng thời gian thống kê (tính bằng giờ, mặc định 24, tối đa 168 giờ)."
+                }
+            },
+            "required": ["instance_id"]
+        }
+    }
+]
 
 
 def execute(credentials: dict, params: dict) -> dict:
@@ -541,7 +912,7 @@ def execute(credentials: dict, params: dict) -> dict:
         )
 
     try:
-        if action == 'get_metrics':
+        if action in ('get_metrics', 'get_ec2_metrics'):
             return _handle_get_metrics(credentials, params)
 
         client = get_ec2_client(credentials)
