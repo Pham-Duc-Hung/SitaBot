@@ -1,0 +1,19 @@
+version: 0.2
+phases:
+  install:
+    runtime-versions:
+      python: '3.12'
+      nodejs: '22'
+    commands:
+      - python -m pip install -r ci/requirements.txt
+      - npm install -g aws-cdk@2
+  build:
+    commands:
+      - python -m pytest -q
+      - python scripts/package_sprint2.py
+      - python scripts/build_frontend_ci.py
+      - cdk synth --app "python infrastructure/backend_sprint2_app.py" --output dist/cdk.out
+artifacts:
+  base-directory: dist
+  files:
+    - '**/*'

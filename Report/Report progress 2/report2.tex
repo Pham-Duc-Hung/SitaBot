@@ -96,6 +96,7 @@
   justification=centering,skip=6pt}
 \newcolumntype{Y}{>{\raggedright\arraybackslash}X}
 \newcommand{\bangfont}{\fontsize{12}{15}\selectfont}
+\newcommand{\code}[1]{\texttt{#1}}
 
 % ===== 5. THÔNG TIN TRANG BÌA =====
 \newcommand{\DonViChuQuan}{ĐẠI HỌC QUỐC GIA HÀ NỘI}
@@ -970,63 +971,63 @@ Mẫu JSON Response trả về ngay lập tức sau khi Dispatcher Lambda và Mo
 Dự án được lên kế hoạch thực hiện trong 5 tuần theo mô hình Agile/Scrum, chia thành 5 Sprint tương ứng:
 
 \begin{itemize}
-  \item \textbf{Tuần 1 (Sprint 1) -- Chuẩn bị môi trường và kiểm thử PoC độc lập:} Thống nhất quy định làm việc, quy chuẩn viết code chung. Tạo tài khoản AWS chung và IAM User cho từng thành viên. Mỗi thành viên tìm hiểu tài liệu kỹ thuật, viết và kiểm thử độc lập các hàm Python/Boto3 cơ bản cho dịch vụ AWS mình phụ trách (S3, EC2, Lambda, IAM).
-  \item \textbf{Tuần 2 (Sprint 2) -- Xây dựng hạ tầng cơ bản và ghép nối Backend:} Dựng khung giao diện web React tĩnh trên S3/CloudFront; cấu hình đăng ký, đăng nhập tài khoản qua Amazon Cognito. Thiết lập API Gateway, viết Lambda Backend tiếp nhận yêu cầu, tạo 05 bảng trên DynamoDB và tích hợp các module Boto3 của 4 thành viên vào Backend.
-  \item \textbf{Tuần 3 (Sprint 3) -- Tích hợp AI Chatbot, Step Functions và AppSync:} Tích hợp mô hình ngôn ngữ lớn (LLM), viết prompt và khai báo cấu trúc Function Calling (Tool Schemas). Dựng máy trạng thái Step Functions để điều phối luồng: nhận câu chat $\rightarrow$ Backend gọi LLM trích xuất tham số $\rightarrow$ hiển thị xác nhận $\rightarrow$ xác thực qua STS AssumeRole $\rightarrow$ Boto3 thực thi trên AWS $\rightarrow$ trả kết quả lên giao diện qua kênh WebSocket của AWS AppSync.
-  \item \textbf{Tuần 4 (Sprint 4) -- Kiểm thử hệ thống và tối ưu hóa:} Kiểm thử các kịch bản thực tế, bao gồm cả trường hợp chạy thành công và các tình huống thiếu quyền (AccessDenied); cấu hình CloudWatch Logs để theo dõi lỗi tập trung; tối ưu thời gian phản hồi của Lambda và hoàn thiện giao diện chat.
-  \item \textbf{Tuần 5 (Sprint 5) -- Nghiệm thu, dọn dẹp tài nguyên và hoàn thiện báo cáo:} Chạy thử toàn bộ các ca sử dụng để nghiệm thu sản phẩm; hoàn thiện báo cáo kỹ thuật, slide thuyết trình; rà soát và xóa các tài nguyên AWS thử nghiệm để tránh phát sinh chi phí.
+  \item \textbf{Tuần 1 (Sprint 1) -- Chuẩn bị môi trường, chốt thiết kế và kiểm thử PoC:} Thống nhất quy trình GitHub, phân công và tiêu chí nghiệm thu; chuẩn bị tài khoản AWS và khung hạ tầng CDK. Kiểm thử độc lập Boto3 cho S3, EC2, Lambda, IAM; chốt giao diện, hợp đồng API và thử nghiệm Gemini Function Calling.
+  \item \textbf{Tuần 2 (Sprint 2) -- Dựng hạ tầng nền tảng và tích hợp Backend:} Triển khai React trên S3/CloudFront, Cognito và API Gateway; dựng khung năm Lambda Chatbot, Dispatcher, Formatter, Connector, History. Tạo 05 bảng DynamoDB, phân quyền riêng cho từng Lambda, lưu khóa Gemini trong Secrets Manager; triển khai kết nối AWS qua ExternalId/STS và pipeline build, test, synth hạ tầng.
+  \item \textbf{Tuần 3 (Sprint 3) -- Hoàn thiện ChatOps, Gemini và cập nhật thời gian thực:} Hoàn thiện bốn module quản trị và Tool Schema; tích hợp Gemini tại Chatbot và Formatter. Xây dựng luồng xác nhận qua PendingAction và Step Functions, Dispatcher thực thi bằng STS/Boto3, Formatter lưu ActionHistory và phát kết quả qua AppSync; bổ sung tra cứu lịch sử trên giao diện.
+  \item \textbf{Tuần 4 (Sprint 4) -- Bổ sung bảo vệ, dự phòng và kiểm thử toàn diện:} Cấu hình WAF, Route~53/ACM và chuyển hướng sang trang lỗi tại \texttt{us-east-1}. Hoàn thiện CDK/CloudFormation, phê duyệt triển khai, canary và rollback bằng CodeDeploy/CloudWatch. Kiểm thử nghiệp vụ, phân quyền, xác nhận, lỗi Gemini, kết nối thời gian thực và tối ưu thời gian phản hồi.
+  \item \textbf{Tuần 5 (Sprint 5) -- Nghiệm thu, bàn giao và tổng kết:} Nghiệm thu toàn bộ kịch bản của bốn dịch vụ, luồng ChatOps, pipeline triển khai và failover; hoàn thiện hướng dẫn sử dụng, vận hành, báo cáo và slide. Rà soát, dọn tài nguyên thử nghiệm cùng các cấu hình phát sinh chi phí sau khi hoàn tất demo.
 \end{itemize}
 
+\clearpage
 \subsection{Kế hoạch hành động chi tiết theo từng Sprint}
 
 \begingroup
-\setlength{\tabcolsep}{3.5pt}
-\renewcommand{\arraystretch}{1.0}
-\fontsize{8.5}{10.8}\selectfont
-\begin{longtable}{@{}p{0.6cm}>{\raggedright\arraybackslash}p{3.8cm}>{\raggedright\arraybackslash}p{3.2cm}>{\raggedright\arraybackslash}p{2.6cm}>{\raggedright\arraybackslash}p{4.8cm}@{}}
+\setlength{\tabcolsep}{4pt}
+\renewcommand{\arraystretch}{1.13}
+\fontsize{11}{14.5}\selectfont
+\begin{longtable}{@{}>{\centering\arraybackslash}p{0.75cm}>{\raggedright\arraybackslash}p{4.6cm}>{\raggedright\arraybackslash}p{3.2cm}>{\raggedright\arraybackslash}p{\dimexpr\linewidth-8.55cm-6\tabcolsep\relax}@{}}
 \caption{Kế hoạch hành động và phân công công việc chi tiết theo từng Sprint}\label{tab:action_plan}\\
 \toprule
-\textbf{STT} & \textbf{Hạng mục công việc} & \textbf{Thành phần kiến trúc liên quan} & \textbf{Người phụ trách} & \textbf{Kết quả bàn giao}\\
+\textbf{STT} & \textbf{Hạng mục công việc} & \textbf{Người phụ trách} & \textbf{Kết quả bàn giao}\\
 \midrule
 \endfirsthead
-\caption[]{(Tiếp theo Bảng~\ref{tab:action_plan})}\\
 \toprule
-\textbf{STT} & \textbf{Hạng mục công việc} & \textbf{Thành phần kiến trúc liên quan} & \textbf{Người phụ trách} & \textbf{Kết quả bàn giao}\\
+\textbf{STT} & \textbf{Hạng mục công việc} & \textbf{Người phụ trách} & \textbf{Kết quả bàn giao}\\
 \midrule
 \endhead
 \midrule
 \endfoot
 \bottomrule
 \endlastfoot
-\multicolumn{5}{@{}l}{\textbf{Giai đoạn 1: Tuần 1 -- Thiết lập quy trình, hạ tầng ban đầu và PoC Boto3 độc lập}}\\
-1 & Viết và kiểm thử độc lập module Boto3 cho dịch vụ S3 & User's Cloud (Amazon S3) & Phạm Đức Hùng & Module \texttt{s3\_service} (tạo bucket, presign, block public).\\
-2 & Thống nhất kịch bản và kiểm thử module Boto3 cho dịch vụ EC2 & User's Cloud (Amazon EC2) & Nguyễn Đức Huy & Module \texttt{ec2\_service} (khởi tạo, bật/tắt, describe).\\
-3 & Thống nhất kịch bản và kiểm thử module Boto3 cho Lambda & User's Cloud (AWS Lambda) & Trịnh Thiên Quang & Module \texttt{lambda\_service} (list, invoke, hot config).\\
-4 & Thống nhất quy tắc làm việc, tạo tài khoản AWS và module IAM & Toàn bộ kiến trúc, AWS IAM & Cao Anh Minh & Quy chuẩn mã nguồn, AWS Account chung, module \texttt{iam\_service}.\\
+\multicolumn{4}{@{}p{\linewidth}@{}}{\textbf{Giai đoạn 1: Tuần 1 -- Thiết lập quy trình, hạ tầng ban đầu và PoC Boto3 độc lập}}\\*
+1 & Viết và kiểm thử độc lập module Boto3 cho dịch vụ S3 & \mbox{Phạm Đức Hùng} & Module \texttt{s3\_service} (tạo bucket, presign, block public).\\
+2 & Thống nhất kịch bản và kiểm thử module Boto3 cho dịch vụ EC2 & \mbox{Nguyễn Đức Huy} & Module \texttt{ec2\_service} (khởi tạo, bật/tắt, describe).\\
+3 & Thống nhất kịch bản và kiểm thử module Boto3 cho Lambda & \mbox{Trịnh Thiên Quang} & Module \texttt{lambda\_service} (list, invoke, hot config).\\
+4 & Thống nhất quy tắc làm việc, tạo tài khoản AWS và module IAM\par Chuẩn bị khung hạ tầng AWS CDK cho mô hình mở rộng. & \mbox{Cao Anh Minh} & Quy chuẩn mã nguồn, AWS Account chung, module \texttt{iam\_service}.\par Khung Primary Stack, Error Page Stack và DNS/Failover Stack; cấu hình region chính và region trang lỗi.\\
 \midrule
-\multicolumn{5}{@{}l}{\textbf{Giai đoạn 2: Tuần 2 -- Dựng hạ tầng nền tảng Serverless, Giao diện và Tích hợp Backend}}\\
-5 & Phát triển khung giao diện React cơ bản trên S3/CloudFront & Frontend (React, S3, CloudFront) & Phạm Đức Hùng & Giao diện Web Chat responsive, CDN CloudFront với HTTPS.\\
-6 & Cấu hình luồng đăng nhập và quản lý danh tính qua Cognito & Amazon Cognito, API Gateway & Nguyễn Đức Huy & Luồng Login/Register qua Cognito, JWT Authorizer trên Gateway.\\
-7 & Dựng Lambda Backend trung tâm và tích hợp các module Boto3 & AWS Lambda Backend & Trịnh Thiên Quang & Lambda Backend tiếp nhận request và tích hợp các module Boto3.\\
-8 & Cấu hình IAM Role cho Backend và thiết kế 05 bảng DynamoDB & AWS IAM, DynamoDB & Cao Anh Minh & IAM Execution Role, 05 bảng DynamoDB cơ sở.\\
+\multicolumn{4}{@{}p{\linewidth}@{}}{\textbf{Giai đoạn 2: Tuần 2 -- Dựng hạ tầng nền tảng Serverless, Giao diện và Tích hợp Backend}}\\*
+5 & Phát triển khung giao diện React cơ bản trên S3/CloudFront\par Cấu hình AWS WAF cho CloudFront; dựng trang thông báo lỗi trên S3/CloudFront ở region phụ. & \mbox{Phạm Đức Hùng} & Giao diện Web Chat responsive, CDN CloudFront với HTTPS.\par Web ACL với managed rules và rate limit theo đặc tả; trang error.html tại us-east-1; script build frontend dùng trong CI/CD.\\
+6 & Cấu hình luồng đăng nhập và quản lý danh tính qua Cognito\par Cấu hình tên miền web/API qua Route 53 và chứng chỉ ACM; chuẩn bị health check. & \mbox{Nguyễn Đức Huy} & Luồng Login/Register qua Cognito, JWT Authorizer trên Gateway.\par Bản ghi DNS, chứng chỉ cho tên miền web/API và cấu hình kiểm tra /health phục vụ failover.\\
+7 & Dựng Lambda Backend trung tâm và tích hợp các module Boto3\par Mở rộng Backend theo các vai trò Chatbot, Dispatcher, Formatter, Connector, History; thiết lập CI. & \mbox{Trịnh Thiên Quang} & Lambda Backend tiếp nhận request và tích hợp các module Boto3.\par Khung năm Lambda, API kết nối AWS/tra cứu lịch sử; CodeConnections, CodePipeline, CodeBuild chạy pytest, build frontend và cdk synth.\\
+8 & Cấu hình IAM Role cho Backend và thiết kế 05 bảng DynamoDB\par Cấp quyền riêng cho từng Lambda, Step Functions và pipeline; quản lý khóa Gemini bằng Secrets Manager. & \mbox{Cao Anh Minh} & IAM Execution Role, 05 bảng DynamoDB cơ sở.\par Policy theo chức năng, quyền đọc/ghi đúng bảng; chỉ Chatbot/Formatter đọc khóa Gemini; mẫu role đích có ExternalId và cấu hình CDK nền tảng.\\
 \midrule
-\multicolumn{5}{@{}l}{\textbf{Giai đoạn 3: Tuần 3 -- Tích hợp AI Chatbot, Step Functions và AppSync}}\\
-9 & Định nghĩa Function Calling và Prompt cho dịch vụ S3 & Model LLM, Chatbot Lambda & Phạm Đức Hùng & Bộ Tool Schema cho S3, hỗ trợ kênh WebSocket AppSync.\\
-10 & Định nghĩa Function Calling cho EC2 và ghép luồng LLM & Model LLM, Chatbot Lambda & Nguyễn Đức Huy & Bộ Tool Schema cho EC2, hoàn thiện ghép luồng LLM.\\
-11 & Tích hợp API LLM, xử lý phản hồi Function Calling tại Backend & Model LLM, Lambda Backend & Trịnh Thiên Quang & Xử lý phản hồi Function Calling và tích hợp LLM vào Backend.\\
-12 & Hoàn thiện Prompt IAM, xây dựng Step Functions State Machine & AWS Step Functions, STS & Cao Anh Minh & State Machine điều phối luồng thực thi, xác thực STS.\\
+\multicolumn{4}{@{}p{\linewidth}@{}}{\textbf{Giai đoạn 3: Tuần 3 -- Tích hợp AI Chatbot, Step Functions và AppSync}}\\*
+9 & Định nghĩa Function Calling và Prompt cho dịch vụ S3\par Ghép thẻ xác nhận, kết quả thực thi và lịch sử trên giao diện với Backend mở rộng. & \mbox{Phạm Đức Hùng} & Bộ Tool Schema cho S3, hỗ trợ kênh WebSocket AppSync.\par Giao diện nhận sự kiện AppSync theo người dùng/phiên; hiển thị kết quả và lịch sử từ API Backend.\\
+10 & Định nghĩa Function Calling cho EC2 và ghép luồng LLM\par Hoàn thiện DNS failover giữa website chính và trang thông báo lỗi. & \mbox{Nguyễn Đức Huy} & Bộ Tool Schema cho EC2, hoàn thiện ghép luồng LLM.\par Health check và bản ghi Primary/Secondary; kết quả thử chuyển sang trang lỗi và phục hồi website chính.\\
+11 & Tích hợp API LLM, xử lý phản hồi Function Calling tại Backend\par Tích hợp Gemini vào Chatbot/Formatter; hoàn thiện các Lambda nghiệp vụ của Backend mở rộng. & \mbox{Trịnh Thiên Quang} & Xử lý phản hồi Function Calling và tích hợp LLM vào Backend.\par Chatbot lưu phiên/hành động chờ; Dispatcher thực thi Boto3; Formatter lưu lịch sử, phát AppSync và có lời đáp dự phòng; Connector kiểm tra STS, History truy vấn lịch sử.\\
+12 & Hoàn thiện Prompt IAM, xây dựng Step Functions State Machine\par Ghép State Machine với Backend mở rộng và luồng xác nhận hành động. & \mbox{Cao Anh Minh} & State Machine điều phối luồng thực thi, xác thực STS.\par Workflow gọi các Lambda đúng thứ tự; đối soát hành động, chủ sở hữu và hạn xác nhận; phối hợp Backend chống thực thi lặp.\\
 \midrule
-\multicolumn{5}{@{}l}{\textbf{Giai đoạn 4: Tuần 4 -- Kiểm thử toàn diện, Phân quyền và Tối ưu hóa}}\\
-13 & Kiểm thử hệ thống, tối ưu hóa module S3 & Phân hệ S3, Web Client & Phạm Đức Hùng & Báo cáo kiểm thử S3, tối ưu giao diện truyền tải file.\\
-14 & Kiểm thử hệ thống, tối ưu module EC2, dọn dẹp tài nguyên & Phân hệ EC2, CloudWatch & Nguyễn Đức Huy & Báo cáo kiểm thử EC2, kịch bản FinOps cảnh báo máy ảo.\\
-15 & Kiểm thử phân quyền, tối ưu hệ thống Backend & Backend Lambda, Step Functions & Trịnh Thiên Quang & Báo cáo kiểm thử phân quyền, tối ưu Cold-start của Lambda.\\
-16 & Kiểm thử trường hợp thiếu quyền (AccessDenied), CloudWatch Log & AWS IAM, CloudWatch Logs & Cao Anh Minh & Xử lý lỗi phân quyền, tập trung hóa log trên CloudWatch.\\
+\multicolumn{4}{@{}p{\linewidth}@{}}{\textbf{Giai đoạn 4: Tuần 4 -- Kiểm thử toàn diện, Phân quyền và Tối ưu hóa}}\\*
+13 & Kiểm thử hệ thống, tối ưu hóa module S3\par Kiểm thử WAF, trang lỗi và cập nhật giao diện qua AppSync. & \mbox{Phạm Đức Hùng} & Báo cáo kiểm thử S3, tối ưu giao diện truyền tải file.\par Kết quả kiểm thử request hợp lệ/bị chặn; hiển thị trang lỗi, kết nối lại AppSync và đối soát kết quả trên giao diện.\\
+14 & Kiểm thử hệ thống, tối ưu module EC2, dọn dẹp tài nguyên\par Kiểm thử DNS/TLS, health check và failover. & \mbox{Nguyễn Đức Huy} & Báo cáo kiểm thử EC2, kịch bản FinOps cảnh báo máy ảo.\par Bằng chứng chuyển sang trang lỗi khi hệ thống chính lỗi và phục hồi khi hoạt động lại; kiểm tra tên miền/chứng chỉ web/API.\\
+15 & Kiểm thử phân quyền, tối ưu hệ thống Backend\par Hoàn thiện và kiểm thử CI/CD, triển khai canary/rollback; kiểm thử các Lambda mở rộng. & \mbox{Trịnh Thiên Quang} & Báo cáo kiểm thử phân quyền, tối ưu Cold-start của Lambda.\par Pipeline phê duyệt thủ công, triển khai CDK/CloudFormation và CodeDeploy; kiểm thử lỗi Gemini, Connector, History và xác nhận lặp; bằng chứng canary/rollback.\\
+16 & Kiểm thử trường hợp thiếu quyền (AccessDenied), CloudWatch Log\par Cấu hình CloudWatch Alarm cho CodeDeploy; rà soát quyền secret, workflow và pipeline. & \mbox{Cao Anh Minh} & Xử lý lỗi phân quyền, tập trung hóa log trên CloudWatch.\par Alarm phục vụ rollback; báo cáo AccessDenied, quyền giữa các Lambda và truy cập chéo người dùng; log truy vết cho Backend mở rộng.\\
 \midrule
-\multicolumn{5}{@{}l}{\textbf{Giai đoạn 5: Tuần 5 -- Nghiệm thu, Tổng kết dự án và Đóng gói báo cáo}}\\
-17 & Hoàn thiện báo cáo phần S3, hỗ trợ làm slide thuyết trình & Báo cáo đề tài & Phạm Đức Hùng & Nội dung báo cáo S3, hoàn thiện slide demo.\\
-18 & Tổng hợp kết quả nghiệm thu EC2, chuẩn bị slide demo & Báo cáo đề tài & Nguyễn Đức Huy & Nội dung báo cáo EC2, slide thuyết trình kỹ thuật.\\
-19 & Nghiệm thu luồng Lambda, hoàn thiện tài liệu hướng dẫn & Báo cáo đề tài & Trịnh Thiên Quang & Nội dung báo cáo Lambda, tài liệu vận hành.\\
-20 & Tổng kết dự án, hoàn thiện báo cáo tổng thể, slide thuyết trình & Báo cáo đề tài & Cao Anh Minh & Bản báo cáo hoàn chỉnh (\texttt{report1.pdf}), slide tổng thể.\\
+\multicolumn{4}{@{}p{\linewidth}@{}}{\textbf{Giai đoạn 5: Tuần 5 -- Nghiệm thu, Tổng kết dự án và Đóng gói báo cáo}}\\*
+17 & Hoàn thiện báo cáo phần S3\par Bổ sung nội dung WAF, giao diện mở rộng và trang thông báo lỗi vào báo cáo/demo. & \mbox{Phạm Đức Hùng} & Nội dung báo cáo S3.\par Tài liệu cấu hình WAF, S3/CloudFront dự phòng; hình ảnh và kịch bản demo giao diện mới.\\
+18 & Tổng hợp kết quả nghiệm thu EC2\par Tổng hợp nghiệm thu Route 53/ACM và failover; ghi nhận dọn tài nguyên thử nghiệm. & \mbox{Nguyễn Đức Huy} & Nội dung báo cáo EC2.\par Kết quả DNS/TLS, health check, chuyển hướng/phục hồi; danh sách tài nguyên EC2/DNS thử nghiệm đã xử lý.\\
+19 & Nghiệm thu luồng Lambda, hoàn thiện tài liệu hướng dẫn\par Bổ sung tài liệu Backend mở rộng, Gemini và CI/CD. & \mbox{Trịnh Thiên Quang} & Nội dung báo cáo Lambda, tài liệu vận hành.\par Hướng dẫn năm Lambda, cấu hình Gemini, build/deploy, canary/rollback và xử lý lỗi; kết quả nghiệm thu pipeline.\\
+20 & Tổng kết dự án, hoàn thiện báo cáo tổng thể\par Tổng hợp phần kiến trúc mở rộng và rà soát chi phí sau demo. & \mbox{Cao Anh Minh} & Bản báo cáo hoàn chỉnh.\par Nội dung tổng hợp ba stack, phân quyền, bảo mật và dự phòng; checklist dọn tài nguyên thử nghiệm và đối soát chi phí của cả nhóm.\\
 \end{longtable}
 \endgroup
 

@@ -1,0 +1,33 @@
+name: Backend Sprint 2 CI
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  test-build-synth:
+    runs-on: ubuntu-latest
+    env:
+      AWS_DEFAULT_REGION: ap-southeast-1
+      AWS_EC2_METADATA_DISABLED: 'true'
+      PRIMARY_REGION: ap-southeast-1
+      SECONDARY_REGION: us-east-1
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: python -m pip install -r ci/requirements.txt
+      - run: npm install -g aws-cdk@2
+      - run: python -m pytest -q
+      - run: python scripts/package_sprint2.py
+      - run: python scripts/build_frontend_ci.py
+      - run: cdk synth --app "python infrastructure/backend_sprint2_app.py" --output dist/cdk.out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sprint2-build
+          path: dist/

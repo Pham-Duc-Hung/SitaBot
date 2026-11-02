@@ -1,0 +1,171 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Quang Sprint 2 CI only; roles and artifact bucket supplied by infrastructure owner.",
+  "Parameters": {
+    "ConnectionArn": {
+      "Type": "String",
+      "Default": ""
+    },
+    "RepositoryId": {
+      "Type": "String"
+    },
+    "PipelineRoleArn": {
+      "Type": "String"
+    },
+    "BuildRoleArn": {
+      "Type": "String"
+    },
+    "ArtifactBucket": {
+      "Type": "String"
+    },
+    "Branch": {
+      "Type": "String",
+      "Default": "main"
+    }
+  },
+  "Resources": {
+    "Connection": {
+      "Type": "AWS::CodeConnections::Connection",
+      "Properties": {
+        "ConnectionName": "satibot-github",
+        "ProviderType": "GitHub"
+      },
+      "Condition": "CreateConnection"
+    },
+    "Build": {
+      "Type": "AWS::CodeBuild::Project",
+      "Properties": {
+        "ServiceRole": {
+          "Ref": "BuildRoleArn"
+        },
+        "Artifacts": {
+          "Type": "CODEPIPELINE"
+        },
+        "Source": {
+          "Type": "CODEPIPELINE",
+          "BuildSpec": "ci/buildspec.yml"
+        },
+        "Environment": {
+          "Type": "LINUX_CONTAINER",
+          "ComputeType": "BUILD_GENERAL1_SMALL",
+          "Image": "aws/codebuild/standard:7.0",
+          "EnvironmentVariables": [
+            {
+              "Name": "PRIMARY_REGION",
+              "Value": "ap-southeast-1"
+            },
+            {
+              "Name": "SECONDARY_REGION",
+              "Value": "us-east-1"
+            }
+          ]
+        },
+        "TimeoutInMinutes": 30
+      }
+    },
+    "Pipeline": {
+      "Type": "AWS::CodePipeline::Pipeline",
+      "Properties": {
+        "RoleArn": {
+          "Ref": "PipelineRoleArn"
+        },
+        "ArtifactStore": {
+          "Type": "S3",
+          "Location": {
+            "Ref": "ArtifactBucket"
+          }
+        },
+        "Stages": [
+          {
+            "Name": "Source",
+            "Actions": [
+              {
+                "Name": "GitHub",
+                "ActionTypeId": {
+                  "Category": "Source",
+                  "Owner": "AWS",
+                  "Provider": "CodeStarSourceConnection",
+                  "Version": "1"
+                },
+                "Configuration": {
+                  "ConnectionArn": {
+                    "Fn::If": [
+                      "CreateConnection",
+                      {
+                        "Fn::GetAtt": [
+                          "Connection",
+                          "ConnectionArn"
+                        ]
+                      },
+                      {
+                        "Ref": "ConnectionArn"
+                      }
+                    ]
+                  },
+                  "FullRepositoryId": {
+                    "Ref": "RepositoryId"
+                  },
+                  "BranchName": {
+                    "Ref": "Branch"
+                  },
+                  "DetectChanges": "true"
+                },
+                "OutputArtifacts": [
+                  {
+                    "Name": "Source"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "Name": "BuildTestSynth",
+            "Actions": [
+              {
+                "Name": "CI",
+                "ActionTypeId": {
+                  "Category": "Build",
+                  "Owner": "AWS",
+                  "Provider": "CodeBuild",
+                  "Version": "1"
+                },
+                "Configuration": {
+                  "ProjectName": {
+                    "Ref": "Build"
+                  }
+                },
+                "InputArtifacts": [
+                  {
+                    "Name": "Source"
+                  }
+                ],
+                "OutputArtifacts": [
+                  {
+                    "Name": "BuildOutput"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "Conditions": {
+    "CreateConnection": {
+      "Fn::Equals": [
+        {
+          "Ref": "ConnectionArn"
+        },
+        ""
+      ]
+    }
+  },
+  "Outputs": {
+    "PipelineName": {
+      "Value": {
+        "Ref": "Pipeline"
+      }
+    }
+  }
+}
