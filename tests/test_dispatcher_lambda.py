@@ -35,7 +35,9 @@ class TestDispatcherLambda(unittest.TestCase):
         self.assertEqual(res["status"], "ERROR")
         self.assertEqual(res["error_code"], "UnsupportedService")
 
-    def test_direct_invoke_service_under_development(self):
+    @patch("backend.functions.dispatcher.index.iam_service.execute")
+    def test_direct_invoke_service_under_development(self, mock_iam):
+        mock_iam.return_value = {"status": "NOT_IMPLEMENTED", "error_code": "ServiceUnderDevelopment"}
         event = {"service": "iam", "action": "describe_instances"}
         res = lambda_handler(event, None)
         self.assertEqual(res["status"], "NOT_IMPLEMENTED")
