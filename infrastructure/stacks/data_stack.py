@@ -1,6 +1,7 @@
 from aws_cdk import Stack
 from constructs import Construct
 
+# Quản lý cơ sở dữ liệu và tài nguyên lưu trữ.
 class DataStack(Stack):
     def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
