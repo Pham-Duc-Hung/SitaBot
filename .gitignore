@@ -45,3 +45,6 @@ pnpm-debug.log*
 .idea/
 .DS_Store
 Thumbs.db
+AGENT.md
+progression.md
+
