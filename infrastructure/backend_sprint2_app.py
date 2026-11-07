@@ -13,12 +13,25 @@ stack = cdk.Stack(app, "SatiBotBackendSprint2", env=cdk.Environment(
 root = Path(__file__).resolve().parents[1]
 connections = cdk.CfnParameter(stack, "ConnectionsTableName", type="String")
 history = cdk.CfnParameter(stack, "HistoryTableName", type="String")
+sessions = cdk.CfnParameter(stack, "SessionStateTableName", type="String")
+pending = cdk.CfnParameter(stack, "PendingActionTableName", type="String")
+secret = cdk.CfnParameter(stack, "GeminiSecretArn", type="String", default="")
+workflow = cdk.CfnParameter(stack, "ActionStateMachineArn", type="String", default="")
+appsync_url = cdk.CfnParameter(stack, "AppSyncGraphqlUrl", type="String", default="")
 for name in ("chatbot", "dispatcher", "formatter", "connector", "history"):
     role_arn = cdk.CfnParameter(stack, f"{name.title()}RoleArn", type="String")
     role = iam.Role.from_role_arn(stack, f"{name}Role", role_arn.value_as_string, mutable=False)
-    environment = {}
+    environment = {"SATIBOT_MODE": "cloud"}
     if name == "connector":
         environment["AWS_CONNECTIONS_TABLE"] = connections.value_as_string
+    if name == "chatbot":
+        environment.update(SESSION_STATE_TABLE=sessions.value_as_string, PENDING_ACTION_TABLE=pending.value_as_string,
+                           GEMINI_SECRET_ARN=secret.value_as_string, ACTION_STATE_MACHINE_ARN=workflow.value_as_string)
+    if name == "dispatcher":
+        environment.update(PENDING_ACTION_TABLE=pending.value_as_string, AWS_CONNECTIONS_TABLE=connections.value_as_string)
+    if name == "formatter":
+        environment.update(ACTION_HISTORY_TABLE=history.value_as_string, GEMINI_SECRET_ARN=secret.value_as_string,
+                           APPSYNC_GRAPHQL_URL=appsync_url.value_as_string)
     if name == "history":
         environment["ACTION_HISTORY_TABLE"] = history.value_as_string
     function = lambda_.Function(stack, f"{name}Function", runtime=lambda_.Runtime.PYTHON_3_12,

@@ -1,11 +1,13 @@
-"""Author: Trịnh Thiên Quang. Internal Formatter contract for Sprint 2.
-
-Gemini, ActionHistory writes and AppSync publication belong to Sprint 3.
+"""Author: Trịnh Thiên Quang. Formatter entrypoint: Sprint 3 cloud flow and local compatibility response.
 """
+import os
 from backend.shared.runtime import redact_sensitive
 
 
 def lambda_handler(event, context):
+    if os.environ.get("SATIBOT_MODE") == "cloud" or os.environ.get("AWS_LAMBDA_FUNCTION_NAME"):
+        from backend.functions.formatter.cloud_handler import handle
+        return handle(event, context)
     if not isinstance(event, dict) or not isinstance(event.get("result"), dict):
         return {"status": "ERROR", "error_code": "InvalidPayload"}
     result = event["result"]

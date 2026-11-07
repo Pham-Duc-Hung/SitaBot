@@ -1,0 +1,2 @@
+# Lambda runtime dependency; boto3 is provided by the Python Lambda runtime.
+jsonschema>=4.23,<5

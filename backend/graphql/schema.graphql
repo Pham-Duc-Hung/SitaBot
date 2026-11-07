@@ -1,0 +1,39 @@
+# Contract for Hung's UI and Minh's AppSync infrastructure. Mutation: IAM only.
+type ActionResult @aws_iam @aws_cognito_user_pools {
+  user_id: ID!
+  session_id: ID!
+  action_id: ID!
+  created_at: AWSDateTime!
+  service: String!
+  tool_name: String!
+  status: String!
+  message: String!
+  data: AWSJSON
+}
+input ActionResultInput {
+  user_id: ID!
+  session_id: ID!
+  action_id: ID!
+  created_at: AWSDateTime!
+  service: String!
+  tool_name: String!
+  status: String!
+  message: String!
+  data: AWSJSON
+}
+type Query {
+  health: String @aws_iam
+}
+type Mutation {
+  publishActionResult(event: ActionResultInput!): ActionResult @aws_iam
+}
+type Subscription {
+  onActionResult(session_id: ID!): ActionResult
+    @aws_subscribe(mutations: ["publishActionResult"])
+    @aws_cognito_user_pools
+}
+schema {
+  query: Query
+  mutation: Mutation
+  subscription: Subscription
+}
