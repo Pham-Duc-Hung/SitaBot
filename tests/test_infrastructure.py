@@ -102,10 +102,21 @@ def test_iam_data_permissions_are_scoped_to_table_arns():
 
 def test_dispatcher_and_connector_can_assume_customer_role_pattern():
     _, iam_template = _synth_stacks()
-    rendered = json.dumps(iam_template.to_json())
+    policies = iam_template.find_resources("AWS::IAM::Policy")
+    assume_role_policies = [
+        policy
+        for policy in policies.values()
+        if any(
+            "sts:AssumeRole" in statement.get("Action", [])
+            for statement in policy["Properties"]["PolicyDocument"]["Statement"]
+        )
+    ]
 
-    assert rendered.count("sts:AssumeRole") == 2
-    assert "satibot/SatiBotAccessRole" in rendered
+    assert len(assume_role_policies) == 2
+    for policy in assume_role_policies:
+        assert "satibot/SatiBotAccessRole" in json.dumps(
+            policy["Properties"]["PolicyDocument"]
+        )
 
 
 def test_llm_secret_read_permission_is_added_only_when_secret_arn_is_configured():
