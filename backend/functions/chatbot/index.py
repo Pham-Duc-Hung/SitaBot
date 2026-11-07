@@ -695,6 +695,9 @@ def _conversation_workspace(value: Any) -> Dict[str, Any]:
 
 
 def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
+    if os.environ.get("SATIBOT_MODE") == "cloud" or os.environ.get("AWS_LAMBDA_FUNCTION_NAME"):
+        from backend.functions.chatbot.cloud_handler import handle
+        return handle(event, context)
     """Carry successful resource observations across turns, including approval resumes."""
     result = _handle_request(event, context)
     payload = event.get("body", event) if isinstance(event, dict) else {}

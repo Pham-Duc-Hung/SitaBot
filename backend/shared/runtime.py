@@ -1,4 +1,7 @@
-"""Cấu hình runtime và tiện ích an toàn dùng chung cho Lambda backend."""
+"""
+Author: Trịnh Thiên Quang
+Quản lý cấu hình runtime và che thông tin nhạy cảm của Lambda backend.
+"""
 
 import hashlib
 import json
@@ -9,6 +12,16 @@ from typing import Any, Dict, Optional
 DEFAULT_REGION = "us-east-1"
 _SENSITIVE_KEYS = {
     "authorization",
+    "credentials",
+    "secret_access_key",
+    "aws_access_key_id",
+    "accesskeyid",
+    "external_id",
+    "externalid",
+    "password",
+    "privatekey",
+    "keymaterial",
+    "environment",
     "aws_secret_access_key",
     "aws_session_token",
     "secretaccesskey",

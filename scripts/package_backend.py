@@ -1,39 +1,27 @@
 """
 Author: Trịnh Thiên Quang
-Đóng gói mã nguồn Backend Lambda thành file zip sẵn sàng triển khai lên AWS.
+Đóng gói backend và tạo ZIP Chatbot tương thích công cụ triển khai cũ.
 """
 
-import os
+from pathlib import Path
+import shutil
 import zipfile
 
-PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-OUTPUT_ZIP = os.path.join(PROJECT_ROOT, "satibot_backend.zip")
+try:
+    from scripts.package_sprint2 import package as package_all
+except ModuleNotFoundError:
+    from package_sprint2 import package as package_all
 
-FILES_TO_PACKAGE = [
-    ("backend/functions/chatbot/index.py", "index.py"),
-    ("backend/functions/chatbot/agent_executor.py", "agent_executor.py"),
-    ("backend/functions/dispatcher/index.py", "dispatcher.py"),
-    ("backend/functions/dispatcher/services/__init__.py", "services/__init__.py"),
-    ("backend/functions/dispatcher/services/lambda_service.py", "services/lambda_service.py"),
-    ("backend/functions/dispatcher/services/ec2_service.py", "services/ec2_service.py"),
-    ("backend/functions/dispatcher/services/s3_service.py", "services/s3_service.py"),
-    ("backend/functions/dispatcher/services/iam_service.py", "services/iam_service.py"),
-    ("backend/shared/runtime.py", "runtime.py"),
-]
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+OUTPUT_ZIP = PROJECT_ROOT / "satibot_backend.zip"
 
 
 def package():
-    print(f"📦 Đang đóng gói {OUTPUT_ZIP}...")
-    with zipfile.ZipFile(OUTPUT_ZIP, "w", zipfile.ZIP_DEFLATED) as zf:
-        for rel_src, arcname in FILES_TO_PACKAGE:
-            full_path = os.path.join(PROJECT_ROOT, rel_src)
-            if os.path.exists(full_path):
-                zf.write(full_path, arcname)
-                print(f"  + {arcname} ({os.path.getsize(full_path)} bytes)")
-            else:
-                print(f"  ! CẢNH BÁO: Không tìm thấy {rel_src}")
-
-    print(f"✅ Đóng gói hoàn tất! Kích thước: {os.path.getsize(OUTPUT_ZIP)} bytes\n")
+    output = package_all(with_dependencies=True)
+    shutil.copy2(output / "chatbot.zip", OUTPUT_ZIP)
+    with zipfile.ZipFile(OUTPUT_ZIP, "a", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("index.py", "from backend.functions.chatbot.index import lambda_handler\n")
+    print(OUTPUT_ZIP)
 
 
 if __name__ == "__main__":

@@ -4,6 +4,7 @@ Author: Trịnh Thiên Quang
 """
 
 import json
+import os
 import logging
 from typing import Any, Dict
 
@@ -75,6 +76,9 @@ def _http_status_for_result(result: Dict[str, Any]) -> int:
 
 
 def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
+    if os.environ.get("SATIBOT_MODE") == "cloud" or os.environ.get("AWS_LAMBDA_FUNCTION_NAME"):
+        from backend.functions.dispatcher.cloud_handler import handle
+        return handle(event, context)
     """
     Điểm tiếp nhận chính của Dispatcher Lambda:
     - Hỗ trợ cả direct invocation (từ Step Functions / SQS) lẫn API Gateway Proxy event.

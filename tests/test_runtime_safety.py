@@ -1,3 +1,8 @@
+"""
+Author: Trịnh Thiên Quang
+Kiểm thử cấu hình region, che thông tin nhạy cảm và hợp đồng lỗi backend.
+"""
+
 from unittest.mock import patch
 
 from backend.shared.runtime import get_aws_region, redact_sensitive, safe_json_for_log
@@ -16,10 +21,10 @@ def test_redact_sensitive_nested_credentials():
         "headers": {"Authorization": "Bearer private"},
     }
     redacted = redact_sensitive(event)
-    assert redacted["credentials"]["AccessKeyId"] == "AKIA-DEMO"
-    assert redacted["credentials"]["SecretAccessKey"] == "<redacted>"
-    assert redacted["credentials"]["SessionToken"] == "<redacted>"
+    # Sprint 3 also suppresses the entire credential bundle, including access IDs.
+    assert redacted["credentials"] == "<redacted>"
     serialized = safe_json_for_log(event)
+    assert "AKIA-DEMO" not in serialized
     assert "secret-value" not in serialized
     assert "session-value" not in serialized
     assert "Bearer private" not in serialized
