@@ -57,6 +57,9 @@ class AgentExecutor:
                 return schema.get("requires_confirmation", True)
         return True
 
+    def _tool_service(self, tool_name: str) -> str:
+        return self._schemas_by_name.get(tool_name, {}).get("service", "lambda")
+
     def _parse_tool_call(self, tool_call: Dict[str, Any]) -> tuple[Optional[str], Optional[Dict[str, Any]], Optional[str]]:
         """Parse and validate a model tool call before it can reach the dispatcher."""
         if not isinstance(tool_call, dict):
@@ -75,7 +78,8 @@ class AgentExecutor:
         if not isinstance(parameters, dict):
             return tool_name, None, "Arguments của công cụ phải là JSON object."
 
-        schema = self._schemas_by_name[tool_name].get("parameters", {})
+        tool_schema = self._schemas_by_name[tool_name]
+        schema = tool_schema.get("parameters") or tool_schema.get("input_schema", {})
         properties = schema.get("properties", {})
 
         if tool_name == "create_lambda_function" and "role_arn" in properties and not parameters.get("role_arn"):
@@ -118,6 +122,13 @@ class AgentExecutor:
                 invalid_types.append(name)
         if invalid_types:
             return tool_name, parameters, f"Sai kiểu dữ liệu cho: {', '.join(invalid_types)}. Hãy tự sửa tool call."
+        if self._tool_service(tool_name) == "s3":
+            from backend.functions.chatbot.tools.s3_tools import build_s3_dispatch_request
+
+            try:
+                build_s3_dispatch_request(tool_name, parameters)
+            except (KeyError, TypeError, ValueError) as exc:
+                return tool_name, parameters, str(exc)
         return tool_name, parameters, None
 
     @staticmethod
@@ -482,7 +493,7 @@ class AgentExecutor:
                     "status": "CONFIRMATION_REQUIRED",
                     "type": "action_confirmation",
                     "action_id": action_id,
-                    "service": "lambda",
+                    "service": self._tool_service(tool_name),
                     "tool_name": tool_name,
                     "parameters": parsed_params,
                     "thought": reasoning_note,
@@ -503,7 +514,7 @@ class AgentExecutor:
 
             try:
                 exec_res = self.dispatch_fn(
-                    service="lambda", action=tool_name, parameters=parsed_params, confirmed=True,
+                    service=self._tool_service(tool_name), action=tool_name, parameters=parsed_params, confirmed=True,
                     region=context.get("region", "us-east-1"), credentials=context.get("credentials"),
                 )
                 if not isinstance(exec_res, dict):
@@ -622,7 +633,7 @@ class AgentExecutor:
                             retry_prompt = (
                                 "Tiếp tục run này bằng hành động thực tế. "
                                 f"Hãy chọn đúng công cụ phù hợp trong danh sách: {', '.join(available_names)}. "
-                                "Nếu yêu cầu này nằm ngoài phạm vi các công cụ trên (ví dụ yêu cầu EC2, RDS, S3...), "
+                                "Nếu yêu cầu này nằm ngoài phạm vi các công cụ trên (ví dụ yêu cầu RDS...), "
                                 "hãy nói thẳng và rõ ràng là nằm ngoài phạm vi công cụ hỗ trợ của bạn, tuyệt đối không bịa lý do nút bấm, "
                                 "và gợi ý giải pháp thay thế phù hợp bằng AWS Lambda / Serverless."
                             )

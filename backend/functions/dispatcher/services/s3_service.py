@@ -759,7 +759,7 @@ def execute(credentials, params):
         }
 
     action = params.get("action")
-    region = params.get("region", "us-east-2")
+    region = params.get("region", "ap-southeast-1")
 
     supported_actions = {
         "create_bucket",

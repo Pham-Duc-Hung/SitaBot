@@ -71,6 +71,23 @@ function extractPublicUrl(text, data) {
   return null;
 }
 
+function appendS3DownloadLink(container, data) {
+  if (!data || typeof data.url !== "string" || !data.object_key) return;
+  try {
+    const url = new URL(data.url);
+    if (url.protocol !== "https:" || !url.hostname.endsWith(".amazonaws.com")) return;
+    const link = document.createElement("a");
+    link.className = "restored-url-link";
+    link.href = url.href;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.textContent = `Tải tệp S3: ${data.object_key} (liên kết có thời hạn) ↗`;
+    container.append(link);
+  } catch {
+    // Ignore malformed URLs returned by a backend or restored session.
+  }
+}
+
 function formatBody(text) {
   if (!text) return "";
   // Models occasionally flatten a Markdown list into one long line. Restore the
@@ -324,6 +341,7 @@ function appendStoredMessage(message) {
     link.textContent = `Mở website ↗  ${publicUrl}`;
     row.append(link);
   }
+  appendS3DownloadLink(row, message.data);
   els.conversationFeed.append(row);
 }
 
@@ -532,6 +550,7 @@ async function handleSendMessage() {
 
     // Stream the final response text (Typewriter animation)
     streamText(textContainer, res.message || "Đã hoàn thành nhiệm vụ.", () => {
+      appendS3DownloadLink(agentRow, res.data);
       // Check for public URL
       const publicUrl = extractPublicUrl(res.message, res.data);
       if (publicUrl) {
@@ -566,6 +585,7 @@ async function handleSendMessage() {
 
 function handleConfirmation(res, agentRow, originalPrompt) {
   state.pending = {
+    service: res.service || "lambda",
     tool_name: res.tool_name,
     parameters: res.parameters || {},
     agent_state: res.agent_state,
@@ -604,7 +624,7 @@ function handleConfirmation(res, agentRow, originalPrompt) {
     try {
       const execRes = await fetchChat({
         confirmed: true,
-        service: "lambda",
+        service: approvedAction.service,
         tool_name: approvedAction.tool_name,
         parameters: approvedAction.parameters,
         agent_state: approvedAction.agent_state,
@@ -642,6 +662,7 @@ function handleConfirmation(res, agentRow, originalPrompt) {
       state.history.push({ role: "assistant", content: execRes.message || "Đã thực thi thành công." });
       state.history = state.history.slice(-10);
       streamText(textContainer, execRes.message || "Đã thực thi thành công.", () => {
+        appendS3DownloadLink(agentRow, execRes.data);
         const publicUrl = extractPublicUrl(execRes.message, execRes.data);
         if (publicUrl) {
           const urlCard = document.createElement("div");
@@ -821,8 +842,8 @@ async function loadHealth() {
   try {
     const res = await fetch("/api/health");
     const data = await res.json();
-    els.statusBadge.textContent = `${data.region || "us-east-1"} • ${data.tools_loaded || 11} Tools Active`;
-    els.awsStatusPill.textContent = `☁️ ${data.region || "us-east-1"}`;
+    els.statusBadge.textContent = `${data.region || "ap-southeast-1"} • ${data.tools_loaded || 11} Tools Active`;
+    els.awsStatusPill.textContent = `☁️ ${data.region || "ap-southeast-1"}`;
     els.toolsPill.textContent = `⚡ ${data.tools_loaded || 11} Tools`;
     els.topModelText.textContent = "SatiBot";
     if (data.model && !localStorage.getItem("satibot.model") && VALID_MODELS.includes(data.model)) {

@@ -4,7 +4,7 @@ import re
 from copy import deepcopy
 
 
-DEFAULT_AWS_REGION = "us-east-2"
+DEFAULT_AWS_REGION = "ap-southeast-1"
 MAX_PRESIGNED_URL_EXPIRATION_SECONDS = 604800
 
 S3_LIFECYCLE_STORAGE_CLASSES = (
@@ -23,8 +23,8 @@ def _region_property():
         "minLength": 1,
         "default": DEFAULT_AWS_REGION,
         "description": (
-            "AWS Region của bucket, ví dụ us-east-2. "
-            "Nếu người dùng không nói rõ thì dùng us-east-2."
+            "AWS Region của bucket, ví dụ ap-southeast-1. "
+            "Nếu người dùng không nói rõ thì dùng ap-southeast-1."
         ),
     }
 

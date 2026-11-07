@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <meta name="theme-color" content="#171717">
+  <title>SatiBot tạm thời không khả dụng</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+      background: #171717;
+      color: #ececec;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      min-width: 320px;
+      min-height: 100vh;
+      margin: 0;
+      display: flex;
+      flex-direction: column;
+      background: radial-gradient(circle at 50% 38%, #222b32 0, #1b1d20 38%, #171717 75%);
+    }
+
+    .site-header, .site-footer {
+      width: min(100% - 48px, 1040px);
+      margin-inline: auto;
+    }
+
+    .site-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding-block: 28px;
+      font-weight: 700;
+      letter-spacing: -.02em;
+    }
+
+    .brand-mark {
+      width: 36px;
+      height: 36px;
+      display: inline-grid;
+      place-items: center;
+      border-radius: 10px;
+      background: #0b86c7;
+      color: white;
+      font-size: 19px;
+      box-shadow: 0 8px 24px #0284c733;
+    }
+
+    .brand-name { font-size: 17px; }
+
+    .brand-divider {
+      width: 1px;
+      height: 18px;
+      margin-inline: 2px;
+      background: #414141;
+    }
+
+    .brand-note {
+      color: #a1a1aa;
+      font-size: 13px;
+      font-weight: 500;
+      letter-spacing: 0;
+    }
+
+    main {
+      width: min(100% - 48px, 760px);
+      margin: auto;
+      padding-block: 56px 72px;
+      text-align: center;
+    }
+
+    .signal {
+      width: 92px;
+      height: 92px;
+      margin: 0 auto 32px;
+      display: grid;
+      place-items: center;
+      border: 1px solid #3b4850;
+      border-radius: 25px;
+      background: linear-gradient(150deg, #2d414c, #20282e);
+      color: #7dd3fc;
+      box-shadow: 0 18px 52px #0004;
+    }
+
+    .signal svg { width: 48px; height: 48px; }
+
+    .status {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 7px 12px;
+      border: 1px solid #635033;
+      border-radius: 999px;
+      background: #45351e;
+      color: #fcd38d;
+      font-size: 13px;
+      font-weight: 600;
+    }
+
+    .status::before {
+      content: "";
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: #fbbf24;
+    }
+
+    h1 {
+      margin: 22px 0 14px;
+      font-size: clamp(32px, 5vw, 50px);
+      font-weight: 700;
+      letter-spacing: -.045em;
+      line-height: 1.14;
+    }
+
+    .summary {
+      max-width: 590px;
+      margin: 0 auto;
+      color: #c4c4c9;
+      font-size: 17px;
+      line-height: 1.75;
+    }
+
+    .retry {
+      min-height: 46px;
+      margin-top: 30px;
+      padding: 11px 20px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      border: 1px solid #e2e8f0;
+      border-radius: 10px;
+      background: #f8fafc;
+      color: #171717;
+      font-size: 15px;
+      font-weight: 700;
+      text-decoration: none;
+      transition: background .15s ease, transform .15s ease;
+    }
+
+    .retry:hover { background: #dbeafe; transform: translateY(-1px); }
+    .retry:focus-visible { outline: 3px solid #38bdf8; outline-offset: 4px; }
+    .retry svg { width: 17px; height: 17px; }
+
+    .detail {
+      max-width: 590px;
+      margin: 48px auto 0;
+      padding-top: 23px;
+      border-top: 1px solid #ffffff20;
+      color: #a9adb4;
+      font-size: 14px;
+      line-height: 1.7;
+    }
+
+    .detail strong { color: #e5e7eb; }
+
+    .site-footer {
+      padding-block: 20px 26px;
+      border-top: 1px solid #ffffff14;
+      color: #92949b;
+      font-size: 12px;
+      text-align: center;
+    }
+
+    @media (max-width: 600px) {
+      .site-header, .site-footer, main { width: min(100% - 32px, 760px); }
+      .site-header { padding-block: 20px; }
+      main { padding-block: 40px 56px; }
+      .signal { width: 78px; height: 78px; margin-bottom: 26px; }
+      .signal svg { width: 42px; height: 42px; }
+      .summary { font-size: 16px; }
+      .retry { width: 100%; }
+      .detail { margin-top: 38px; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .retry { transition: none; }
+      .retry:hover { transform: none; }
+    }
+  </style>
+</head>
+<body>
+  <header class="site-header">
+    <span class="brand-mark" aria-hidden="true">S</span>
+    <span class="brand-name">SatiBot</span>
+    <span class="brand-divider" aria-hidden="true"></span>
+    <span class="brand-note">Trang thông báo</span>
+  </header>
+
+  <main>
+    <div class="signal" aria-hidden="true">
+      <svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M13 34h22a8 8 0 0 0 1-15.9A13 13 0 0 0 11.2 17 8.6 8.6 0 0 0 13 34Z"/>
+        <path d="M24 20v8"/>
+        <circle cx="24" cy="32" r="1" fill="currentColor" stroke="none"/>
+      </svg>
+    </div>
+    <div class="status">Dịch vụ đang gián đoạn</div>
+    <h1>SatiBot tạm thời không khả dụng</h1>
+    <p class="summary">Chúng tôi hiện không thể kết nối đến website chính. Tính năng trò chuyện và các thao tác AWS tạm thời chưa sử dụng được. Vui lòng thử lại sau ít phút.</p>
+    <a class="retry" href="/">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M20 11a8 8 0 1 0-2.4 6"/>
+        <path d="M20 4v7h-7"/>
+      </svg>
+      Thử kết nối lại
+    </a>
+    <p class="detail"><strong>Bạn đang xem trang dự phòng.</strong> Trang này chỉ hiển thị thông báo trạng thái và không gửi yêu cầu quản lý tài nguyên AWS.</p>
+  </main>
+
+  <footer class="site-footer">SatiBot · Trang thông báo dự phòng</footer>
+</body>
+</html>
