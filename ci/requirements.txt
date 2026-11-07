@@ -1,3 +1,6 @@
+# Author: Trịnh Thiên Quang
+# Khai báo thư viện kiểm thử và AWS CDK dùng trong pipeline CI.
+
 -r ../requirements-dev.txt
 aws-cdk-lib>=2.170,<3
 constructs>=10,<11

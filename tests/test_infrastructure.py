@@ -102,21 +102,31 @@ def test_iam_data_permissions_are_scoped_to_table_arns():
 
 def test_dispatcher_and_connector_can_assume_customer_role_pattern():
     _, iam_template = _synth_stacks()
+    # Trust policies also contain sts:AssumeRole; inspect permission policies only.
+    roles = iam_template.find_resources("AWS::IAM::Role")
     policies = iam_template.find_resources("AWS::IAM::Policy")
-    assume_role_policies = [
-        policy
-        for policy in policies.values()
-        if any(
-            "sts:AssumeRole" in statement.get("Action", [])
-            for statement in policy["Properties"]["PolicyDocument"]["Statement"]
-        )
-    ]
-
-    assert len(assume_role_policies) == 2
-    for policy in assume_role_policies:
-        assert "satibot/SatiBotAccessRole" in json.dumps(
-            policy["Properties"]["PolicyDocument"]
-        )
+    allowed_roles = set()
+    assume_statements = []
+    for policy in policies.values():
+        properties = policy["Properties"]
+        for statement in properties["PolicyDocument"]["Statement"]:
+            actions = statement.get("Action", [])
+            if isinstance(actions, str):
+                actions = [actions]
+            if "sts:AssumeRole" in actions:
+                assume_statements.append(statement)
+                assert statement["Effect"] == "Allow"
+                assert "satibot/SatiBotAccessRole" in json.dumps(statement["Resource"])
+                allowed_roles.update(role["Ref"] for role in properties["Roles"])
+    expected_roles = {
+        logical_id for logical_id, role in roles.items()
+        if role["Properties"]["RoleName"] in {
+            "SatiBot-Dispatcher-ExecutionRole", "SatiBot-Connector-ExecutionRole"
+        }
+    }
+    assert len(assume_statements) == 2
+    assert len(expected_roles) == 2
+    assert allowed_roles == expected_roles
 
 
 def test_llm_secret_read_permission_is_added_only_when_secret_arn_is_configured():

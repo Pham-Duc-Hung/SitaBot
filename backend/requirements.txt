@@ -1,0 +1,5 @@
+# Author: Trịnh Thiên Quang
+# Khai báo thư viện runtime cần đóng kèm các gói Lambda.
+
+# Lambda runtime dependency; boto3 is provided by the Python Lambda runtime.
+jsonschema>=4.23,<5

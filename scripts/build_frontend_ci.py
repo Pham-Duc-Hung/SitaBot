@@ -1,4 +1,8 @@
-"""Consume Hung's frontend build contract without editing frontend sources."""
+"""
+Author: Trịnh Thiên Quang
+Build hoặc sao chép tài sản frontend để phục vụ pipeline CI.
+"""
+
 from pathlib import Path
 import shutil
 import subprocess
