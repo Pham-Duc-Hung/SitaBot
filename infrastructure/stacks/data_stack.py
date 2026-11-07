@@ -67,10 +67,6 @@ class DataStack(Stack):
             props["sort_key"] = dynamodb.Attribute(
                 name=sort_key, type=dynamodb.AttributeType.STRING
             )
-        table = dynamodb.Table(self, f"{name}Table", **props)
         if ttl_attribute:
-            table.add_time_to_live_attribute(
-                attribute_name=ttl_attribute,
-                type=dynamodb.TimeToLiveAttributeType.NUMBER,
-            )
-        return table
+            props["time_to_live_attribute"] = ttl_attribute
+        return dynamodb.Table(self, f"{name}Table", **props)
