@@ -1,4 +1,5 @@
 import os
+import time
 import uuid
 from urllib.error import HTTPError
 from urllib.parse import urlparse
@@ -11,10 +12,12 @@ from botocore.exceptions import ClientError
 from backend.functions.dispatcher.services.s3_service import execute
 
 
-REGION = "us-east-2"
+REGION = "ap-southeast-1"
 BUCKET_PREFIX = "sitabot-hung-test-"
 OBJECT_KEY = "demo/hello.txt"
 OBJECT_CONTENT = b"Hello from SitaBot S3 integration test!"
+LIFECYCLE_VERIFY_TIMEOUT_SECONDS = 180
+LIFECYCLE_VERIFY_INTERVAL_SECONDS = 5
 
 
 def require_safe_environment():
@@ -45,6 +48,39 @@ def require_success(result):
         )
 
     return result["data"]
+
+
+def wait_for_lifecycle_rule(s3_client, bucket_name, rule_id):
+    """Wait for a newly written Lifecycle Rule to become readable in S3."""
+    deadline = time.monotonic() + LIFECYCLE_VERIFY_TIMEOUT_SECONDS
+
+    while True:
+        try:
+            configuration = s3_client.get_bucket_lifecycle_configuration(
+                Bucket=bucket_name,
+            )
+        except ClientError as error:
+            if error.response.get("Error", {}).get("Code") != (
+                "NoSuchLifecycleConfiguration"
+            ):
+                raise
+        else:
+            matching_rules = [
+                rule
+                for rule in configuration.get("Rules", [])
+                if rule.get("ID") == rule_id
+            ]
+            if len(matching_rules) == 1:
+                return matching_rules[0]
+
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise RuntimeError(
+                "S3 did not return the new Lifecycle Rule within "
+                f"{LIFECYCLE_VERIFY_TIMEOUT_SECONDS} seconds. "
+                "Check the bucket lifecycle configuration and IAM permissions."
+            )
+        time.sleep(min(LIFECYCLE_VERIFY_INTERVAL_SECONDS, remaining))
 
 
 def cleanup(s3_client, bucket_name):
@@ -337,24 +373,11 @@ def main():
         )
         require_success(lifecycle_result)
 
-        lifecycle_configuration = (
-            s3_client.get_bucket_lifecycle_configuration(
-                Bucket=bucket_name,
-            )
+        print("   Waiting up to 3 minutes for S3 to show the new rule...")
+        stored_rule = wait_for_lifecycle_rule(
+            s3_client, bucket_name, lifecycle_rule_id
         )
-        lifecycle_rules = lifecycle_configuration.get("Rules", [])
-        matching_rules = [
-            rule
-            for rule in lifecycle_rules
-            if rule.get("ID") == lifecycle_rule_id
-        ]
-
-        if len(matching_rules) != 1:
-            raise RuntimeError(
-                "The Lifecycle Rule was not stored on the test bucket."
-            )
-
-        transition = matching_rules[0].get("Transitions", [{}])[0]
+        transition = stored_rule.get("Transitions", [{}])[0]
         if (
             transition.get("Days") != 30
             or transition.get("StorageClass") != "STANDARD_IA"

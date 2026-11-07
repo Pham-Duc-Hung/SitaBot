@@ -27,6 +27,59 @@ except ImportError:
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
+S3_CONFIRMATION_ACTIONS = {
+    "create_bucket",
+    "block_public_access",
+    "delete_bucket_safe",
+    "put_lifecycle_rule",
+    "create_presigned_download",
+}
+
+
+def _format_s3_result(result: Dict[str, Any]) -> Dict[str, Any]:
+    """Adapt the S3 service's ok/error contract to the shared Dispatcher API."""
+    if result.get("ok"):
+        action = result.get("action")
+        data = result.get("data", {})
+        bucket = data.get("bucket_name", "")
+        messages = {
+            "create_bucket": f"Đã tạo bucket {bucket} và bật Block Public Access.",
+            "block_public_access": f"Đã bật Block Public Access cho bucket {bucket}.",
+            "scan_public_access": (
+                f"Đã kiểm tra {data.get('scanned_count', 0)} bucket; "
+                f"phát hiện {data.get('risky_count', 0)} bucket cần xem xét."
+            ),
+            "inspect_bucket_for_delete": (
+                f"Bucket {bucket} có {data.get('deletable_item_count', 0)} mục "
+                "cần kiểm tra trước khi xóa."
+            ),
+            "delete_bucket_safe": f"Đã xóa bucket {bucket} sau khi kiểm tra nội dung.",
+            "put_lifecycle_rule": f"Đã cập nhật Lifecycle Rule cho bucket {bucket}.",
+            "create_presigned_download": (
+                f"Đã tạo liên kết tải tạm thời cho {data.get('object_key', '')}."
+            ),
+            "get_storage_analytics": (
+                f"Bucket {bucket} có {data.get('current_object_count', 0)} object "
+                f"và dùng {data.get('total_stored_size_gb', 0)} GB."
+            ),
+        }
+        return {
+            "status": "SUCCESS",
+            "service": "s3",
+            "action": action,
+            "message": messages.get(action, f"Đã thực hiện thao tác S3: {action}."),
+            "data": data,
+        }
+    error = result.get("error") or {}
+    return {
+        "status": "ERROR",
+        "service": "s3",
+        "action": result.get("action"),
+        "error_code": error.get("code", "S3Error"),
+        "message": error.get("message", "Thao tác S3 thất bại."),
+        "data": result.get("data", error.get("details", {})),
+    }
+
 
 def _build_response(status_code: int, body: Dict[str, Any]) -> Dict[str, Any]:
     """Tạo response chuẩn tương thích HTTP API Gateway."""
@@ -68,8 +121,11 @@ def _http_status_for_result(result: Dict[str, Any]) -> int:
         return 429
     if code in {
         "InvalidJSON", "InvalidPayload", "InvalidParameters", "UnsupportedService",
-        "UnsupportedTool", "MissingService", "MissingAction",
+        "UnsupportedTool", "MissingService", "MissingAction", "UnsupportedAction",
+        "ConfirmationRequired", "TransitionTooEarly",
     }:
+        return 400
+    if isinstance(code, str) and code.startswith(("Invalid", "Missing")):
         return 400
     return 500
 
@@ -160,7 +216,20 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         elif service_name == "ec2":
             result = ec2_service.execute(credentials, service_params)
         elif service_name == "s3":
-            result = s3_service.execute(credentials, service_params)
+            if action in S3_CONFIRMATION_ACTIONS and not confirmed:
+                result = {
+                    "status": "CONFIRMATION_REQUIRED",
+                    "service": "s3",
+                    "action": action,
+                    "message": "Thao tác S3 này cần người dùng xác nhận trước khi thực hiện.",
+                }
+            else:
+                s3_params = dict(parameters)
+                s3_params["action"] = action
+                s3_params["region"] = (
+                    parameters.get("region") or payload.get("region") or "ap-southeast-1"
+                )
+                result = _format_s3_result(s3_service.execute(credentials, s3_params))
         elif service_name == "iam":
             result = iam_service.execute(credentials, service_params)
         else:

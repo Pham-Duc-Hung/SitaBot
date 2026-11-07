@@ -35,6 +35,9 @@ if env_file.exists():
                 if key and key not in os.environ:
                     os.environ[key] = value.strip().strip("'\"")
 
+if not os.environ.get("AWS_REGION"):
+    os.environ["AWS_REGION"] = os.environ.get("PRIMARY_REGION") or "ap-southeast-1"
+
 from backend.functions.chatbot.index import lambda_handler  # noqa: E402
 
 PORT = 8080
@@ -50,13 +53,13 @@ class AgentConsoleHandler(http.server.SimpleHTTPRequestHandler):
         if self.path == "/api/health":
             tool_count = 0
             try:
-                from backend.functions.chatbot.index import _get_lambda_tool_schemas
-                tool_count = len(_get_lambda_tool_schemas())
+                from backend.functions.chatbot.index import _get_all_tool_schemas
+                tool_count = len(_get_all_tool_schemas())
             except Exception:
                 pass
             self._send_json({
                 "status": "ready",
-                "region": os.environ.get("AWS_REGION", "us-east-1"),
+                "region": os.environ["AWS_REGION"],
                 "model": os.environ.get("LLM_MODEL", "configured model"),
                 "llm_configured": bool(os.environ.get("LLM_API_KEY")),
                 "tools_loaded": tool_count,
