@@ -1,4 +1,8 @@
-"""Quang's Sprint 2 API isolation and deployable package regression tests."""
+"""
+Author: Trịnh Thiên Quang
+Kiểm thử Connector, History, Formatter và đóng gói backend Sprint 2.
+"""
+
 import base64
 import json
 import zipfile

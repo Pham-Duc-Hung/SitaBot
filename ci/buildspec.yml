@@ -1,3 +1,6 @@
+# Author: Trịnh Thiên Quang
+# Cấu hình các bước kiểm thử và build backend trong AWS CodeBuild.
+
 version: 0.2
 phases:
   install:

@@ -1,4 +1,9 @@
-"""Author: Trịnh Thiên Quang. Owner-scoped history query/detail APIs."""
+"""
+Author: Trịnh Thiên Quang
+Tra cứu, lọc và phân trang lịch sử thao tác theo người dùng.
+Cung cấp chi tiết kết quả đã lưu trong DynamoDB.
+"""
+
 import base64
 import json
 import os

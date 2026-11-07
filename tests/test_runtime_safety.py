@@ -1,3 +1,8 @@
+"""
+Author: Trịnh Thiên Quang
+Kiểm thử cấu hình region, che thông tin nhạy cảm và hợp đồng lỗi backend.
+"""
+
 from unittest.mock import patch
 
 from backend.shared.runtime import get_aws_region, redact_sensitive, safe_json_for_log

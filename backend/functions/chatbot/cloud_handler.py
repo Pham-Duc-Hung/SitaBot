@@ -1,4 +1,9 @@
-"""Cognito-bound ChatOps HTTP API. Client approvals carry action_id only."""
+"""
+Author: Trịnh Thiên Quang
+Xử lý API chat và xác nhận tác vụ theo danh tính Cognito.
+Gọi Gemini, lưu phiên và chuyển tác vụ sang workflow.
+"""
+
 import json
 import os
 import re

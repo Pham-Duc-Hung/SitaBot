@@ -1,4 +1,9 @@
-"""Normalize teammates' schemas without modifying their service modules."""
+"""
+Author: Trịnh Thiên Quang
+Tổng hợp schema công cụ của các dịch vụ AWS.
+Kiểm tra tham số tool call trước khi điều phối thực thi.
+"""
+
 import importlib
 from copy import deepcopy
 

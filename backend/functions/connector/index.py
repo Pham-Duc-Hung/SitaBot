@@ -1,8 +1,9 @@
-"""Author: Trịnh Thiên Quang. Sprint 3 AWS connection API.
-
-POST /connections/external-id, POST /connections/verify.
-Table contract: AwsConnections partition key user_id (String).
 """
+Author: Trịnh Thiên Quang
+Tạo ExternalId và kiểm tra kết nối tài khoản AWS qua STS.
+Lưu và trả trạng thái kết nối của từng người dùng.
+"""
+
 import os
 import re
 import secrets

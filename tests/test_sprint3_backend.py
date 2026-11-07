@@ -1,4 +1,9 @@
-"""Sprint 3 integration tests: actual DynamoDB expressions with mocked AWS/Gemini."""
+"""
+Author: Trịnh Thiên Quang
+Kiểm thử luồng ChatOps Sprint 3 với DynamoDB và AWS giả lập.
+Bao gồm xác nhận, chống thực thi lặp, Gemini, lịch sử và AppSync.
+"""
+
 import io
 import json
 import time

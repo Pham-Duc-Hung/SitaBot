@@ -1,4 +1,7 @@
-"""Cấu hình runtime và tiện ích an toàn dùng chung cho Lambda backend."""
+"""
+Author: Trịnh Thiên Quang
+Quản lý cấu hình runtime và che thông tin nhạy cảm của Lambda backend.
+"""
 
 import hashlib
 import json

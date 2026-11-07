@@ -1,4 +1,9 @@
-"""Bounded Gemini Chat Completions client. No mock execution in cloud mode."""
+"""
+Author: Trịnh Thiên Quang
+Đọc khóa từ Secrets Manager và gọi Gemini với thời gian chờ hữu hạn.
+Kiểm tra phản hồi và thử lại các lỗi kết nối tạm thời.
+"""
+
 import json
 import os
 import time

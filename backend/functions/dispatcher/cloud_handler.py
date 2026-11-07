@@ -1,4 +1,9 @@
-"""Authenticated workflow task: load server-owned intent, claim, assume, execute once."""
+"""
+Author: Trịnh Thiên Quang
+Đối soát, khóa tác vụ và lấy quyền tạm thời qua STS.
+Điều phối module AWS và lưu kết quả để ngăn thực thi lặp.
+"""
+
 import json
 
 import boto3

@@ -1,8 +1,8 @@
-"""Smoke-test deployable ZIPs outside the source tree using the Lambda Python ABI.
-
-boto3 is supplied by the host test environment, as by the Lambda runtime.
-Runtime dependencies such as jsonschema must resolve from the extracted artifact.
 """
+Author: Trịnh Thiên Quang
+Kiểm tra cloud handler và thư viện trong năm gói ZIP bằng Python 3.12.
+"""
+
 from pathlib import Path
 import subprocess
 import sys

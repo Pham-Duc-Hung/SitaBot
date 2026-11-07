@@ -1,3 +1,6 @@
+# Author: Trịnh Thiên Quang
+# Chạy kiểm thử, build và CDK synth cho backend trên GitHub Actions.
+
 name: Backend Sprint 2 CI
 on:
   pull_request:

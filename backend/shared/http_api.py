@@ -1,7 +1,8 @@
-"""HTTP contracts for Quang's Connector and History Lambdas.
-
-Identity comes exclusively from a Gateway authorizer, never from request JSON.
 """
+Author: Trịnh Thiên Quang
+Đọc danh tính từ Gateway authorizer, kiểm tra JSON và tạo phản hồi HTTP.
+"""
+
 import base64
 import json
 from decimal import Decimal

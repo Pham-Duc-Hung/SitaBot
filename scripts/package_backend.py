@@ -1,8 +1,8 @@
-"""Author: Trịnh Thiên Quang. Compatibility entrypoint for the Sprint 3 packager.
-
-The five canonical artifacts live in dist/backend. satibot_backend.zip is an alias
-for chatbot.zip plus an index.lambda_handler shim for earlier deployment tooling.
 """
+Author: Trịnh Thiên Quang
+Đóng gói backend và tạo ZIP Chatbot tương thích công cụ triển khai cũ.
+"""
+
 from pathlib import Path
 import shutil
 import zipfile

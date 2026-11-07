@@ -1,4 +1,8 @@
-"""Build five isolated Lambda archives without bundling .env or local artifacts."""
+"""
+Author: Trịnh Thiên Quang
+Tạo năm gói ZIP Lambda riêng và đóng kèm thư viện runtime cần thiết.
+"""
+
 from pathlib import Path
 import zipfile
 import argparse

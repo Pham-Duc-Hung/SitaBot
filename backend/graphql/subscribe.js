@@ -1,3 +1,8 @@
+/**
+ * Author: Trịnh Thiên Quang
+ * Resolver giới hạn subscription theo người dùng Cognito và phiên hội thoại.
+ */
+
 import { extensions, util } from '@aws-appsync/utils';
 
 // Attach to Subscription.onActionResult with a NONE data source.

@@ -1,7 +1,9 @@
-"""Sprint 3 persistence with optimistic sessions and atomic action claims.
-
-Never use DynamoDB TTL deletion timing as an authorization check.
 """
+Author: Trịnh Thiên Quang
+Lưu phiên hội thoại và hành động chờ trong DynamoDB.
+Kiểm tra thời hạn, xác nhận và khóa tác vụ bằng conditional write.
+"""
+
 import json
 import hashlib
 import os

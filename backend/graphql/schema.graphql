@@ -1,3 +1,6 @@
+# Author: Trịnh Thiên Quang
+# Định nghĩa dữ liệu kết quả, mutation và subscription cho AppSync.
+
 # Contract for Hung's UI and Minh's AppSync infrastructure. Mutation: IAM only.
 type ActionResult @aws_iam @aws_cognito_user_pools {
   user_id: ID!

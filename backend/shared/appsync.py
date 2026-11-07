@@ -1,4 +1,8 @@
-"""IAM SigV4 GraphQL publication; never send credentials in GraphQL data."""
+"""
+Author: Trịnh Thiên Quang
+Ký IAM SigV4 và gửi kết quả tác vụ tới AppSync GraphQL.
+"""
+
 import json
 import os
 import urllib.request

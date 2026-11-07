@@ -1,4 +1,8 @@
-"""Typed errors at the authenticated Sprint 3 service boundary."""
+"""
+Author: Trịnh Thiên Quang
+Định nghĩa lỗi backend và chuẩn hóa nội dung phản hồi lỗi.
+"""
+
 class BackendError(Exception):
     def __init__(self, code, message, status=400):
         super().__init__(message)

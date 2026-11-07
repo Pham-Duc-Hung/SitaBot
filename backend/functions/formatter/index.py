@@ -1,5 +1,8 @@
-"""Author: Trịnh Thiên Quang. Formatter entrypoint: Sprint 3 cloud flow and local compatibility response.
 """
+Author: Trịnh Thiên Quang
+Điểm vào Formatter Lambda, định tuyến xử lý cloud hoặc phản hồi local.
+"""
+
 import os
 from backend.shared.runtime import redact_sensitive
 

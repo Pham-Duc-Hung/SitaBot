@@ -1,7 +1,9 @@
-"""Quang's isolated backend assembly. Imports roles supplied by Minh.
-
-Does not mutate the shared app, IAM/data/auth/DNS/frontend stacks.
 """
+Author: Trịnh Thiên Quang
+Khai báo năm Lambda backend và cấu hình tích hợp bằng AWS CDK.
+Sử dụng role và bảng dữ liệu do hạ tầng chung cung cấp.
+"""
+
 import os
 from pathlib import Path
 import aws_cdk as cdk

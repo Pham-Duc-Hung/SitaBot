@@ -1,4 +1,9 @@
-"""Formatter task: immutable AWS result, optional Gemini prose, durable history, AppSync."""
+"""
+Author: Trịnh Thiên Quang
+Diễn giải kết quả AWS bằng Gemini và dùng lời đáp dự phòng khi cần.
+Lưu lịch sử thao tác và phát thông báo qua AppSync.
+"""
+
 import json
 import logging
 
