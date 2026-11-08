@@ -1,0 +1,136 @@
+"""
+Author: Trịnh Thiên Quang
+Kiểm thử template và cơ chế canary/rollback.
+"""
+
+from copy import deepcopy
+import json
+import os
+import subprocess
+import sys
+import pytest
+from scripts.package_sprint2 import package
+from scripts.verify_canary_rollback import (
+    CanaryAliasSimulator,
+    simulate_canary_and_rollback,
+    verify_cdk_canary_template,
+    verify_pipeline_template,
+)
+from .helpers import ROOT
+
+
+def test_cdk_canary_stack_pipeline_and_alarm_rollback_simulation(tmp_path):
+    # Đảm bảo dist/backend có đủ 5 file zip để cdk synth độc lập trong mọi môi trường test
+    dist_backend = ROOT / "dist" / "backend"
+    if not all(
+        (dist_backend / f"{name}.zip").exists()
+        for name in ("chatbot", "dispatcher", "formatter", "connector", "history")
+    ):
+        package(dist_backend, with_dependencies=False)
+
+    cdk_out = tmp_path / "cdk.out"
+    subprocess.run(
+        [sys.executable, str(ROOT / "infrastructure" / "backend_sprint2_app.py")],
+        env={
+            **dict(os.environ),
+            "CDK_OUTDIR": str(cdk_out),
+            "PRIMARY_REGION": "ap-southeast-1",
+        },
+        check=True,
+    )
+    template_file = cdk_out / "SatiBotBackendSprint2.template.json"
+    cdk_summary = verify_cdk_canary_template(template_file)
+    assert cdk_summary["functions"] == 5
+    assert cdk_summary["versions"] == 5
+    assert cdk_summary["live_aliases"] == 5
+    assert cdk_summary["deployment_groups"] == 5
+    assert (
+        cdk_summary["default_strategy"]
+        == "CodeDeployDefault.LambdaCanary10Percent5Minutes"
+    )
+
+    pipeline_summary = verify_pipeline_template(ROOT / "ci" / "pipeline.template.json")
+    assert pipeline_summary["stages"] == [
+        "Source",
+        "BuildTestSynth",
+        "ManualApproval",
+        "DeployBackend",
+    ]
+    assert pipeline_summary["deploy_actions"] == [
+        "PublishCdkAssets",
+        "CreateReplaceChangeSet",
+        "ExecuteChangeSet",
+    ]
+
+    sim_summary = simulate_canary_and_rollback()
+    assert sim_summary["canary_promotion_v1_to_v2"]["deployment_status"] == "SUCCEEDED"
+    assert sim_summary["alarm_rollback_v2_to_v3"]["deployment_status"] == "ROLLED_BACK"
+    assert (
+        sim_summary["alarm_rollback_v2_to_v3"]["rollback_trigger"]
+        == "DEPLOYMENT_STOP_ON_ALARM"
+    )
+
+    # Kiểm tra chi tiết trọng số lưu lượng 90%/10% trong giai đoạn Canary trước khi rollback
+    sim = CanaryAliasSimulator(function_name="SatiBotBackendSprint2-dispatcherFunction")
+    rollback_case = sim.deploy_canary(
+        "2", simulated_error_rate=0.25, error_threshold=0.05
+    )
+    assert rollback_case["timeline"][0]["weights"] == {"1": 0.9, "2": 0.1}
+    assert rollback_case["final_weights"] == {"1": 1.0}
+
+
+def test_verifier_rejects_missing_alarms_missing_config_version_or_oversized_overrides(
+    tmp_path,
+):
+    dist_backend = ROOT / "dist" / "backend"
+    if not all(
+        (dist_backend / f"{name}.zip").exists()
+        for name in ("chatbot", "dispatcher", "formatter", "connector", "history")
+    ):
+        package(dist_backend, with_dependencies=False)
+
+    cdk_out = tmp_path / "cdk_tamper"
+    subprocess.run(
+        [sys.executable, str(ROOT / "infrastructure" / "backend_sprint2_app.py")],
+        env={
+            **dict(os.environ),
+            "CDK_OUTDIR": str(cdk_out),
+            "PRIMARY_REGION": "ap-southeast-1",
+        },
+        check=True,
+    )
+    base_tpl = json.loads(
+        (cdk_out / "SatiBotBackendSprint2.template.json").read_text(encoding="utf-8")
+    )
+
+    # 1. Xóa AlarmConfiguration khỏi DeploymentGroup -> verifier bắt buộc báo lỗi
+    no_alarm_tpl = deepcopy(base_tpl)
+    for res in no_alarm_tpl["Resources"].values():
+        if res.get("Type") == "AWS::CodeDeploy::DeploymentGroup":
+            res["Properties"].pop("AlarmConfiguration", None)
+    tampered_alarm_file = tmp_path / "no_alarm.template.json"
+    tampered_alarm_file.write_text(json.dumps(no_alarm_tpl), encoding="utf-8")
+    with pytest.raises(AssertionError, match="AlarmConfiguration"):
+        verify_cdk_canary_template(tampered_alarm_file)
+
+    # 2. Xóa ConfigurationVersion khỏi AWS::Lambda::Version Description -> verifier bắt buộc báo lỗi
+    no_cfg_ver_tpl = deepcopy(base_tpl)
+    for res in no_cfg_ver_tpl["Resources"].values():
+        if res.get("Type") == "AWS::Lambda::Version":
+            res["Properties"]["Description"] = "static-description"
+    tampered_ver_file = tmp_path / "no_cfg_ver.template.json"
+    tampered_ver_file.write_text(json.dumps(no_cfg_ver_tpl), encoding="utf-8")
+    with pytest.raises(AssertionError, match="ConfigurationVersion"):
+        verify_cdk_canary_template(tampered_ver_file)
+
+    # 3. ParameterOverrides vượt 1000 byte trong pipeline -> verifier bắt buộc báo lỗi
+    bad_pipeline = json.loads(
+        (ROOT / "ci" / "pipeline.template.json").read_text(encoding="utf-8")
+    )
+    bad_pipeline["Resources"]["Pipeline"]["Properties"]["Stages"][3]["Actions"][1][
+        "Configuration"
+    ]["ParameterOverrides"] = {"Fn::Sub": "{" + '"Padding":"' + ("x" * 1050) + '"}'}
+    bad_pipeline_file = tmp_path / "bad_pipeline.json"
+    bad_pipeline_file.write_text(json.dumps(bad_pipeline), encoding="utf-8")
+    with pytest.raises(AssertionError, match="1000 byte"):
+        verify_pipeline_template(bad_pipeline_file)

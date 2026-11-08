@@ -37,12 +37,18 @@ connections = cdk.CfnParameter(stack, "ConnectionsTableName", type="String")
 history = cdk.CfnParameter(stack, "HistoryTableName", type="String")
 sessions = cdk.CfnParameter(stack, "SessionStateTableName", type="String")
 pending = cdk.CfnParameter(stack, "PendingActionTableName", type="String")
-secret = cdk.CfnParameter(stack, "GeminiSecretArn", type="String", default="", no_echo=True)
+secret = cdk.CfnParameter(
+    stack, "GeminiSecretArn", type="String", default="", no_echo=True
+)
 workflow = cdk.CfnParameter(stack, "ActionStateMachineArn", type="String", default="")
 appsync_url = cdk.CfnParameter(stack, "AppSyncGraphqlUrl", type="String", default="")
 appsync_arn = cdk.CfnParameter(stack, "AppSyncApiArn", type="String", default="")
-api_gateway_source_arn = cdk.CfnParameter(stack, "ApiGatewaySourceArn", type="String", default="")
-config_version = cdk.CfnParameter(stack, "ConfigurationVersion", type="String", default="v1")
+api_gateway_source_arn = cdk.CfnParameter(
+    stack, "ApiGatewaySourceArn", type="String", default=""
+)
+config_version = cdk.CfnParameter(
+    stack, "ConfigurationVersion", type="String", default="v1"
+)
 grant_integration = cdk.CfnParameter(
     stack,
     "GrantIntegrationPermissions",
@@ -50,6 +56,31 @@ grant_integration = cdk.CfnParameter(
     default="false",
     allowed_values=["true", "false"],
 )
+role_names = {
+    name: cdk.CfnParameter(
+        stack,
+        f"{name.title()}RoleName",
+        type="String",
+        default="",
+        allowed_pattern=r"^$|[\w+=,.@-]{1,64}$",
+    )
+    for name in ("chatbot", "formatter")
+}
+cdk.CfnRule(
+    stack,
+    "IntegrationRoleNamesRequired",
+    rule_condition=cdk.Fn.condition_equals(grant_integration.value_as_string, "true"),
+    assertions=[
+        cdk.CfnRuleAssertion(
+            assert_=cdk.Fn.condition_not(
+                cdk.Fn.condition_equals(param.value_as_string, "")
+            ),
+            assert_description="Provide the IAM role name when granting integration permissions.",
+        )
+        for param in role_names.values()
+    ],
+)
+
 codedeploy_role_arn = cdk.CfnParameter(stack, "CodeDeployRoleArn", type="String")
 canary_config = cdk.CfnParameter(
     stack,
@@ -62,7 +93,9 @@ canary_config = cdk.CfnParameter(
 has_api_gw_source = cdk.CfnCondition(
     stack,
     "HasApiGatewaySourceArn",
-    expression=cdk.Fn.condition_not(cdk.Fn.condition_equals(api_gateway_source_arn.value_as_string, "")),
+    expression=cdk.Fn.condition_not(
+        cdk.Fn.condition_equals(api_gateway_source_arn.value_as_string, "")
+    ),
 )
 should_grant_sfn = cdk.CfnCondition(
     stack,
@@ -100,10 +133,14 @@ for name in FUNCTIONS:
     has_external_alarm = cdk.CfnCondition(
         stack,
         f"Has{title}Alarm",
-        expression=cdk.Fn.condition_not(cdk.Fn.condition_equals(alarm_name.value_as_string, "")),
+        expression=cdk.Fn.condition_not(
+            cdk.Fn.condition_equals(alarm_name.value_as_string, "")
+        ),
     )
 
-    role = iam.Role.from_role_arn(stack, f"{name}Role", role_arn.value_as_string, mutable=False)
+    role = iam.Role.from_role_arn(
+        stack, f"{name}Role", role_arn.value_as_string, mutable=False
+    )
     environment = {"SATIBOT_MODE": "cloud"}
     if name == "connector":
         environment["AWS_CONNECTIONS_TABLE"] = connections.value_as_string
@@ -129,7 +166,11 @@ for name in FUNCTIONS:
         environment["ACTION_HISTORY_TABLE"] = history.value_as_string
 
     zip_path = root / "dist" / "backend" / f"{name}.zip"
-    asset_digest = hashlib.sha256(zip_path.read_bytes()).hexdigest()[:16] if zip_path.exists() else "unbuilt"
+    asset_digest = (
+        hashlib.sha256(zip_path.read_bytes()).hexdigest()[:16]
+        if zip_path.exists()
+        else "unbuilt"
+    )
 
     function = lambda_.Function(
         stack,
@@ -143,7 +184,9 @@ for name in FUNCTIONS:
         environment=environment,
         current_version_options=lambda_.VersionOptions(
             removal_policy=cdk.RemovalPolicy.RETAIN,
-            description=cdk.Fn.sub(f"satibot-{name}-cfg:${{ConfigurationVersion}}-code:{asset_digest}"),
+            description=cdk.Fn.sub(
+                f"satibot-{name}-cfg:${{ConfigurationVersion}}-code:{asset_digest}"
+            ),
         ),
     )
     live_alias = lambda_.Alias(
@@ -184,10 +227,14 @@ for name in FUNCTIONS:
                         namespace="AWS/Lambda",
                         metric_name="Errors",
                         dimensions=[
-                            cloudwatch.CfnAlarm.DimensionProperty(name="FunctionName", value=function.function_name),
+                            cloudwatch.CfnAlarm.DimensionProperty(
+                                name="FunctionName", value=function.function_name
+                            ),
                             cloudwatch.CfnAlarm.DimensionProperty(
                                 name="Resource",
-                                value=cdk.Fn.sub("${Fn}:live", {"Fn": function.function_name}),
+                                value=cdk.Fn.sub(
+                                    "${Fn}:live", {"Fn": function.function_name}
+                                ),
                             ),
                         ],
                     ),
@@ -203,7 +250,9 @@ for name in FUNCTIONS:
                         namespace="SatiBot/Backend",
                         metric_name="PlatformFault",
                         dimensions=[
-                            cloudwatch.CfnAlarm.DimensionProperty(name="Function", value=name),
+                            cloudwatch.CfnAlarm.DimensionProperty(
+                                name="FunctionName", value=function.function_name
+                            ),
                         ],
                     ),
                     period=60,
@@ -274,13 +323,17 @@ for name in FUNCTIONS:
         description=f"Unqualified function ARN for {name}; callers must bind {title}LiveAliasArn instead",
     )
     cdk.CfnOutput(stack, f"{title}CanaryAlarmName", value=canary_alarm.ref)
-    cdk.CfnOutput(stack, f"{title}DeploymentGroupName", value=deployment_group.deployment_group_name)
+    cdk.CfnOutput(
+        stack,
+        f"{title}DeploymentGroupName",
+        value=deployment_group.deployment_group_name,
+    )
 
 chatbot_sfn_policy = iam.CfnPolicy(
     stack,
     "ChatbotWorkflowInvokeSupplementaryPolicy",
     policy_name="SatiBot-Chatbot-StartWorkflow",
-    roles=[cdk.Fn.select(1, cdk.Fn.split(":role/", role_params["chatbot"].value_as_string))],
+    roles=[role_names["chatbot"].value_as_string],
     policy_document={
         "Version": "2012-10-17",
         "Statement": [
@@ -298,14 +351,17 @@ formatter_appsync_policy = iam.CfnPolicy(
     stack,
     "FormatterAppSyncPublishSupplementaryPolicy",
     policy_name="SatiBot-Formatter-AppSyncPublish",
-    roles=[cdk.Fn.select(1, cdk.Fn.split(":role/", role_params["formatter"].value_as_string))],
+    roles=[role_names["formatter"].value_as_string],
     policy_document={
         "Version": "2012-10-17",
         "Statement": [
             {
                 "Effect": "Allow",
                 "Action": ["appsync:GraphQL"],
-                "Resource": cdk.Fn.sub("${ApiArn}/types/Mutation/fields/publishActionResult", {"ApiArn": appsync_arn.value_as_string}),
+                "Resource": cdk.Fn.sub(
+                    "${ApiArn}/types/Mutation/fields/publishActionResult",
+                    {"ApiArn": appsync_arn.value_as_string},
+                ),
             }
         ],
     },

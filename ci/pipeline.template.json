@@ -198,7 +198,7 @@
         },
         "Source": {
           "Type": "CODEPIPELINE",
-          "BuildSpec": "version: 0.2\nphases:\n  install:\n    runtime-versions:\n      python: '3.12'\n      nodejs: '22'\n  build:\n    commands:\n      - npx --yes cdk-assets@2 publish --path cdk.out/SatiBotBackendSprint2.assets.json -v\n      - |\n        python - <<'PY'\n        import hashlib, json, os, pathlib\n        keys = [\n            \"ConnectionsTableName\", \"HistoryTableName\", \"SessionStateTableName\", \"PendingActionTableName\",\n            \"ActionStateMachineArn\", \"AppSyncGraphqlUrl\", \"AppSyncApiArn\", \"ApiGatewaySourceArn\",\n            \"GrantIntegrationPermissions\", \"ChatbotRoleArn\", \"DispatcherRoleArn\", \"FormatterRoleArn\",\n            \"ConnectorRoleArn\", \"HistoryRoleArn\", \"CodeDeployRoleArn\", \"CanaryDeploymentConfig\",\n            \"ChatbotAlarmName\", \"DispatcherAlarmName\", \"FormatterAlarmName\", \"ConnectorAlarmName\", \"HistoryAlarmName\",\n        ]\n        params = {k: os.environ.get(f\"PARAM_{k}\", \"\") for k in keys}\n        release_tag = os.environ.get(\"PARAM_ConfigurationReleaseId\", \"v1\")\n        digest = hashlib.sha256(json.dumps({\"tag\": release_tag, \"params\": params}, sort_keys=True).encode()).hexdigest()[:24]\n        params[\"ConfigurationVersion\"] = f\"{release_tag}-{digest}\"\n        out = pathlib.Path(\"deploy-config\")\n        out.mkdir(parents=True, exist_ok=True)\n        (out / \"template-configuration.json\").write_text(json.dumps({\"Parameters\": params}, indent=2), encoding=\"utf-8\")\n        PY\nartifacts:\n  base-directory: deploy-config\n  files:\n    - template-configuration.json\n"
+          "BuildSpec": "deployment/publish-buildspec.yml"
         },
         "Environment": {
           "Type": "LINUX_CONTAINER",
@@ -340,6 +340,12 @@
               "Value": {
                 "Ref": "HistoryAlarmName"
               }
+            },
+            {
+              "Name": "PARAM_GeminiSecretArn",
+              "Value": {
+                "Ref": "GeminiSecretArn"
+              }
             }
           ]
         },
@@ -442,7 +448,7 @@
                   "Version": "1"
                 },
                 "Configuration": {
-                  "CustomData": "Xác nhận kết quả pytest, kiểm tra gói ZIP và CDK synth ở bước BuildTestSynth trước khi triển khai Canary Backend lên ap-southeast-1.",
+                  "CustomData": "X\u00e1c nh\u1eadn k\u1ebft qu\u1ea3 pytest, ki\u1ec3m tra g\u00f3i ZIP v\u00e0 CDK synth \u1edf b\u01b0\u1edbc BuildTestSynth tr\u01b0\u1edbc khi tri\u1ec3n khai Canary Backend l\u00ean ap-southeast-1.",
                   "NotificationArn": {
                     "Fn::If": [
                       "HasApprovalNotificationTopic",
@@ -518,10 +524,7 @@
                   },
                   "TemplatePath": "BuildOutput::cdk.out/SatiBotBackendSprint2.template.json",
                   "TemplateConfiguration": "DeployConfig::template-configuration.json",
-                  "Capabilities": "CAPABILITY_NAMED_IAM,CAPABILITY_AUTO_EXPAND",
-                  "ParameterOverrides": {
-                    "Fn::Sub": "{\"GeminiSecretArn\":\"${GeminiSecretArn}\"}"
-                  }
+                  "Capabilities": "CAPABILITY_NAMED_IAM,CAPABILITY_AUTO_EXPAND"
                 }
               },
               {

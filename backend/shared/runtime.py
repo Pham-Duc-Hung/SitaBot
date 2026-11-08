@@ -16,28 +16,32 @@ from botocore.exceptions import ClientError
 DEFAULT_REGION = "us-east-1"
 EMF_NAMESPACE = "SatiBot/Backend"
 EMF_METRIC_NAME = "PlatformFault"
-ACCESS_DENIED_CODES = frozenset({
-    "AccessDenied",
-    "AccessDeniedException",
-    "UnauthorizedOperation",
-    "AuthorizationError",
-    "AccessDeniedByOrganizations",
-})
-PLATFORM_FAULT_CODES = frozenset({
-    "AccessDenied",
-    "ActionStoreUnavailable",
-    "AppSyncAccessDenied",
-    "AppSyncNotConfigured",
-    "BackendNotConfigured",
-    "BackendUnavailable",
-    "ConfigurationError",
-    "GeminiNotConfigured",
-    "GeminiSecretAccessDenied",
-    "GeminiSecretUnavailable",
-    "HistoryUnavailable",
-    "InvalidToolConfiguration",
-    "WorkflowNotConfigured",
-})
+ACCESS_DENIED_CODES = frozenset(
+    {
+        "AccessDenied",
+        "AccessDeniedException",
+        "UnauthorizedOperation",
+        "AuthorizationError",
+        "AccessDeniedByOrganizations",
+    }
+)
+PLATFORM_FAULT_CODES = frozenset(
+    {
+        "AccessDenied",
+        "ActionStoreUnavailable",
+        "AppSyncAccessDenied",
+        "AppSyncNotConfigured",
+        "BackendNotConfigured",
+        "BackendUnavailable",
+        "ConfigurationError",
+        "GeminiNotConfigured",
+        "GeminiSecretAccessDenied",
+        "GeminiSecretUnavailable",
+        "HistoryUnavailable",
+        "InvalidToolConfiguration",
+        "WorkflowNotConfigured",
+    }
+)
 _MAX_CACHE_ENTRIES = 64
 _CLIENT_CACHE: Dict[tuple, Any] = {}
 _TABLE_CACHE: Dict[tuple, Any] = {}
@@ -87,7 +91,9 @@ def redact_sensitive(value: Any) -> Any:
     """Recursively redact secrets before structured request data reaches logs."""
     if isinstance(value, dict):
         return {
-            key: "<redacted>" if str(key).lower() in _SENSITIVE_KEYS else redact_sensitive(item)
+            key: "<redacted>"
+            if str(key).lower() in _SENSITIVE_KEYS
+            else redact_sensitive(item)
             for key, item in value.items()
         }
     if isinstance(value, list):
@@ -112,7 +118,9 @@ def credential_fingerprint(credentials: Optional[Dict[str, Any]]) -> str:
         if credentials.get("AccessKeyId")
         else credentials.get("ExternalId", "")
     )
-    digest = hashlib.sha256(f"{identity}:{discriminator}".encode("utf-8")).hexdigest()[:20]
+    digest = hashlib.sha256(f"{identity}:{discriminator}".encode("utf-8")).hexdigest()[
+        :20
+    ]
     return f"credential:{digest}"
 
 
@@ -127,7 +135,10 @@ def is_access_denied(exc: BaseException) -> bool:
 def _env_cache_scope(explicit_region: Optional[str] = None) -> tuple:
     access_key = os.environ.get("AWS_ACCESS_KEY_ID", "").strip()
     creds = (
-        {"AccessKeyId": access_key, "SessionToken": os.environ.get("AWS_SESSION_TOKEN", "")}
+        {
+            "AccessKeyId": access_key,
+            "SessionToken": os.environ.get("AWS_SESSION_TOKEN", ""),
+        }
         if access_key
         else None
     )
@@ -171,7 +182,13 @@ def cached_boto_client(
     config_tag: str = "default",
 ) -> Any:
     """Reuse Boto3 clients across warm Lambda invocations while respecting config and monkeypatches."""
-    key = (client_factory, service_name, _env_cache_scope(region_name), config_tag, _config_signature(config))
+    key = (
+        client_factory,
+        service_name,
+        _env_cache_scope(region_name),
+        config_tag,
+        _config_signature(config),
+    )
     if key in _CLIENT_CACHE:
         _CACHE_STATS["hits"] += 1
         return _CLIENT_CACHE[key]
@@ -216,12 +233,13 @@ def emit_platform_fault(function_name: str, error_code: str) -> Dict[str, Any]:
             "CloudWatchMetrics": [
                 {
                     "Namespace": EMF_NAMESPACE,
-                    "Dimensions": [["Function"]],
+                    "Dimensions": [["FunctionName"]],
                     "Metrics": [{"Name": EMF_METRIC_NAME, "Unit": "Count"}],
                 }
             ],
         },
         "Function": fn,
+        "FunctionName": os.environ.get("AWS_LAMBDA_FUNCTION_NAME", fn),
         "error_code": code,
         EMF_METRIC_NAME: 1,
     }
