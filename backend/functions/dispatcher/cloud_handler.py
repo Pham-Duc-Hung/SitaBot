@@ -10,11 +10,20 @@ import boto3
 from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError
 from backend.shared.cloud_errors import BackendError, failure
-from backend.shared.runtime import cached_boto_client, is_access_denied, redact_sensitive
+from backend.shared.runtime import (
+    PLATFORM_FAULT_CODES,
+    cached_boto_client,
+    emit_platform_fault,
+    is_access_denied,
+    redact_sensitive,
+)
 from backend.shared.tool_registry import validate_call
 from backend.shared.workflow_store import Store, json_safe, connection_identity
 
-_STS_CONFIG = Config(retries={"max_attempts": 2})
+# Keep STS connection/read timeouts strictly below Dispatcher's 60s Lambda budget
+# so an STS hang cannot strand an already-claimed action in EXECUTING state.
+_STS_CONFIG = Config(connect_timeout=3, read_timeout=5, retries={"max_attempts": 2, "mode": "standard"})
+_MIN_EXECUTION_BUDGET_MS = 5000
 
 
 def _execute(item, credentials):
@@ -69,34 +78,48 @@ def handle(event, context):
             raise BackendError("InvalidStoredAction", "Schema tác vụ đã thay đổi; hãy tạo yêu cầu mới.", 409)
         store.claim(item)
     except BackendError as exc:
+        if exc.code in PLATFORM_FAULT_CODES:
+            emit_platform_fault("dispatcher", exc.code)
         return failure(exc)
     except (ClientError, BotoCoreError) as exc:
         if is_access_denied(exc):
+            emit_platform_fault("dispatcher", "AccessDenied")
             return failure(BackendError("AccessDenied", "Dispatcher không đủ quyền truy cập bảng điều phối tác vụ.", 403))
+        emit_platform_fault("dispatcher", "ActionStoreUnavailable")
         return failure(BackendError("ActionStoreUnavailable", "Không đối soát được tác vụ; chưa thực thi.", 503))
+    stage = "connections_table"
     try:
         connection = store.connection(owner)
         if connection_identity(connection) != item["connection_id"]:
             raise BackendError("ConnectionChanged", "Kết nối AWS đã thay đổi; hãy tạo và duyệt yêu cầu mới.", 409)
+        stage = "customer_sts"
         sts_client = cached_boto_client(boto3.client, "sts", config=_STS_CONFIG, config_tag="dispatcher-sts")
         credentials = sts_client.assume_role(
             RoleArn=connection["role_arn"], ExternalId=connection["external_id"],
             RoleSessionName="satibot-" + action_id[-32:], DurationSeconds=900)["Credentials"]
         credentials = {**credentials, "Region": item["region"]}
     except BackendError as exc:
+        if exc.code in PLATFORM_FAULT_CODES:
+            emit_platform_fault("dispatcher", exc.code)
         result = failure(exc)
     except (ClientError, BotoCoreError) as exc:
+        if stage == "connections_table":
+            emit_platform_fault("dispatcher", "AccessDenied" if is_access_denied(exc) else "ActionStoreUnavailable")
         if is_access_denied(exc):
             result = failure(BackendError("AccessDenied", "Không đủ quyền STS AssumeRole hoặc đọc kết nối AWS; chưa thực thi tác vụ.", 403))
         else:
             result = failure(BackendError("AwsConnectionUnavailable", "Không thể lấy quyền AWS; chưa thực thi tác vụ.", 502))
     else:
-        # A transport failure can happen after mutation. Never retry a service here.
-        try:
-            result = normalize(_execute(item, credentials))
-        except Exception:
-            result = {"status": "ERROR", "error_code": "ExecutionOutcomeUnknown",
-                      "message": "Không xác định được kết quả cuối; kiểm tra tài nguyên trước khi tạo tác vụ mới.", "data": {}}
+        remaining = context.get_remaining_time_in_millis() if hasattr(context, "get_remaining_time_in_millis") else None
+        if isinstance(remaining, (int, float)) and remaining < _MIN_EXECUTION_BUDGET_MS:
+            result = failure(BackendError("DispatcherTimeoutBudgetExceeded", "Không đủ thời gian an toàn để thực thi dịch vụ đích; chưa gọi AWS.", 504))
+        else:
+            # A transport failure can happen after mutation. Never retry a service here.
+            try:
+                result = normalize(_execute(item, credentials))
+            except Exception:
+                result = {"status": "ERROR", "error_code": "ExecutionOutcomeUnknown",
+                          "message": "Không xác định được kết quả cuối; kiểm tra tài nguyên trước khi tạo tác vụ mới.", "data": {}}
     # A failed completion write leaves EXECUTING, deliberately preventing replay.
     store.finish(item, result)
     return envelope(item, result)

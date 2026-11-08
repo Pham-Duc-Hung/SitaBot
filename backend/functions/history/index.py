@@ -14,7 +14,12 @@ import boto3
 from boto3.dynamodb.conditions import Attr, Key
 from botocore.exceptions import BotoCoreError, ClientError
 from backend.shared.http_api import response, user_id
-from backend.shared.runtime import cached_dynamodb_table, is_access_denied, redact_sensitive
+from backend.shared.runtime import (
+    cached_dynamodb_table,
+    emit_platform_fault,
+    is_access_denied,
+    redact_sensitive,
+)
 
 SUMMARY = {"action_id", "created_at", "service", "tool_name", "status", "message", "resource_id", "session_id", "publication_status", "formatter_fallback", "error_code", "required_permission"}
 
@@ -82,10 +87,14 @@ def lambda_handler(event, context):
     except (ValueError, TypeError, UnicodeError):
         return response(400, {"error_code": "InvalidQuery"})
     except KeyError:
+        emit_platform_fault("history", "ConfigurationError")
         return response(503, {"error_code": "ConfigurationError"})
     except ClientError as exc:
         if is_access_denied(exc):
+            emit_platform_fault("history", "AccessDenied")
             return response(403, {"error_code": "AccessDenied"})
+        emit_platform_fault("history", "HistoryUnavailable")
         return response(502, {"error_code": "HistoryUnavailable"})
     except BotoCoreError:
+        emit_platform_fault("history", "HistoryUnavailable")
         return response(502, {"error_code": "HistoryUnavailable"})

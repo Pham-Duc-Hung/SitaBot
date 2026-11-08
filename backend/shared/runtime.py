@@ -5,12 +5,17 @@ Quản lý cấu hình runtime và che thông tin nhạy cảm của Lambda back
 
 import hashlib
 import json
+import logging
 import os
+import sys
+import time
 from typing import Any, Callable, Dict, Optional
 from botocore.exceptions import ClientError
 
 
 DEFAULT_REGION = "us-east-1"
+EMF_NAMESPACE = "SatiBot/Backend"
+EMF_METRIC_NAME = "PlatformFault"
 ACCESS_DENIED_CODES = frozenset({
     "AccessDenied",
     "AccessDeniedException",
@@ -18,11 +23,28 @@ ACCESS_DENIED_CODES = frozenset({
     "AuthorizationError",
     "AccessDeniedByOrganizations",
 })
+PLATFORM_FAULT_CODES = frozenset({
+    "AccessDenied",
+    "ActionStoreUnavailable",
+    "AppSyncAccessDenied",
+    "AppSyncNotConfigured",
+    "BackendNotConfigured",
+    "BackendUnavailable",
+    "ConfigurationError",
+    "GeminiNotConfigured",
+    "GeminiSecretAccessDenied",
+    "GeminiSecretUnavailable",
+    "HistoryUnavailable",
+    "InvalidToolConfiguration",
+    "WorkflowNotConfigured",
+})
 _MAX_CACHE_ENTRIES = 64
 _CLIENT_CACHE: Dict[tuple, Any] = {}
 _TABLE_CACHE: Dict[tuple, Any] = {}
 _SESSION_CACHE: Dict[tuple, Any] = {}
 _CACHE_STATS: Dict[str, int] = {"hits": 0, "misses": 0}
+_FAULT_COUNTS: Dict[str, int] = {}
+_emf_logger = logging.getLogger("satibot.emf")
 _SENSITIVE_KEYS = {
     "authorization",
     "credentials",
@@ -112,6 +134,26 @@ def _env_cache_scope(explicit_region: Optional[str] = None) -> tuple:
     return (get_aws_region(explicit_region), credential_fingerprint(creds))
 
 
+def _config_signature(config: Any) -> Any:
+    if config is None:
+        return None
+    attrs = (
+        "connect_timeout",
+        "read_timeout",
+        "region_name",
+        "max_pool_connections",
+        "signature_version",
+        "user_agent_extra",
+        "retries",
+        "s3",
+        "tcp_keepalive",
+    )
+    if any(hasattr(config, attr) for attr in attrs):
+        extracted = {attr: getattr(config, attr, None) for attr in attrs}
+        return json.dumps(extracted, sort_keys=True, default=str)
+    return ("custom", id(config), repr(config))
+
+
 def _store_bounded(cache: Dict[tuple, Any], key: tuple, value: Any) -> Any:
     if len(cache) >= _MAX_CACHE_ENTRIES:
         oldest = next(iter(cache))
@@ -128,8 +170,8 @@ def cached_boto_client(
     config: Any = None,
     config_tag: str = "default",
 ) -> Any:
-    """Reuse Boto3 clients across warm Lambda invocations while respecting factory monkeypatches."""
-    key = (client_factory, service_name, _env_cache_scope(region_name), config_tag)
+    """Reuse Boto3 clients across warm Lambda invocations while respecting config and monkeypatches."""
+    key = (client_factory, service_name, _env_cache_scope(region_name), config_tag, _config_signature(config))
     if key in _CLIENT_CACHE:
         _CACHE_STATS["hits"] += 1
         return _CLIENT_CACHE[key]
@@ -163,11 +205,40 @@ def cached_boto_session(session_factory: Callable[..., Any]) -> Any:
     return _store_bounded(_SESSION_CACHE, key, session_factory())
 
 
+def emit_platform_fault(function_name: str, error_code: str) -> Dict[str, Any]:
+    """Emit CloudWatch Embedded Metric Format (EMF) signal for platform/deployment faults."""
+    fn = str(function_name or "unknown")[:64]
+    code = str(error_code or "PlatformFault")[:128]
+    _FAULT_COUNTS[f"{fn}:{code}"] = _FAULT_COUNTS.get(f"{fn}:{code}", 0) + 1
+    payload = {
+        "_aws": {
+            "Timestamp": int(time.time() * 1000),
+            "CloudWatchMetrics": [
+                {
+                    "Namespace": EMF_NAMESPACE,
+                    "Dimensions": [["Function"]],
+                    "Metrics": [{"Name": EMF_METRIC_NAME, "Unit": "Count"}],
+                }
+            ],
+        },
+        "Function": fn,
+        "error_code": code,
+        EMF_METRIC_NAME: 1,
+    }
+    line = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    if os.environ.get("AWS_LAMBDA_FUNCTION_NAME"):
+        print(line, file=sys.stdout, flush=True)
+    else:
+        _emf_logger.debug(line)
+    return payload
+
+
 def clear_runtime_caches() -> None:
-    """Reset warm-invocation client, table, and session caches."""
+    """Reset warm-invocation client, table, session caches, and platform fault counters."""
     _CLIENT_CACHE.clear()
     _TABLE_CACHE.clear()
     _SESSION_CACHE.clear()
+    _FAULT_COUNTS.clear()
     _CACHE_STATS["hits"] = 0
     _CACHE_STATS["misses"] = 0
 
@@ -180,4 +251,10 @@ def runtime_cache_stats() -> Dict[str, int]:
         "clients": len(_CLIENT_CACHE),
         "tables": len(_TABLE_CACHE),
         "sessions": len(_SESSION_CACHE),
+        "platform_faults": sum(_FAULT_COUNTS.values()),
     }
+
+
+def platform_fault_counts() -> Dict[str, int]:
+    """Return recorded platform fault counts keyed by '<function>:<error_code>'."""
+    return dict(_FAULT_COUNTS)

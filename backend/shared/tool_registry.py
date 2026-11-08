@@ -4,7 +4,9 @@ Tổng hợp schema công cụ của các dịch vụ AWS.
 Kiểm tra tham số tool call trước khi điều phối thực thi.
 """
 
+import hashlib
 import importlib
+import json
 from copy import deepcopy
 
 from jsonschema import Draft7Validator
@@ -27,13 +29,13 @@ _REGISTRY_STATS = {"hits": 0, "misses": 0}
 def _ensure_cache():
     global _CACHE_SIGNATURE, _REGISTRY_CACHE, _VALIDATOR_CACHE, _LLM_TOOLS_CACHE
     loaded = []
-    signature = []
     for service, module, constant in SOURCES:
         raw_items = getattr(importlib.import_module(module), constant, ())
         loaded.append((service, raw_items))
-        signature.append((service, id(raw_items), len(raw_items)))
-    signature_tuple = tuple(signature)
-    if _REGISTRY_CACHE is not None and _CACHE_SIGNATURE == signature_tuple:
+    signature = hashlib.sha256(
+        json.dumps(loaded, sort_keys=True, default=str).encode("utf-8")
+    ).hexdigest()
+    if _REGISTRY_CACHE is not None and _CACHE_SIGNATURE == signature:
         _REGISTRY_STATS["hits"] += 1
         return _REGISTRY_CACHE
     _REGISTRY_STATS["misses"] += 1
@@ -52,7 +54,7 @@ def _ensure_cache():
                 raise BackendError("InvalidToolConfiguration", "Trùng tên công cụ.", 503)
             result[tool["name"]] = tool
             validators[tool["name"]] = Draft7Validator(tool["parameters"])
-    _CACHE_SIGNATURE = signature_tuple
+    _CACHE_SIGNATURE = signature
     _REGISTRY_CACHE = result
     _VALIDATOR_CACHE = validators
     _LLM_TOOLS_CACHE = tuple(
@@ -88,7 +90,7 @@ def registry_cache_stats():
 
 
 def registry():
-    return _ensure_cache()
+    return deepcopy(_ensure_cache())
 
 
 def validate_call(name, parameters):
@@ -99,9 +101,9 @@ def validate_call(name, parameters):
     validator = _VALIDATOR_CACHE[name]
     if not isinstance(parameters, dict) or not validator.is_valid(parameters):
         raise BackendError("InvalidParameters", "Tham số công cụ không hợp lệ; hãy bổ sung hoặc sửa yêu cầu.")
-    return tool
+    return deepcopy(tool)
 
 
 def llm_tools():
     _ensure_cache()
-    return list(_LLM_TOOLS_CACHE)
+    return deepcopy(list(_LLM_TOOLS_CACHE))

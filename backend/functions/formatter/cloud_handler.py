@@ -10,7 +10,12 @@ import logging
 from botocore.exceptions import ClientError
 from backend.shared import appsync, gemini
 from backend.shared.cloud_errors import BackendError, failure
-from backend.shared.runtime import is_access_denied, redact_sensitive
+from backend.shared.runtime import (
+    PLATFORM_FAULT_CODES,
+    emit_platform_fault,
+    is_access_denied,
+    redact_sensitive,
+)
 from backend.shared.workflow_store import pack, table
 
 logger = logging.getLogger(__name__)
@@ -39,7 +44,9 @@ def handle(event, context):
         if not isinstance(text, str) or not text.strip() or reply.get("tool_calls"):
             raise ValueError("Invalid formatter message")
         record["message"] = text[:8000]
-    except Exception:
+    except Exception as exc:
+        if isinstance(exc, BackendError) and exc.code in PLATFORM_FAULT_CODES:
+            emit_platform_fault("formatter", exc.code)
         record["formatter_fallback"] = True
         logger.warning("Formatter used fallback action_id=%s", event["action_id"])
     history = table("ACTION_HISTORY_TABLE")
@@ -49,7 +56,9 @@ def handle(event, context):
     except ClientError as exc:
         if exc.response["Error"]["Code"] != "ConditionalCheckFailedException":
             if is_access_denied(exc):
+                emit_platform_fault("formatter", "AccessDenied")
                 return failure(BackendError("AccessDenied", "Formatter không đủ quyền ghi bảng lịch sử ActionHistory.", 403))
+            emit_platform_fault("formatter", "HistoryWriteFailed")
             raise  # Workflow may retry Formatter only; resource execution is already cached.
         old = exc.response.get("Item")
         if not old:
@@ -63,8 +72,10 @@ def handle(event, context):
         try:
             appsync.publish({k: record[k] for k in PUBLIC})
             delivery = "PUBLISHED"
-        except Exception:
+        except Exception as exc:
             delivery = "FAILED"
+            fault_code = exc.code if isinstance(exc, BackendError) else "AppSyncPublishFailed"
+            emit_platform_fault("formatter", fault_code)
             logger.warning("AppSync publication failed action_id=%s", event["action_id"])
         try:
             history.update_item(Key={"user_id": record["user_id"], "created_at": record["created_at"]},
@@ -73,7 +84,9 @@ def handle(event, context):
                 ExpressionAttributeValues={":status": delivery, ":action": record["action_id"]})
         except ClientError as exc:
             if is_access_denied(exc):
+                emit_platform_fault("formatter", "AccessDenied")
                 return failure(BackendError("AccessDenied", "Formatter không đủ quyền cập nhật bảng lịch sử ActionHistory.", 403))
+            emit_platform_fault("formatter", "HistoryUpdateFailed")
             raise
         record["publication_status"] = delivery
     output = {k: record.get(k) for k in PUBLIC if k != "user_id"} | {

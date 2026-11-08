@@ -5,16 +5,20 @@ chế độ lỗi Gemini & Formatter fallback, Connector, History, chống xác 
 """
 
 import base64
+from copy import deepcopy
+import hashlib
 import io
 import json
 from pathlib import Path
 import subprocess
 import sys
+import time
 import urllib.error
 from unittest.mock import Mock
 import zipfile
 
 import boto3
+from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError
 from moto import mock_aws
 import pytest
@@ -33,6 +37,7 @@ from backend.shared.runtime import (
     cached_dynamodb_table,
     clear_runtime_caches,
     is_access_denied,
+    platform_fault_counts,
     runtime_cache_stats,
 )
 from backend.shared.tool_registry import (
@@ -45,7 +50,9 @@ from backend.shared.tool_registry import (
 from backend.shared.workflow_store import Store, table
 from scripts.benchmark_coldstart import (
     benchmark_cloud_lambdas,
+    benchmark_live_endpoint,
     benchmark_local_dispatcher,
+    benchmark_subprocess_coldstart,
     benchmark_tool_registry,
 )
 from scripts.package_sprint2 import package
@@ -436,12 +443,35 @@ def test_tool_registry_validator_cache_and_auto_invalidation(monkeypatch):
     assert registry_cache_stats()["misses"] == 1
     assert registry_cache_stats()["hits"] == 2
 
-    # Khi nguồn schema thay đổi (ví dụ monkeypatch trong test), cache tự động nạp lại
+    # 1. Sửa object trả về từ registry() hoặc llm_tools() không làm hỏng bản cache nội bộ
+    mutated_reg = registry()
+    mutated_reg["list_lambda_functions"]["parameters"]["properties"]["forged"] = {"type": "string"}
+    mutated_llm = llm_tools()
+    mutated_llm[0]["function"]["name"] = "tampered_name"
+    assert "forged" not in registry()["list_lambda_functions"]["parameters"]["properties"]
+    assert llm_tools()[0]["function"]["name"] != "tampered_name"
+
+    # 2. Sửa nội dung schema tại chỗ (giữ nguyên id và độ dài list) vẫn tự động làm mới validator
     from backend.functions.dispatcher.services import lambda_service
-    custom_schema = list(lambda_service.LAMBDA_TOOL_SCHEMAS)
-    monkeypatch.setattr(lambda_service, "LAMBDA_TOOL_SCHEMAS", custom_schema)
+    inplace_list = deepcopy(list(lambda_service.LAMBDA_TOOL_SCHEMAS))
+    monkeypatch.setattr(lambda_service, "LAMBDA_TOOL_SCHEMAS", inplace_list)
+    clear_registry_cache()
     registry()
+    assert registry_cache_stats()["misses"] == 1
+    inplace_list[0]["description"] = "Updated description in-place"
+    assert registry()["list_lambda_functions"]["description"] == "Updated description in-place"
     assert registry_cache_stats()["misses"] == 2
+
+
+def test_runtime_cache_distinguishes_different_botocore_configs_on_default_tag():
+    clear_runtime_caches()
+    factory = Mock(side_effect=lambda svc, **kw: {"svc": svc, "cfg": kw.get("config"), "obj": object()})
+    fast = cached_boto_client(factory, "sts", config=Config(connect_timeout=2, read_timeout=3))
+    slow = cached_boto_client(factory, "sts", config=Config(connect_timeout=10, read_timeout=25))
+    fast_again = cached_boto_client(factory, "sts", config=Config(connect_timeout=2, read_timeout=3))
+    assert fast is not slow
+    assert fast is fast_again
+    assert factory.call_count == 2
 
 
 def test_slim_per_lambda_packaging_and_coldstart_benchmark_suite(tmp_path):
@@ -702,3 +732,145 @@ def test_cdk_canary_stack_pipeline_and_alarm_rollback_simulation(tmp_path):
     rollback_case = sim.deploy_canary("2", simulated_error_rate=0.25, error_threshold=0.05)
     assert rollback_case["timeline"][0]["weights"] == {"1": 0.9, "2": 0.1}
     assert rollback_case["final_weights"] == {"1": 1.0}
+
+
+def test_verifier_rejects_missing_alarms_missing_config_version_or_oversized_overrides(tmp_path):
+    dist_backend = ROOT / "dist" / "backend"
+    if not all((dist_backend / f"{name}.zip").exists() for name in ("chatbot", "dispatcher", "formatter", "connector", "history")):
+        package(dist_backend, with_dependencies=False)
+
+    cdk_out = tmp_path / "cdk_tamper"
+    subprocess.run(
+        [sys.executable, str(ROOT / "infrastructure" / "backend_sprint2_app.py")],
+        env={**dict(__import__("os").environ), "CDK_OUTDIR": str(cdk_out), "PRIMARY_REGION": "ap-southeast-1"},
+        check=True,
+    )
+    base_tpl = json.loads((cdk_out / "SatiBotBackendSprint2.template.json").read_text(encoding="utf-8"))
+
+    # 1. Xóa AlarmConfiguration khỏi DeploymentGroup -> verifier bắt buộc báo lỗi
+    no_alarm_tpl = deepcopy(base_tpl)
+    for res in no_alarm_tpl["Resources"].values():
+        if res.get("Type") == "AWS::CodeDeploy::DeploymentGroup":
+            res["Properties"].pop("AlarmConfiguration", None)
+    tampered_alarm_file = tmp_path / "no_alarm.template.json"
+    tampered_alarm_file.write_text(json.dumps(no_alarm_tpl), encoding="utf-8")
+    with pytest.raises(AssertionError, match="AlarmConfiguration"):
+        verify_cdk_canary_template(tampered_alarm_file)
+
+    # 2. Xóa ConfigurationVersion khỏi AWS::Lambda::Version Description -> verifier bắt buộc báo lỗi
+    no_cfg_ver_tpl = deepcopy(base_tpl)
+    for res in no_cfg_ver_tpl["Resources"].values():
+        if res.get("Type") == "AWS::Lambda::Version":
+            res["Properties"]["Description"] = "static-description"
+    tampered_ver_file = tmp_path / "no_cfg_ver.template.json"
+    tampered_ver_file.write_text(json.dumps(no_cfg_ver_tpl), encoding="utf-8")
+    with pytest.raises(AssertionError, match="ConfigurationVersion"):
+        verify_cdk_canary_template(tampered_ver_file)
+
+    # 3. ParameterOverrides vượt 1000 byte trong pipeline -> verifier bắt buộc báo lỗi
+    bad_pipeline = json.loads((ROOT / "ci" / "pipeline.template.json").read_text(encoding="utf-8"))
+    bad_pipeline["Resources"]["Pipeline"]["Properties"]["Stages"][3]["Actions"][1]["Configuration"]["ParameterOverrides"] = {
+        "Fn::Sub": "{" + '"Padding":"' + ("x" * 1050) + '"}'
+    }
+    bad_pipeline_file = tmp_path / "bad_pipeline.json"
+    bad_pipeline_file.write_text(json.dumps(bad_pipeline), encoding="utf-8")
+    with pytest.raises(AssertionError, match="1000 byte"):
+        verify_pipeline_template(bad_pipeline_file)
+
+
+def test_deterministic_zip_hashes_and_subprocess_coldstart(tmp_path):
+    dir_1 = tmp_path / "build1"
+    dir_2 = tmp_path / "build2"
+    package(dir_1, with_dependencies=False)
+    time.sleep(1.1)
+    package(dir_2, with_dependencies=False)
+    for name in ("chatbot", "dispatcher", "formatter", "connector", "history"):
+        h1 = hashlib.sha256((dir_1 / f"{name}.zip").read_bytes()).hexdigest()
+        h2 = hashlib.sha256((dir_2 / f"{name}.zip").read_bytes()).hexdigest()
+        assert h1 == h2
+
+    # Đo subprocess cold-start trên các gói đã đóng kèm dependency ở dist/backend nếu có
+    target = ROOT / "dist" / "backend"
+    if all((target / f"{n}.zip").exists() for n in ("chatbot", "dispatcher", "formatter", "connector", "history")):
+        cold_report = benchmark_subprocess_coldstart(target, warm_runs=2)
+        assert set(cold_report) == {"chatbot", "dispatcher", "formatter", "connector", "history"}
+        assert all(item["import_init_ms"] > 0 for item in cold_report.values())
+
+
+def test_dispatcher_sts_timeout_budget_and_platform_fault_scoping(sprint4_cloud, monkeypatch):
+    real_client = boto3.client
+    # 1. Timeout STS phải nhỏ hơn nhiều so với ngưỡng 60s của Dispatcher
+    assert dispatch._STS_CONFIG.connect_timeout <= 5
+    assert dispatch._STS_CONFIG.read_timeout <= 10
+
+    # 2. Lỗi đầu vào người dùng hoặc lỗi STS từ phía tài khoản khách hàng KHÔNG phát PlatformFault
+    clear_runtime_caches()
+    assert chat.handle(api_event("/chat", {"message": ""}), None)["statusCode"] == 400
+    assert platform_fault_counts() == {}
+
+    action = sprint4_cloud.create_action(
+        "alice",
+        "ses_budget",
+        registry()["update_function_resources"],
+        {"function_name": "demo", "memory_mb": 256},
+        "ap-southeast-1",
+    )
+    sprint4_cloud.approve("alice", action["action_id"])
+    sts_customer_denied = Mock()
+    sts_customer_denied.assume_role.side_effect = deny_error("sts:AssumeRole", code="AccessDenied")
+    monkeypatch.setattr(dispatch.boto3, "client", Mock(return_value=sts_customer_denied))
+    res_cust = dispatch.handle({"user_id": "alice", "action_id": action["action_id"]}, None)
+    assert res_cust["result"]["error_code"] == "AccessDenied"
+    assert platform_fault_counts() == {}
+
+    # 3. Khi thời gian còn lại của Lambda dưới 5 giây trước lúc gọi dịch vụ đích, dừng an toàn và ghi trạng thái COMPLETED
+    monkeypatch.setattr(dispatch.boto3, "client", real_client)
+    clear_runtime_caches()
+    action2 = sprint4_cloud.create_action(
+        "alice",
+        "ses_budget_2",
+        registry()["update_function_resources"],
+        {"function_name": "demo", "memory_mb": 256},
+        "ap-southeast-1",
+    )
+    sprint4_cloud.approve("alice", action2["action_id"])
+    low_budget_ctx = Mock()
+    low_budget_ctx.get_remaining_time_in_millis.return_value = 2500
+    exec_spy = Mock()
+    monkeypatch.setattr(dispatch, "_execute", exec_spy)
+    res_budget = dispatch.handle({"user_id": "alice", "action_id": action2["action_id"]}, low_budget_ctx)
+    assert res_budget["result"]["error_code"] == "DispatcherTimeoutBudgetExceeded"
+    assert sprint4_cloud.get_action("alice", action2["action_id"])["status"] == "COMPLETED"
+    exec_spy.assert_not_called()
+
+
+def test_live_benchmark_enforces_jwt_and_tracks_async_workflow_completion(monkeypatch):
+    monkeypatch.delenv("SATIBOT_BENCHMARK_JWT", raising=False)
+    with pytest.raises(ValueError, match="JWT"):
+        benchmark_live_endpoint("https://example.execute-api.ap-southeast-1.amazonaws.com/api/chat", iterations=1)
+
+    seen_headers = []
+
+    def _fake_urlopen(req, timeout=20):
+        seen_headers.append(dict(req.headers))
+        resp = Mock()
+        resp.__enter__ = Mock(return_value=resp)
+        resp.__exit__ = Mock(return_value=False)
+        if req.full_url.endswith("/chat"):
+            resp.status = 202
+            resp.read.return_value = b'{"status":"ACCEPTED","action_id":"act_live_1"}'
+        else:
+            resp.status = 200
+            resp.read.return_value = b'{"items":[{"action_id":"act_live_1","status":"SUCCESS"}]}'
+        return resp
+
+    monkeypatch.setattr("scripts.benchmark_coldstart.urllib.request.urlopen", _fake_urlopen)
+    monkeypatch.setattr("scripts.benchmark_coldstart.time.sleep", lambda *_a: None)
+    metrics = benchmark_live_endpoint(
+        "https://example.execute-api.ap-southeast-1.amazonaws.com/api/chat",
+        jwt_token="eyJ.demo.token",
+        iterations=2,
+    )
+    assert metrics["accept_initial_ms"] >= 0
+    assert "workflow_e2e_avg_ms" in metrics
+    assert all(h.get("Authorization") == "Bearer eyJ.demo.token" for h in seen_headers)

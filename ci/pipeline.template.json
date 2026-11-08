@@ -1,6 +1,6 @@
 {
   "AWSTemplateFormatVersion": "2010-09-09",
-  "Description": "Author: Trinh Thien Quang - SatiBot Backend CI/CD Pipeline with Manual Approval, CDK Asset Publishing, CloudFormation ChangeSet Deployment, and CodeDeploy Canary/Rollback.",
+  "Description": "Author: Trinh Thien Quang - SatiBot Backend CI/CD Pipeline with Manual Approval, CDK Asset Publishing, TemplateConfiguration ChangeSet Deployment, and CodeDeploy Canary/Rollback.",
   "Parameters": {
     "ConnectionArn": {
       "Type": "String",
@@ -37,6 +37,10 @@
       "Type": "String",
       "Default": "satibot-backend-canary-changeset"
     },
+    "ConfigurationReleaseId": {
+      "Type": "String",
+      "Default": "v1"
+    },
     "CanaryDeploymentConfig": {
       "Type": "String",
       "Default": "CodeDeployDefault.LambdaCanary10Percent5Minutes"
@@ -65,6 +69,22 @@
     "AppSyncGraphqlUrl": {
       "Type": "String",
       "Default": ""
+    },
+    "AppSyncApiArn": {
+      "Type": "String",
+      "Default": ""
+    },
+    "ApiGatewaySourceArn": {
+      "Type": "String",
+      "Default": ""
+    },
+    "GrantIntegrationPermissions": {
+      "Type": "String",
+      "Default": "false",
+      "AllowedValues": [
+        "true",
+        "false"
+      ]
     },
     "ChatbotRoleArn": {
       "Type": "String"
@@ -178,7 +198,7 @@
         },
         "Source": {
           "Type": "CODEPIPELINE",
-          "BuildSpec": "version: 0.2\nphases:\n  install:\n    runtime-versions:\n      nodejs: '22'\n  build:\n    commands:\n      - npx --yes cdk-assets@2 publish --path cdk.out/SatiBotBackendSprint2.assets.json -v\n"
+          "BuildSpec": "version: 0.2\nphases:\n  install:\n    runtime-versions:\n      python: '3.12'\n      nodejs: '22'\n  build:\n    commands:\n      - npx --yes cdk-assets@2 publish --path cdk.out/SatiBotBackendSprint2.assets.json -v\n      - |\n        python - <<'PY'\n        import hashlib, json, os, pathlib\n        keys = [\n            \"ConnectionsTableName\", \"HistoryTableName\", \"SessionStateTableName\", \"PendingActionTableName\",\n            \"ActionStateMachineArn\", \"AppSyncGraphqlUrl\", \"AppSyncApiArn\", \"ApiGatewaySourceArn\",\n            \"GrantIntegrationPermissions\", \"ChatbotRoleArn\", \"DispatcherRoleArn\", \"FormatterRoleArn\",\n            \"ConnectorRoleArn\", \"HistoryRoleArn\", \"CodeDeployRoleArn\", \"CanaryDeploymentConfig\",\n            \"ChatbotAlarmName\", \"DispatcherAlarmName\", \"FormatterAlarmName\", \"ConnectorAlarmName\", \"HistoryAlarmName\",\n        ]\n        params = {k: os.environ.get(f\"PARAM_{k}\", \"\") for k in keys}\n        release_tag = os.environ.get(\"PARAM_ConfigurationReleaseId\", \"v1\")\n        digest = hashlib.sha256(json.dumps({\"tag\": release_tag, \"params\": params}, sort_keys=True).encode()).hexdigest()[:24]\n        params[\"ConfigurationVersion\"] = f\"{release_tag}-{digest}\"\n        out = pathlib.Path(\"deploy-config\")\n        out.mkdir(parents=True, exist_ok=True)\n        (out / \"template-configuration.json\").write_text(json.dumps({\"Parameters\": params}, indent=2), encoding=\"utf-8\")\n        PY\nartifacts:\n  base-directory: deploy-config\n  files:\n    - template-configuration.json\n"
         },
         "Environment": {
           "Type": "LINUX_CONTAINER",
@@ -188,6 +208,138 @@
             {
               "Name": "AWS_DEFAULT_REGION",
               "Value": "ap-southeast-1"
+            },
+            {
+              "Name": "PARAM_ConfigurationReleaseId",
+              "Value": {
+                "Ref": "ConfigurationReleaseId"
+              }
+            },
+            {
+              "Name": "PARAM_ConnectionsTableName",
+              "Value": {
+                "Ref": "ConnectionsTableName"
+              }
+            },
+            {
+              "Name": "PARAM_HistoryTableName",
+              "Value": {
+                "Ref": "HistoryTableName"
+              }
+            },
+            {
+              "Name": "PARAM_SessionStateTableName",
+              "Value": {
+                "Ref": "SessionStateTableName"
+              }
+            },
+            {
+              "Name": "PARAM_PendingActionTableName",
+              "Value": {
+                "Ref": "PendingActionTableName"
+              }
+            },
+            {
+              "Name": "PARAM_ActionStateMachineArn",
+              "Value": {
+                "Ref": "ActionStateMachineArn"
+              }
+            },
+            {
+              "Name": "PARAM_AppSyncGraphqlUrl",
+              "Value": {
+                "Ref": "AppSyncGraphqlUrl"
+              }
+            },
+            {
+              "Name": "PARAM_AppSyncApiArn",
+              "Value": {
+                "Ref": "AppSyncApiArn"
+              }
+            },
+            {
+              "Name": "PARAM_ApiGatewaySourceArn",
+              "Value": {
+                "Ref": "ApiGatewaySourceArn"
+              }
+            },
+            {
+              "Name": "PARAM_GrantIntegrationPermissions",
+              "Value": {
+                "Ref": "GrantIntegrationPermissions"
+              }
+            },
+            {
+              "Name": "PARAM_ChatbotRoleArn",
+              "Value": {
+                "Ref": "ChatbotRoleArn"
+              }
+            },
+            {
+              "Name": "PARAM_DispatcherRoleArn",
+              "Value": {
+                "Ref": "DispatcherRoleArn"
+              }
+            },
+            {
+              "Name": "PARAM_FormatterRoleArn",
+              "Value": {
+                "Ref": "FormatterRoleArn"
+              }
+            },
+            {
+              "Name": "PARAM_ConnectorRoleArn",
+              "Value": {
+                "Ref": "ConnectorRoleArn"
+              }
+            },
+            {
+              "Name": "PARAM_HistoryRoleArn",
+              "Value": {
+                "Ref": "HistoryRoleArn"
+              }
+            },
+            {
+              "Name": "PARAM_CodeDeployRoleArn",
+              "Value": {
+                "Ref": "CodeDeployRoleArn"
+              }
+            },
+            {
+              "Name": "PARAM_CanaryDeploymentConfig",
+              "Value": {
+                "Ref": "CanaryDeploymentConfig"
+              }
+            },
+            {
+              "Name": "PARAM_ChatbotAlarmName",
+              "Value": {
+                "Ref": "ChatbotAlarmName"
+              }
+            },
+            {
+              "Name": "PARAM_DispatcherAlarmName",
+              "Value": {
+                "Ref": "DispatcherAlarmName"
+              }
+            },
+            {
+              "Name": "PARAM_FormatterAlarmName",
+              "Value": {
+                "Ref": "FormatterAlarmName"
+              }
+            },
+            {
+              "Name": "PARAM_ConnectorAlarmName",
+              "Value": {
+                "Ref": "ConnectorAlarmName"
+              }
+            },
+            {
+              "Name": "PARAM_HistoryAlarmName",
+              "Value": {
+                "Ref": "HistoryAlarmName"
+              }
             }
           ]
         },
@@ -328,6 +480,11 @@
                   {
                     "Name": "BuildOutput"
                   }
+                ],
+                "OutputArtifacts": [
+                  {
+                    "Name": "DeployConfig"
+                  }
                 ]
               },
               {
@@ -343,6 +500,9 @@
                 "InputArtifacts": [
                   {
                     "Name": "BuildOutput"
+                  },
+                  {
+                    "Name": "DeployConfig"
                   }
                 ],
                 "Configuration": {
@@ -357,9 +517,10 @@
                     "Ref": "CloudFormationExecutionRoleArn"
                   },
                   "TemplatePath": "BuildOutput::cdk.out/SatiBotBackendSprint2.template.json",
+                  "TemplateConfiguration": "DeployConfig::template-configuration.json",
                   "Capabilities": "CAPABILITY_NAMED_IAM,CAPABILITY_AUTO_EXPAND",
                   "ParameterOverrides": {
-                    "Fn::Sub": "{\"ConnectionsTableName\":\"${ConnectionsTableName}\",\"HistoryTableName\":\"${HistoryTableName}\",\"SessionStateTableName\":\"${SessionStateTableName}\",\"PendingActionTableName\":\"${PendingActionTableName}\",\"GeminiSecretArn\":\"${GeminiSecretArn}\",\"ActionStateMachineArn\":\"${ActionStateMachineArn}\",\"AppSyncGraphqlUrl\":\"${AppSyncGraphqlUrl}\",\"ChatbotRoleArn\":\"${ChatbotRoleArn}\",\"DispatcherRoleArn\":\"${DispatcherRoleArn}\",\"FormatterRoleArn\":\"${FormatterRoleArn}\",\"ConnectorRoleArn\":\"${ConnectorRoleArn}\",\"HistoryRoleArn\":\"${HistoryRoleArn}\",\"CodeDeployRoleArn\":\"${CodeDeployRoleArn}\",\"CanaryDeploymentConfig\":\"${CanaryDeploymentConfig}\",\"ChatbotAlarmName\":\"${ChatbotAlarmName}\",\"DispatcherAlarmName\":\"${DispatcherAlarmName}\",\"FormatterAlarmName\":\"${FormatterAlarmName}\",\"ConnectorAlarmName\":\"${ConnectorAlarmName}\",\"HistoryAlarmName\":\"${HistoryAlarmName}\"}"
+                    "Fn::Sub": "{\"GeminiSecretArn\":\"${GeminiSecretArn}\"}"
                   }
                 }
               },
