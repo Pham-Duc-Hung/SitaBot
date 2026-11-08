@@ -10,7 +10,11 @@ import tempfile
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
-SCHEMA_FUNCTIONS = {"chatbot", "dispatcher"}
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from scripts.package_sprint2 import FUNCTIONS, SCHEMA_DEPENDENT_FUNCTIONS as SCHEMA_FUNCTIONS
+
 SMOKE = '''
 import importlib, os, sys
 from pathlib import Path
@@ -37,7 +41,7 @@ if name in {"chatbot", "dispatcher"}:
 def verify():
     if sys.version_info[:2] != (3, 12):
         raise SystemExit("Run artifact verification with Python 3.12, matching Lambda.")
-    for name in ("chatbot", "dispatcher", "formatter", "connector", "history"):
+    for name in FUNCTIONS:
         with tempfile.TemporaryDirectory(prefix="satibot-artifact-") as target:
             with zipfile.ZipFile(ROOT / "dist" / "backend" / f"{name}.zip") as archive:
                 paths = archive.namelist()

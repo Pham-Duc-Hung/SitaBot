@@ -87,14 +87,14 @@ def lambda_handler(event, context):
     except (ValueError, TypeError, UnicodeError):
         return response(400, {"error_code": "InvalidQuery"})
     except KeyError:
-        emit_platform_fault("history", "ConfigurationError")
+        emit_platform_fault("history", "ConfigurationError", context=context)
         return response(503, {"error_code": "ConfigurationError"})
     except ClientError as exc:
         if is_access_denied(exc):
-            emit_platform_fault("history", "AccessDenied")
+            emit_platform_fault("history", "AccessDenied", context=context)
             return response(403, {"error_code": "AccessDenied"})
-        emit_platform_fault("history", "HistoryUnavailable")
+        emit_platform_fault("history", "HistoryUnavailable", context=context)
         return response(502, {"error_code": "HistoryUnavailable"})
     except BotoCoreError:
-        emit_platform_fault("history", "HistoryUnavailable")
+        emit_platform_fault("history", "HistoryUnavailable", context=context)
         return response(502, {"error_code": "HistoryUnavailable"})

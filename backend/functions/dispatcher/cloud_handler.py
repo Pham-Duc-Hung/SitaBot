@@ -146,11 +146,11 @@ def handle(event, context):
         store.claim(item)
     except BackendError as exc:
         if exc.code in PLATFORM_FAULT_CODES:
-            emit_platform_fault("dispatcher", exc.code)
+            emit_platform_fault("dispatcher", exc.code, context=context)
         return failure(exc)
     except (ClientError, BotoCoreError) as exc:
         if is_access_denied(exc):
-            emit_platform_fault("dispatcher", "AccessDenied")
+            emit_platform_fault("dispatcher", "AccessDenied", context=context)
             return failure(
                 BackendError(
                     "AccessDenied",
@@ -158,7 +158,7 @@ def handle(event, context):
                     403,
                 )
             )
-        emit_platform_fault("dispatcher", "ActionStoreUnavailable")
+        emit_platform_fault("dispatcher", "ActionStoreUnavailable", context=context)
         return failure(
             BackendError(
                 "ActionStoreUnavailable",
@@ -188,13 +188,14 @@ def handle(event, context):
         credentials = {**credentials, "Region": item["region"]}
     except BackendError as exc:
         if exc.code in PLATFORM_FAULT_CODES:
-            emit_platform_fault("dispatcher", exc.code)
+            emit_platform_fault("dispatcher", exc.code, context=context)
         result = failure(exc)
     except (ClientError, BotoCoreError) as exc:
         if stage == "connections_table":
             emit_platform_fault(
                 "dispatcher",
                 "AccessDenied" if is_access_denied(exc) else "ActionStoreUnavailable",
+                context=context,
             )
         if is_access_denied(exc):
             result = failure(

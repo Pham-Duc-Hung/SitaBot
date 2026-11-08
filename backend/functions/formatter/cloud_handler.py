@@ -46,7 +46,7 @@ def handle(event, context):
         record["message"] = text[:8000]
     except Exception as exc:
         if isinstance(exc, BackendError) and exc.code in PLATFORM_FAULT_CODES:
-            emit_platform_fault("formatter", exc.code)
+            emit_platform_fault("formatter", exc.code, context=context)
         record["formatter_fallback"] = True
         logger.warning("Formatter used fallback action_id=%s", event["action_id"])
     history = table("ACTION_HISTORY_TABLE")
@@ -56,9 +56,9 @@ def handle(event, context):
     except ClientError as exc:
         if exc.response["Error"]["Code"] != "ConditionalCheckFailedException":
             if is_access_denied(exc):
-                emit_platform_fault("formatter", "AccessDenied")
+                emit_platform_fault("formatter", "AccessDenied", context=context)
                 return failure(BackendError("AccessDenied", "Formatter không đủ quyền ghi bảng lịch sử ActionHistory.", 403))
-            emit_platform_fault("formatter", "HistoryWriteFailed")
+            emit_platform_fault("formatter", "HistoryWriteFailed", context=context)
             raise  # Workflow may retry Formatter only; resource execution is already cached.
         old = exc.response.get("Item")
         if not old:
@@ -75,7 +75,7 @@ def handle(event, context):
         except Exception as exc:
             delivery = "FAILED"
             fault_code = exc.code if isinstance(exc, BackendError) else "AppSyncPublishFailed"
-            emit_platform_fault("formatter", fault_code)
+            emit_platform_fault("formatter", fault_code, context=context)
             logger.warning("AppSync publication failed action_id=%s", event["action_id"])
         try:
             history.update_item(Key={"user_id": record["user_id"], "created_at": record["created_at"]},
@@ -84,9 +84,9 @@ def handle(event, context):
                 ExpressionAttributeValues={":status": delivery, ":action": record["action_id"]})
         except ClientError as exc:
             if is_access_denied(exc):
-                emit_platform_fault("formatter", "AccessDenied")
+                emit_platform_fault("formatter", "AccessDenied", context=context)
                 return failure(BackendError("AccessDenied", "Formatter không đủ quyền cập nhật bảng lịch sử ActionHistory.", 403))
-            emit_platform_fault("formatter", "HistoryUpdateFailed")
+            emit_platform_fault("formatter", "HistoryUpdateFailed", context=context)
             raise
         record["publication_status"] = delivery
     output = {k: record.get(k) for k in PUBLIC if k != "user_id"} | {

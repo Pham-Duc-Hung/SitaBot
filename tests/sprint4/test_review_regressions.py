@@ -10,7 +10,7 @@ import pytest
 
 from backend.shared.runtime import emit_platform_fault
 from scripts.deployment_checks import validate_live_evidence, verify_callers
-from scripts.live_benchmark import benchmark_live_endpoint
+from scripts.live_benchmark import _derive_history_url, benchmark_live_endpoint
 from scripts.write_deploy_config import build_configuration
 
 
@@ -31,22 +31,52 @@ def test_config_fingerprint_tracks_secret_and_derives_role_name():
     second = build_configuration(
         template, {**env, "PARAM_GeminiSecretArn": "new-secret"}
     )
+    explicit_role = build_configuration(
+        template, {**env, "PARAM_ChatbotRoleName": "explicit-chatbot-role"}
+    )
     assert (
         first["Parameters"]["ConfigurationVersion"]
         != second["Parameters"]["ConfigurationVersion"]
     )
     assert second["Parameters"]["GeminiSecretArn"] == "new-secret"
     assert second["Parameters"]["ChatbotRoleName"] == "chatbot"
+    assert explicit_role["Parameters"]["ChatbotRoleName"] == "explicit-chatbot-role"
     assert first == build_configuration(template, env)
     with pytest.raises(ValueError, match="GeminiSecretArn"):
         build_configuration(template, {})
 
 
-def test_platform_metrics_distinguish_physical_functions(monkeypatch):
+def test_platform_metrics_distinguish_physical_functions_and_ignore_latest(
+    monkeypatch, capsys
+):
     monkeypatch.setenv("AWS_LAMBDA_FUNCTION_NAME", "sandbox-chatbot")
-    first = emit_platform_fault("chatbot", "AccessDenied")
+    monkeypatch.setenv("AWS_LAMBDA_FUNCTION_VERSION", "2")
+    from types import SimpleNamespace
+
+    first = emit_platform_fault(
+        "chatbot",
+        "AccessDenied",
+        context=SimpleNamespace(
+            invoked_function_arn="arn:aws:lambda:region:account:function:sandbox-chatbot:live"
+        ),
+    )
+    assert capsys.readouterr().out.strip() != ""
+    for qualifier in ("2", "live-test", "$LATEST"):
+        emit_platform_fault(
+            "chatbot",
+            "AccessDenied",
+            context=SimpleNamespace(
+                invoked_function_arn=f"arn:aws:lambda:region:account:function:sandbox-chatbot:{qualifier}"
+            ),
+        )
+        assert capsys.readouterr().out == ""
+    emit_platform_fault("chatbot", "AccessDenied")
+    assert capsys.readouterr().out == ""
+
     monkeypatch.setenv("AWS_LAMBDA_FUNCTION_NAME", "production-chatbot")
+    monkeypatch.setenv("AWS_LAMBDA_FUNCTION_VERSION", "$LATEST")
     second = emit_platform_fault("chatbot", "AccessDenied")
+    assert capsys.readouterr().out == ""
     assert first["FunctionName"] != second["FunctionName"]
     assert first["_aws"]["CloudWatchMetrics"][0]["Dimensions"] == [["FunctionName"]]
 
@@ -156,12 +186,29 @@ def test_verifier_checks_gateway_and_workflow_aliases():
         "ActionStateMachineArn": "workflow",
     }
     assert len(verify_callers(session, params, aliases)["gateway_routes"]) == 6
-    api.get_integrations.return_value["Items"][0]["IntegrationUri"] = aliases[
-        "chatbot"
-    ].removesuffix(":live")
-    with pytest.raises(ValueError, match="Gateway"):
-        verify_callers(session, params, aliases)
-    api.get_integrations.return_value["Items"][0]["IntegrationUri"] = aliases["chatbot"]
+    # Chặn cả trường hợp trỏ hàm gốc lẫn trỏ nhầm sang alias khác có cùng tiền tố ':live-canary'
+    for bad_uri in (
+        aliases["chatbot"].removesuffix(":live"),
+        aliases["chatbot"] + "-canary",
+    ):
+        api.get_integrations.return_value["Items"][0]["IntegrationUri"] = bad_uri
+        with pytest.raises(ValueError, match="Gateway"):
+            verify_callers(session, params, aliases)
+    # Chấp nhận định dạng URI đầy đủ của API Gateway (/functions/<alias_arn>/invocations)
+    api.get_integrations.return_value["Items"][0]["IntegrationUri"] = (
+        f"arn:aws:apigateway:ap-southeast-1:lambda:path/2015-03-31/functions/{aliases['chatbot']}/invocations"
+    )
+    assert len(verify_callers(session, params, aliases)["gateway_routes"]) == 6
+    # Chặn ApiGatewaySourceArn dùng wildcard '*' làm mất định danh API
+    with pytest.raises(ValueError, match="concrete API ID"):
+        verify_callers(
+            session,
+            {
+                **params,
+                "ApiGatewaySourceArn": "arn:aws:execute-api:ap-southeast-1:123456789012:*/*/*",
+            },
+            aliases,
+        )
     definition = json.loads(workflow.describe_state_machine.return_value["definition"])
     definition["States"]["formatter"]["Parameters"]["FunctionName"] = (
         "formatter:$LATEST"
@@ -210,3 +257,43 @@ def test_benchmark_finds_action_after_first_page_and_reports_failed_status(monke
     assert result["completed"] == result["failed"] == 1
     assert result["succeeded"] == result["timed_out"] == 0
     assert "cursor=next" in network.call_args.args[0].full_url
+    assert (
+        _derive_history_url("https://example/api/chat/")
+        == "https://example/api/history"
+    )
+
+
+def test_benchmark_excludes_unaccepted_responses_and_tracks_warm_by_iteration(
+    monkeypatch,
+):
+    now = [0.0]
+    responses = iter(
+        [
+            # Iteration 1: HTTP 200 chat_reply sau 500 ms -> bị từ chối, không được tính vào accept_ms
+            (0.500, reply({"type": "chat_reply", "message": "Xin chào"}, 200)),
+            # Iteration 2: HTTP 202 sau 20 ms, hoàn tất sau thêm 30 ms
+            (0.020, reply({"action_id": "act_2"}, 202)),
+            (0.030, reply({"items": [{"action_id": "act_2", "status": "SUCCESS"}]})),
+            # Iteration 3: HTTP 202 sau 10 ms, hoàn tất sau thêm 25 ms
+            (0.010, reply({"action_id": "act_3"}, 202)),
+            (0.025, reply({"items": [{"action_id": "act_3", "status": "SUCCESS"}]})),
+        ]
+    )
+
+    def _fake_urlopen(_req, timeout=20):
+        delta, resp = next(responses)
+        now[0] += delta
+        return resp
+
+    monkeypatch.setattr("scripts.live_benchmark.urllib.request.urlopen", _fake_urlopen)
+    monkeypatch.setattr("scripts.live_benchmark.time.perf_counter", lambda: now[0])
+    monkeypatch.setattr("scripts.live_benchmark.time.sleep", Mock())
+    result = benchmark_live_endpoint(
+        "https://example/chat", jwt_token="test", iterations=3, poll_timeout_s=5
+    )
+    assert result["accepted"] == 2
+    assert result["failed"] == 1
+    assert "accept_ms" not in result["samples"][0]
+    assert result["accept_initial_ms"] is None
+    # Cả iteration 2 (20 ms) và iteration 3 (10 ms) đều có iteration > 1 -> trung bình 15.0 ms
+    assert result["accept_warm_avg_ms"] == 15.0

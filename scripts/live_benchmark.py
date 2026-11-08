@@ -14,11 +14,8 @@ import urllib.request
 
 def _derive_history_url(chat_url):
     parsed = urllib.parse.urlsplit(chat_url)
-    path = (
-        parsed.path[:-5] + "/history"
-        if parsed.path.endswith("/chat")
-        else parsed.path.rstrip("/") + "/history"
-    )
+    clean = parsed.path.rstrip("/")
+    path = (clean[:-5] if clean.endswith("/chat") else clean) + "/history"
     return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, path, "", ""))
 
 
@@ -47,8 +44,10 @@ def _poll_result(url, token, action_id, deadline):
                 req, timeout=min(10, max(0.1, deadline - time.perf_counter()))
             ) as reply:
                 data = json.loads(reply.read())
+            if not isinstance(data, dict):
+                raise ValueError("History response must be a JSON object")
             for item in data.get("items", []):
-                if item.get("action_id") == action_id:
+                if isinstance(item, dict) and item.get("action_id") == action_id:
                     return item
             cursor = data.get("cursor")
             if not cursor:
@@ -91,7 +90,7 @@ def benchmark_live_endpoint(
         "timed_out": 0,
         "samples": [],
     }
-    accept, completed = [], []
+    completed = []
     for index in range(iterations):
         sample = {"iteration": index + 1}
         start = time.perf_counter()
@@ -104,12 +103,17 @@ def benchmark_live_endpoint(
             )
             with urllib.request.urlopen(request, timeout=20) as reply:
                 status, data = reply.status, json.loads(reply.read())
-            sample["accept_ms"] = round((time.perf_counter() - start) * 1000, 2)
-            accept.append(sample["accept_ms"])
-            if status != 202 or not data.get("action_id"):
+            accept_ms = round((time.perf_counter() - start) * 1000, 2)
+            if (
+                status != 202
+                or not isinstance(data, dict)
+                or not isinstance(data.get("action_id"), str)
+                or not data["action_id"]
+            ):
                 raise ValueError(
                     "Expected HTTP 202 with action_id for the benchmark task"
                 )
+            sample["accept_ms"] = accept_ms
             result["accepted"] += 1
             sample["action_id"] = data["action_id"]
             item = _poll_result(
@@ -135,10 +139,16 @@ def benchmark_live_endpoint(
             )
             result["failed"] += 1
         result["samples"].append(sample)
-        time.sleep(0.3)
+        if index + 1 < iterations:
+            time.sleep(0.3)
+    warm_accept = [
+        s["accept_ms"]
+        for s in result["samples"]
+        if s["iteration"] > 1 and "accept_ms" in s
+    ]
     result["accept_initial_ms"] = result["samples"][0].get("accept_ms")
     result["accept_warm_avg_ms"] = (
-        round(statistics.mean(accept[1:] or accept), 2) if accept else None
+        round(statistics.mean(warm_accept), 2) if warm_accept else None
     )
     if completed:
         result["workflow_e2e_initial_ms"] = result["samples"][0].get("workflow_e2e_ms")

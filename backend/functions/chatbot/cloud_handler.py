@@ -119,13 +119,13 @@ def handle(event, context):
         return response(202, start_workflow(item))
     except BackendError as exc:
         if exc.code in PLATFORM_FAULT_CODES:
-            emit_platform_fault("chatbot", exc.code)
+            emit_platform_fault("chatbot", exc.code, context=context)
         return response(exc.status, failure(exc))
     except (ValueError, TypeError, AttributeError, KeyError):
         return response(400, failure(BackendError("InvalidPayload", "Dữ liệu request hoặc tool call không hợp lệ.")))
     except (ClientError, BotoCoreError) as exc:
         if is_access_denied(exc):
-            emit_platform_fault("chatbot", "AccessDenied")
+            emit_platform_fault("chatbot", "AccessDenied", context=context)
             return response(403, failure(BackendError("AccessDenied", "Lambda Chatbot không đủ quyền truy cập tài nguyên nội bộ AWS.", 403)))
-        emit_platform_fault("chatbot", "BackendUnavailable")
+        emit_platform_fault("chatbot", "BackendUnavailable", context=context)
         return response(503, failure(BackendError("BackendUnavailable", "Backend gián đoạn; kiểm tra lịch sử trước khi gửi lại.", 503)))

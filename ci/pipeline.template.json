@@ -60,7 +60,8 @@
     "GeminiSecretArn": {
       "Type": "String",
       "Default": "",
-      "NoEcho": true
+      "AllowedPattern": "^$|^arn:aws[a-zA-Z-]*:secretsmanager:[a-z0-9-]+:\\d{12}:secret:.+$",
+      "ConstraintDescription": "Provide a Secrets Manager ARN, never a plaintext API key."
     },
     "ActionStateMachineArn": {
       "Type": "String",

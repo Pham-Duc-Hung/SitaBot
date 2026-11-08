@@ -4,10 +4,16 @@ Kiểm tra template Lambda canary, alarm và cấu hình pipeline.
 """
 
 import json
+import re
 from pathlib import Path
+import sys
 
 ROOT = Path(__file__).resolve().parents[1]
-FUNCTIONS = ("chatbot", "dispatcher", "formatter", "connector", "history")
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from scripts.package_sprint2 import FUNCTIONS
+
 HTTP_FUNCTIONS = {"chatbot", "connector", "history"}
 DEFAULT_TEMPLATE = ROOT / "dist" / "cdk.out" / "SatiBotBackendSprint2.template.json"
 DEFAULT_PIPELINE = ROOT / "ci" / "pipeline.template.json"
@@ -129,9 +135,9 @@ def verify_cdk_canary_template(template_path: Path = DEFAULT_TEMPLATE) -> dict:
             raise AssertionError(
                 f"Alarm {alarm_id} thiếu kết hợp AWS/Lambda Errors và SatiBot/Backend PlatformFault."
             )
-        if ":live" not in serialized or "m1 + FILL(m2, 0)" not in serialized:
+        if ":live" not in serialized or "FILL(m1, 0) + FILL(m2, 0)" not in serialized:
             raise AssertionError(
-                f"Alarm {alarm_id} chưa lọc theo ':live' hoặc thiếu biểu thức Metric Math 'm1 + FILL(m2, 0)'."
+                f"Alarm {alarm_id} chưa lọc theo ':live' hoặc thiếu biểu thức Metric Math 'FILL(m1, 0) + FILL(m2, 0)'."
             )
 
     for alias_id, alias_res in aliases.items():
@@ -218,6 +224,42 @@ def verify_cdk_canary_template(template_path: Path = DEFAULT_TEMPLATE) -> dict:
     }
 
 
+def _resolve_override_string(value):
+    """Resolve literal intrinsics; reject values whose deployed size is unknown."""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict) and set(value) == {"Fn::Join"}:
+        spec = value["Fn::Join"]
+        if not isinstance(spec, list) or len(spec) != 2:
+            raise AssertionError("Invalid ParameterOverrides Fn::Join.")
+        delimiter, parts = spec
+        if isinstance(delimiter, str) and isinstance(parts, list):
+            return delimiter.join(_resolve_override_string(part) for part in parts)
+    if isinstance(value, dict) and set(value) == {"Fn::Sub"}:
+        spec = value["Fn::Sub"]
+        if not isinstance(spec, str) and (not isinstance(spec, list) or len(spec) != 2):
+            raise AssertionError("Invalid ParameterOverrides Fn::Sub.")
+        template, variables = (spec, {}) if isinstance(spec, str) else spec
+        if isinstance(template, str) and isinstance(variables, dict):
+
+            def replace(match):
+                name = match.group(1)
+                if name.startswith("!"):
+                    return "${" + name[1:] + "}"
+                if name not in variables:
+                    raise AssertionError(
+                        "Cannot verify ParameterOverrides size with unresolved substitutions; "
+                        "use TemplateConfiguration."
+                    )
+                return _resolve_override_string(variables[name])
+
+            return re.sub(r"\$\{([^}]+)\}", replace, template)
+    raise AssertionError(
+        "Cannot verify ParameterOverrides size for unresolved intrinsics; "
+        "use TemplateConfiguration."
+    )
+
+
 def verify_pipeline_template(pipeline_path: Path = DEFAULT_PIPELINE) -> dict:
     """Xác thực CodePipeline 4 giai đoạn, TemplateConfiguration và giới hạn ParameterOverrides < 1 KB."""
     template = json.loads(pipeline_path.read_text(encoding="utf-8"))
@@ -284,16 +326,29 @@ def verify_pipeline_template(pipeline_path: Path = DEFAULT_PIPELINE) -> dict:
             "CreateReplaceChangeSet phải dùng TemplateConfiguration từ artifact DeployConfig."
         )
 
-    raw_overrides = changeset_cfg.get("ParameterOverrides", {}).get("Fn::Sub", "")
-    simulated_secret_arn = "arn:aws:secretsmanager:ap-southeast-1:123456789012:secret:satibot/production/gemini-api-key-AbCdEf"
-    rendered_overrides = raw_overrides.replace(
-        "${GeminiSecretArn}", simulated_secret_arn
-    )
-    overrides_bytes = len(rendered_overrides.encode("utf-8"))
-    if overrides_bytes >= CODEPIPELINE_PARAMETER_OVERRIDES_MAX_BYTES:
-        raise AssertionError(
-            f"ParameterOverrides vượt giới hạn 1000 byte của AWS CodePipeline ({overrides_bytes} bytes)."
-        )
+    raw_overrides = changeset_cfg.get("ParameterOverrides")
+    if raw_overrides is None:
+        overrides_bytes = 0
+    else:
+        resolved_overrides = _resolve_override_string(raw_overrides)
+        overrides_bytes = len(resolved_overrides.encode("utf-8"))
+        if overrides_bytes >= CODEPIPELINE_PARAMETER_OVERRIDES_MAX_BYTES:
+            raise AssertionError(
+                f"ParameterOverrides vượt giới hạn 1000 byte của AWS CodePipeline ({overrides_bytes} bytes)."
+            )
+        try:
+            parsed_overrides = json.loads(
+                resolved_overrides,
+                parse_constant=lambda c: (_ for _ in ()).throw(ValueError(c)),
+            )
+        except ValueError as exc:
+            raise AssertionError(
+                f"ParameterOverrides không phải JSON hợp lệ: {exc}."
+            ) from None
+        if not isinstance(parsed_overrides, dict):
+            raise AssertionError(
+                "ParameterOverrides phải là JSON object ánh xạ tên tham số sang giá trị."
+            )
 
     publish_spec = resources["PublishAssets"]["Properties"]["Source"]["BuildSpec"]
     if publish_spec != "deployment/publish-buildspec.yml":
@@ -305,6 +360,20 @@ def verify_pipeline_template(pipeline_path: Path = DEFAULT_PIPELINE) -> dict:
         raise AssertionError(
             "GeminiSecretArn must participate in the deployment configuration fingerprint."
         )
+    no_echo_params = {
+        name
+        for name, spec in template.get("Parameters", {}).items()
+        if spec.get("NoEcho") is True
+    }
+    for item in env:
+        if item.get("Type", "PLAINTEXT") == "PLAINTEXT" and isinstance(
+            item.get("Value"), dict
+        ):
+            ref_name = item["Value"].get("Ref")
+            if ref_name in no_echo_params:
+                raise AssertionError(
+                    f"NoEcho parameter '{ref_name}' must not be exposed via PLAINTEXT CodeBuild environment variables."
+                )
 
     return {
         "pipeline_template": str(pipeline_path.relative_to(ROOT))

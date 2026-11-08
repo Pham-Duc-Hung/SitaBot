@@ -7,8 +7,6 @@ import json
 import os
 import statistics
 import time
-import urllib.error
-import urllib.parse
 import urllib.request
 from unittest.mock import Mock
 import boto3

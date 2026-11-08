@@ -9,7 +9,7 @@ import os
 import subprocess
 import sys
 import pytest
-from scripts.package_sprint2 import package
+from scripts.package_sprint2 import FUNCTIONS, package
 from scripts.verify_canary_rollback import (
     CanaryAliasSimulator,
     simulate_canary_and_rollback,
@@ -19,16 +19,12 @@ from scripts.verify_canary_rollback import (
 from .helpers import ROOT
 
 
-def test_cdk_canary_stack_pipeline_and_alarm_rollback_simulation(tmp_path):
-    # Đảm bảo dist/backend có đủ 5 file zip để cdk synth độc lập trong mọi môi trường test
+@pytest.fixture(scope="module")
+def synthed_backend_template(tmp_path_factory):
     dist_backend = ROOT / "dist" / "backend"
-    if not all(
-        (dist_backend / f"{name}.zip").exists()
-        for name in ("chatbot", "dispatcher", "formatter", "connector", "history")
-    ):
+    if not all((dist_backend / f"{name}.zip").exists() for name in FUNCTIONS):
         package(dist_backend, with_dependencies=False)
-
-    cdk_out = tmp_path / "cdk.out"
+    cdk_out = tmp_path_factory.mktemp("cdk_synth")
     subprocess.run(
         [sys.executable, str(ROOT / "infrastructure" / "backend_sprint2_app.py")],
         env={
@@ -38,8 +34,13 @@ def test_cdk_canary_stack_pipeline_and_alarm_rollback_simulation(tmp_path):
         },
         check=True,
     )
-    template_file = cdk_out / "SatiBotBackendSprint2.template.json"
-    cdk_summary = verify_cdk_canary_template(template_file)
+    return cdk_out / "SatiBotBackendSprint2.template.json"
+
+
+def test_cdk_canary_stack_pipeline_and_alarm_rollback_simulation(
+    synthed_backend_template,
+):
+    cdk_summary = verify_cdk_canary_template(synthed_backend_template)
     assert cdk_summary["functions"] == 5
     assert cdk_summary["versions"] == 5
     assert cdk_summary["live_aliases"] == 5
@@ -80,28 +81,9 @@ def test_cdk_canary_stack_pipeline_and_alarm_rollback_simulation(tmp_path):
 
 
 def test_verifier_rejects_missing_alarms_missing_config_version_or_oversized_overrides(
-    tmp_path,
+    synthed_backend_template, tmp_path
 ):
-    dist_backend = ROOT / "dist" / "backend"
-    if not all(
-        (dist_backend / f"{name}.zip").exists()
-        for name in ("chatbot", "dispatcher", "formatter", "connector", "history")
-    ):
-        package(dist_backend, with_dependencies=False)
-
-    cdk_out = tmp_path / "cdk_tamper"
-    subprocess.run(
-        [sys.executable, str(ROOT / "infrastructure" / "backend_sprint2_app.py")],
-        env={
-            **dict(os.environ),
-            "CDK_OUTDIR": str(cdk_out),
-            "PRIMARY_REGION": "ap-southeast-1",
-        },
-        check=True,
-    )
-    base_tpl = json.loads(
-        (cdk_out / "SatiBotBackendSprint2.template.json").read_text(encoding="utf-8")
-    )
+    base_tpl = json.loads(synthed_backend_template.read_text(encoding="utf-8"))
 
     # 1. Xóa AlarmConfiguration khỏi DeploymentGroup -> verifier bắt buộc báo lỗi
     no_alarm_tpl = deepcopy(base_tpl)
@@ -123,14 +105,71 @@ def test_verifier_rejects_missing_alarms_missing_config_version_or_oversized_ove
     with pytest.raises(AssertionError, match="ConfigurationVersion"):
         verify_cdk_canary_template(tampered_ver_file)
 
-    # 3. ParameterOverrides vượt 1000 byte trong pipeline -> verifier bắt buộc báo lỗi
-    bad_pipeline = json.loads(
+    # 3. ParameterOverrides vượt 1000 byte (cả dạng Fn::Sub lẫn chuỗi thuần) hoặc lộ NoEcho qua PLAINTEXT -> verifier bắt buộc báo lỗi
+    base_pipeline = json.loads(
         (ROOT / "ci" / "pipeline.template.json").read_text(encoding="utf-8")
     )
-    bad_pipeline["Resources"]["Pipeline"]["Properties"]["Stages"][3]["Actions"][1][
+    for idx, overrides in enumerate(
+        (
+            {"Fn::Join": ["", ['{"Padding":"', "x" * 1050, '"}']]},
+            {"Fn::Sub": ['{"Padding":"${P}${P}"}', {"P": "x" * 600}]},
+            {"Fn::Sub": "{" + '"Padding":"' + ("x" * 1050) + '"}'},
+            "{" + '"Padding":"' + ("x" * 1050) + '"}',
+        )
+    ):
+        bad_pipeline = deepcopy(base_pipeline)
+        bad_pipeline["Resources"]["Pipeline"]["Properties"]["Stages"][3]["Actions"][1][
+            "Configuration"
+        ]["ParameterOverrides"] = overrides
+        bad_pipeline_file = tmp_path / f"bad_pipeline_{idx}.json"
+        bad_pipeline_file.write_text(json.dumps(bad_pipeline), encoding="utf-8")
+        with pytest.raises(AssertionError, match="1000 byte"):
+            verify_pipeline_template(bad_pipeline_file)
+
+    leaked_noecho = deepcopy(base_pipeline)
+    leaked_noecho["Parameters"]["GeminiSecretArn"]["NoEcho"] = True
+    leaked_file = tmp_path / "leaked_noecho.json"
+    leaked_file.write_text(json.dumps(leaked_noecho), encoding="utf-8")
+    with pytest.raises(AssertionError, match="NoEcho"):
+        verify_pipeline_template(leaked_file)
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"Ref": "DynamicValue"},
+        {"Fn::Sub": "${DynamicValue}"},
+        {"Fn::Join": ["", [{"Ref": "DynamicValue"}]]},
+        {"Fn::Join": []},
+        {"Fn::Sub": []},
+        "not-json",
+        "[]",
+        '{"X":',
+        "",
+        '{"X": NaN}',
+    ],
+)
+def test_pipeline_rejects_unverifiable_or_invalid_json_overrides(tmp_path, overrides):
+    pipeline = json.loads((ROOT / "ci/pipeline.template.json").read_text())
+    pipeline["Resources"]["Pipeline"]["Properties"]["Stages"][3]["Actions"][1][
         "Configuration"
-    ]["ParameterOverrides"] = {"Fn::Sub": "{" + '"Padding":"' + ("x" * 1050) + '"}'}
-    bad_pipeline_file = tmp_path / "bad_pipeline.json"
-    bad_pipeline_file.write_text(json.dumps(bad_pipeline), encoding="utf-8")
-    with pytest.raises(AssertionError, match="1000 byte"):
-        verify_pipeline_template(bad_pipeline_file)
+    ]["ParameterOverrides"] = overrides
+    path = tmp_path / "pipeline.json"
+    path.write_text(json.dumps(pipeline))
+    with pytest.raises(AssertionError, match="ParameterOverrides"):
+        verify_pipeline_template(path)
+
+
+def test_canary_alarm_allows_one_delayed_breaching_minute(synthed_backend_template):
+    template = json.loads(synthed_backend_template.read_text())
+    alarms = [
+        resource["Properties"]
+        for resource in template["Resources"].values()
+        if resource["Type"] == "AWS::CloudWatch::Alarm"
+    ]
+    assert len(alarms) == len(FUNCTIONS)
+    assert all(
+        alarm["EvaluationPeriods"] == 3 and alarm["DatapointsToAlarm"] == 1
+        for alarm in alarms
+    )
+    assert not template["Parameters"]["GeminiSecretArn"].get("NoEcho", False)

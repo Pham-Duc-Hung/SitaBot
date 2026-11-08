@@ -18,6 +18,10 @@ def pages(client, operation, key, **kwargs):
             return
 
 
+def _matches_alias_uri(target: str, alias_arn: str) -> bool:
+    return target == alias_arn or target.endswith(f"/{alias_arn}/invocations")
+
+
 def verify_callers(session, parameters, aliases):
     source = parameters.get("ApiGatewaySourceArn", "")
     workflow = parameters.get("ActionStateMachineArn", "")
@@ -25,7 +29,11 @@ def verify_callers(session, parameters, aliases):
         raise ValueError(
             "Provide ApiGatewaySourceArn and ActionStateMachineArn to verify caller wiring."
         )
-    api_id = source.split(":", 5)[-1].split("/")[0]
+    api_id = source.split(":", 5)[-1].split("/")[0].strip()
+    if not api_id or "*" in api_id:
+        raise ValueError(
+            "ApiGatewaySourceArn must contain a concrete API ID (not wildcard '*') to verify caller wiring."
+        )
     http = session.client("apigatewayv2")
     try:
         integrations = {
@@ -75,7 +83,7 @@ def verify_callers(session, parameters, aliases):
     for route, function in required.items():
         method, path = route.split(" ", 1)
         target = routes.get(route) or routes.get(f"{method} /api{path}", "")
-        if aliases[function] not in target:
+        if not _matches_alias_uri(target, aliases[function]):
             raise ValueError(f"Gateway route {route} must invoke {function}:live.")
         checked[route] = target
     definition = json.loads(
@@ -141,7 +149,9 @@ def validate_live_evidence(evidence):
             raise ValueError(f"{name}: unexpected validation response from alias.")
         deployment = item.get("latest_deployment")
         if not deployment:
-            raise ValueError(f"{name}: no CodeDeploy deployment evidence.")
+            raise ValueError(
+                f"{name}: no CodeDeploy deployment evidence yet (initial stack create does not trigger CodeDeploy; run a canary update first)."
+            )
         target = item.get("deployment_target", {})
         expected_name = item["live_alias_arn"].split(":function:")[1].split(":")[0]
         if (

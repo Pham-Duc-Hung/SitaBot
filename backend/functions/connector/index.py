@@ -31,9 +31,7 @@ def lambda_handler(event, context):
     stage = "dynamodb"
     try:
         payload = body(event)
-        path = event.get("rawPath") or event.get("path", "")
-        if path.startswith("/api/"):
-            path = path[4:]
+        path = (event.get("rawPath") or event.get("path", "")).removeprefix("/api")
         method = event.get("requestContext", {}).get("http", {}).get("method") or event.get("httpMethod")
         if path == "/connections" and method == "GET":
             table = cached_dynamodb_table(boto3.resource, os.environ["AWS_CONNECTIONS_TABLE"])
@@ -77,14 +75,14 @@ def lambda_handler(event, context):
     except (ValueError, TypeError, UnicodeError):
         return response(400, {"error_code": "InvalidRequest"})
     except KeyError:
-        emit_platform_fault("connector", "ConfigurationError")
+        emit_platform_fault("connector", "ConfigurationError", context=context)
         return response(503, {"error_code": "ConfigurationError"})
     except ClientError as exc:
         if stage == "dynamodb":
-            emit_platform_fault("connector", "AccessDenied" if is_access_denied(exc) else "ConnectionStoreUnavailable")
+            emit_platform_fault("connector", "AccessDenied" if is_access_denied(exc) else "ConnectionStoreUnavailable", context=context)
         return response(403 if is_access_denied(exc) else 502,
                         {"error_code": "ConnectionFailed"})
     except BotoCoreError:
         if stage == "dynamodb":
-            emit_platform_fault("connector", "ConnectionUnavailable")
+            emit_platform_fault("connector", "ConnectionUnavailable", context=context)
         return response(502, {"error_code": "ConnectionUnavailable"})

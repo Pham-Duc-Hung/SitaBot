@@ -17,7 +17,7 @@ def build_configuration(template, environment):
         if name in {"ConfigurationVersion", "BootstrapVersion"}:
             continue
         value = environment.get(f"PARAM_{name}", definition.get("Default"))
-        if name in {"ChatbotRoleName", "FormatterRoleName"}:
+        if name in {"ChatbotRoleName", "FormatterRoleName"} and not value:
             role = environment.get(f"PARAM_{name.removesuffix('Name')}Arn", "")
             value = role.rsplit("/", 1)[-1] if role else value
         if value is None:

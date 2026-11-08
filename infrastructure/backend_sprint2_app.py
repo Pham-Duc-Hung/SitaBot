@@ -38,7 +38,12 @@ history = cdk.CfnParameter(stack, "HistoryTableName", type="String")
 sessions = cdk.CfnParameter(stack, "SessionStateTableName", type="String")
 pending = cdk.CfnParameter(stack, "PendingActionTableName", type="String")
 secret = cdk.CfnParameter(
-    stack, "GeminiSecretArn", type="String", default="", no_echo=True
+    stack,
+    "GeminiSecretArn",
+    type="String",
+    default="",
+    allowed_pattern=r"^$|^arn:aws[a-zA-Z-]*:secretsmanager:[a-z0-9-]+:\d{12}:secret:.+$",
+    constraint_description="Provide a Secrets Manager ARN, never a plaintext API key.",
 )
 workflow = cdk.CfnParameter(stack, "ActionStateMachineArn", type="String", default="")
 appsync_url = cdk.CfnParameter(stack, "AppSyncGraphqlUrl", type="String", default="")
@@ -72,12 +77,23 @@ cdk.CfnRule(
     rule_condition=cdk.Fn.condition_equals(grant_integration.value_as_string, "true"),
     assertions=[
         cdk.CfnRuleAssertion(
-            assert_=cdk.Fn.condition_not(
-                cdk.Fn.condition_equals(param.value_as_string, "")
+            assert_=cdk.Fn.condition_or(
+                cdk.Fn.condition_equals(workflow.value_as_string, ""),
+                cdk.Fn.condition_not(
+                    cdk.Fn.condition_equals(role_names["chatbot"].value_as_string, "")
+                ),
             ),
-            assert_description="Provide the IAM role name when granting integration permissions.",
-        )
-        for param in role_names.values()
+            assert_description="Provide ChatbotRoleName when granting Step Functions start permission.",
+        ),
+        cdk.CfnRuleAssertion(
+            assert_=cdk.Fn.condition_or(
+                cdk.Fn.condition_equals(appsync_arn.value_as_string, ""),
+                cdk.Fn.condition_not(
+                    cdk.Fn.condition_equals(role_names["formatter"].value_as_string, "")
+                ),
+            ),
+            assert_description="Provide FormatterRoleName when granting AppSync publish permission.",
+        ),
     ],
 )
 
@@ -123,12 +139,9 @@ codedeploy_role = iam.Role.from_role_arn(
 codedeploy_app = codedeploy.LambdaApplication(stack, "BackendCodeDeployApplication")
 cdk.CfnOutput(stack, "CodeDeployApplicationName", value=codedeploy_app.application_name)
 
-role_params: dict[str, cdk.CfnParameter] = {}
-
 for name in FUNCTIONS:
     title = name.title()
     role_arn = cdk.CfnParameter(stack, f"{title}RoleArn", type="String")
-    role_params[name] = role_arn
     alarm_name = cdk.CfnParameter(stack, f"{title}AlarmName", type="String", default="")
     has_external_alarm = cdk.CfnCondition(
         stack,
@@ -214,7 +227,8 @@ for name in FUNCTIONS:
         f"{name}CanaryHealthAlarm",
         alarm_description=f"Canary rollback alarm for {name} (:live Errors + PlatformFaults)",
         comparison_operator="GreaterThanOrEqualToThreshold",
-        evaluation_periods=1,
+        # Allow delayed metric ingestion while reacting to one breaching minute.
+        evaluation_periods=3,
         datapoints_to_alarm=1,
         threshold=1,
         treat_missing_data="notBreaching",
@@ -261,7 +275,7 @@ for name in FUNCTIONS:
             ),
             cloudwatch.CfnAlarm.MetricDataQueryProperty(
                 id="e1",
-                expression="m1 + FILL(m2, 0)",
+                expression="FILL(m1, 0) + FILL(m2, 0)",
                 label=f"{name} Canary Health Faults",
                 return_data=True,
             ),

@@ -7,25 +7,20 @@ import argparse
 from dataclasses import dataclass, field
 import json
 from pathlib import Path
+import sys
 
-try:
-    from scripts.deployment_checks import validate_live_evidence, verify_callers
-    from scripts.deployment_template_checks import (
-        FUNCTIONS,
-        DEFAULT_TEMPLATE,
-        DEFAULT_PIPELINE,
-        verify_cdk_canary_template,
-        verify_pipeline_template,
-    )
-except ModuleNotFoundError:
-    from deployment_checks import validate_live_evidence, verify_callers
-    from deployment_template_checks import (
-        FUNCTIONS,
-        DEFAULT_TEMPLATE,
-        DEFAULT_PIPELINE,
-        verify_cdk_canary_template,
-        verify_pipeline_template,
-    )
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from scripts.deployment_checks import validate_live_evidence, verify_callers
+from scripts.deployment_template_checks import (
+    FUNCTIONS,
+    DEFAULT_TEMPLATE,
+    DEFAULT_PIPELINE,
+    verify_cdk_canary_template,
+    verify_pipeline_template,
+)
 
 
 @dataclass

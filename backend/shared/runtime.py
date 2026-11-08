@@ -166,7 +166,7 @@ def _config_signature(config: Any) -> Any:
 
 
 def _store_bounded(cache: Dict[tuple, Any], key: tuple, value: Any) -> Any:
-    if len(cache) >= _MAX_CACHE_ENTRIES:
+    if key not in cache and len(cache) >= _MAX_CACHE_ENTRIES:
         oldest = next(iter(cache))
         cache.pop(oldest, None)
     cache[key] = value
@@ -222,10 +222,13 @@ def cached_boto_session(session_factory: Callable[..., Any]) -> Any:
     return _store_bounded(_SESSION_CACHE, key, session_factory())
 
 
-def emit_platform_fault(function_name: str, error_code: str) -> Dict[str, Any]:
+def emit_platform_fault(
+    function_name: str, error_code: str, *, context=None
+) -> Dict[str, Any]:
     """Emit CloudWatch Embedded Metric Format (EMF) signal for platform/deployment faults."""
     fn = str(function_name or "unknown")[:64]
     code = str(error_code or "PlatformFault")[:128]
+    version = os.environ.get("AWS_LAMBDA_FUNCTION_VERSION", "").strip()
     _FAULT_COUNTS[f"{fn}:{code}"] = _FAULT_COUNTS.get(f"{fn}:{code}", 0) + 1
     payload = {
         "_aws": {
@@ -240,11 +243,19 @@ def emit_platform_fault(function_name: str, error_code: str) -> Dict[str, Any]:
         },
         "Function": fn,
         "FunctionName": os.environ.get("AWS_LAMBDA_FUNCTION_NAME", fn),
+        "FunctionVersion": version or "local",
         "error_code": code,
         EMF_METRIC_NAME: 1,
     }
     line = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
-    if os.environ.get("AWS_LAMBDA_FUNCTION_NAME"):
+    invoked_arn = getattr(context, "invoked_function_arn", "")
+    # Only requests through the monitored alias may contribute to its rollback alarm.
+    if (
+        os.environ.get("AWS_LAMBDA_FUNCTION_NAME")
+        and version != "$LATEST"
+        and isinstance(invoked_arn, str)
+        and invoked_arn.endswith(":live")
+    ):
         print(line, file=sys.stdout, flush=True)
     else:
         _emf_logger.debug(line)
