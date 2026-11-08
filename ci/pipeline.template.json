@@ -1,6 +1,6 @@
 {
   "AWSTemplateFormatVersion": "2010-09-09",
-  "Description": "Quang Sprint 2 CI only; roles and artifact bucket supplied by infrastructure owner.",
+  "Description": "Author: Trinh Thien Quang - SatiBot Backend CI/CD Pipeline with Manual Approval, CDK Asset Publishing, CloudFormation ChangeSet Deployment, and CodeDeploy Canary/Rollback.",
   "Parameters": {
     "ConnectionArn": {
       "Type": "String",
@@ -15,12 +15,116 @@
     "BuildRoleArn": {
       "Type": "String"
     },
+    "CloudFormationExecutionRoleArn": {
+      "Type": "String"
+    },
     "ArtifactBucket": {
       "Type": "String"
     },
     "Branch": {
       "Type": "String",
       "Default": "main"
+    },
+    "ApprovalNotificationTopicArn": {
+      "Type": "String",
+      "Default": ""
+    },
+    "BackendStackName": {
+      "Type": "String",
+      "Default": "SatiBotBackendSprint2"
+    },
+    "BackendChangeSetName": {
+      "Type": "String",
+      "Default": "satibot-backend-canary-changeset"
+    },
+    "CanaryDeploymentConfig": {
+      "Type": "String",
+      "Default": "CodeDeployDefault.LambdaCanary10Percent5Minutes"
+    },
+    "ConnectionsTableName": {
+      "Type": "String"
+    },
+    "HistoryTableName": {
+      "Type": "String"
+    },
+    "SessionStateTableName": {
+      "Type": "String"
+    },
+    "PendingActionTableName": {
+      "Type": "String"
+    },
+    "GeminiSecretArn": {
+      "Type": "String",
+      "Default": "",
+      "NoEcho": true
+    },
+    "ActionStateMachineArn": {
+      "Type": "String",
+      "Default": ""
+    },
+    "AppSyncGraphqlUrl": {
+      "Type": "String",
+      "Default": ""
+    },
+    "ChatbotRoleArn": {
+      "Type": "String"
+    },
+    "DispatcherRoleArn": {
+      "Type": "String"
+    },
+    "FormatterRoleArn": {
+      "Type": "String"
+    },
+    "ConnectorRoleArn": {
+      "Type": "String"
+    },
+    "HistoryRoleArn": {
+      "Type": "String"
+    },
+    "CodeDeployRoleArn": {
+      "Type": "String"
+    },
+    "ChatbotAlarmName": {
+      "Type": "String",
+      "Default": ""
+    },
+    "DispatcherAlarmName": {
+      "Type": "String",
+      "Default": ""
+    },
+    "FormatterAlarmName": {
+      "Type": "String",
+      "Default": ""
+    },
+    "ConnectorAlarmName": {
+      "Type": "String",
+      "Default": ""
+    },
+    "HistoryAlarmName": {
+      "Type": "String",
+      "Default": ""
+    }
+  },
+  "Conditions": {
+    "CreateConnection": {
+      "Fn::Equals": [
+        {
+          "Ref": "ConnectionArn"
+        },
+        ""
+      ]
+    },
+    "HasApprovalNotificationTopic": {
+      "Fn::Not": [
+        {
+          "Fn::Equals": [
+            {
+              "Ref": "ApprovalNotificationTopicArn"
+            },
+            ""
+          ]
+        }
+      ]
     }
   },
   "Resources": {
@@ -61,6 +165,33 @@
           ]
         },
         "TimeoutInMinutes": 30
+      }
+    },
+    "PublishAssets": {
+      "Type": "AWS::CodeBuild::Project",
+      "Properties": {
+        "ServiceRole": {
+          "Ref": "BuildRoleArn"
+        },
+        "Artifacts": {
+          "Type": "CODEPIPELINE"
+        },
+        "Source": {
+          "Type": "CODEPIPELINE",
+          "BuildSpec": "version: 0.2\nphases:\n  install:\n    runtime-versions:\n      nodejs: '22'\n  build:\n    commands:\n      - npx --yes cdk-assets@2 publish --path cdk.out/SatiBotBackendSprint2.assets.json -v\n"
+        },
+        "Environment": {
+          "Type": "LINUX_CONTAINER",
+          "ComputeType": "BUILD_GENERAL1_SMALL",
+          "Image": "aws/codebuild/standard:7.0",
+          "EnvironmentVariables": [
+            {
+              "Name": "AWS_DEFAULT_REGION",
+              "Value": "ap-southeast-1"
+            }
+          ]
+        },
+        "TimeoutInMinutes": 15
       }
     },
     "Pipeline": {
@@ -146,25 +277,137 @@
                 ]
               }
             ]
+          },
+          {
+            "Name": "ManualApproval",
+            "Actions": [
+              {
+                "Name": "ApproveBackendDeployment",
+                "ActionTypeId": {
+                  "Category": "Approval",
+                  "Owner": "AWS",
+                  "Provider": "Manual",
+                  "Version": "1"
+                },
+                "Configuration": {
+                  "CustomData": "Xác nhận kết quả pytest, kiểm tra gói ZIP và CDK synth ở bước BuildTestSynth trước khi triển khai Canary Backend lên ap-southeast-1.",
+                  "NotificationArn": {
+                    "Fn::If": [
+                      "HasApprovalNotificationTopic",
+                      {
+                        "Ref": "ApprovalNotificationTopicArn"
+                      },
+                      {
+                        "Ref": "AWS::NoValue"
+                      }
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "Name": "DeployBackend",
+            "Actions": [
+              {
+                "Name": "PublishCdkAssets",
+                "RunOrder": 1,
+                "Region": "ap-southeast-1",
+                "ActionTypeId": {
+                  "Category": "Build",
+                  "Owner": "AWS",
+                  "Provider": "CodeBuild",
+                  "Version": "1"
+                },
+                "Configuration": {
+                  "ProjectName": {
+                    "Ref": "PublishAssets"
+                  }
+                },
+                "InputArtifacts": [
+                  {
+                    "Name": "BuildOutput"
+                  }
+                ]
+              },
+              {
+                "Name": "CreateReplaceChangeSet",
+                "RunOrder": 2,
+                "Region": "ap-southeast-1",
+                "ActionTypeId": {
+                  "Category": "Deploy",
+                  "Owner": "AWS",
+                  "Provider": "CloudFormation",
+                  "Version": "1"
+                },
+                "InputArtifacts": [
+                  {
+                    "Name": "BuildOutput"
+                  }
+                ],
+                "Configuration": {
+                  "ActionMode": "CHANGE_SET_REPLACE",
+                  "StackName": {
+                    "Ref": "BackendStackName"
+                  },
+                  "ChangeSetName": {
+                    "Ref": "BackendChangeSetName"
+                  },
+                  "RoleArn": {
+                    "Ref": "CloudFormationExecutionRoleArn"
+                  },
+                  "TemplatePath": "BuildOutput::cdk.out/SatiBotBackendSprint2.template.json",
+                  "Capabilities": "CAPABILITY_NAMED_IAM,CAPABILITY_AUTO_EXPAND",
+                  "ParameterOverrides": {
+                    "Fn::Sub": "{\"ConnectionsTableName\":\"${ConnectionsTableName}\",\"HistoryTableName\":\"${HistoryTableName}\",\"SessionStateTableName\":\"${SessionStateTableName}\",\"PendingActionTableName\":\"${PendingActionTableName}\",\"GeminiSecretArn\":\"${GeminiSecretArn}\",\"ActionStateMachineArn\":\"${ActionStateMachineArn}\",\"AppSyncGraphqlUrl\":\"${AppSyncGraphqlUrl}\",\"ChatbotRoleArn\":\"${ChatbotRoleArn}\",\"DispatcherRoleArn\":\"${DispatcherRoleArn}\",\"FormatterRoleArn\":\"${FormatterRoleArn}\",\"ConnectorRoleArn\":\"${ConnectorRoleArn}\",\"HistoryRoleArn\":\"${HistoryRoleArn}\",\"CodeDeployRoleArn\":\"${CodeDeployRoleArn}\",\"CanaryDeploymentConfig\":\"${CanaryDeploymentConfig}\",\"ChatbotAlarmName\":\"${ChatbotAlarmName}\",\"DispatcherAlarmName\":\"${DispatcherAlarmName}\",\"FormatterAlarmName\":\"${FormatterAlarmName}\",\"ConnectorAlarmName\":\"${ConnectorAlarmName}\",\"HistoryAlarmName\":\"${HistoryAlarmName}\"}"
+                  }
+                }
+              },
+              {
+                "Name": "ExecuteChangeSet",
+                "RunOrder": 3,
+                "Region": "ap-southeast-1",
+                "ActionTypeId": {
+                  "Category": "Deploy",
+                  "Owner": "AWS",
+                  "Provider": "CloudFormation",
+                  "Version": "1"
+                },
+                "Configuration": {
+                  "ActionMode": "CHANGE_SET_EXECUTE",
+                  "StackName": {
+                    "Ref": "BackendStackName"
+                  },
+                  "ChangeSetName": {
+                    "Ref": "BackendChangeSetName"
+                  }
+                }
+              }
+            ]
           }
         ]
       }
-    }
-  },
-  "Conditions": {
-    "CreateConnection": {
-      "Fn::Equals": [
-        {
-          "Ref": "ConnectionArn"
-        },
-        ""
-      ]
     }
   },
   "Outputs": {
     "PipelineName": {
       "Value": {
         "Ref": "Pipeline"
+      }
+    },
+    "BuildProjectName": {
+      "Value": {
+        "Ref": "Build"
+      }
+    },
+    "AssetPublishProjectName": {
+      "Value": {
+        "Ref": "PublishAssets"
+      }
+    },
+    "TargetBackendStackName": {
+      "Value": {
+        "Ref": "BackendStackName"
       }
     }
   }

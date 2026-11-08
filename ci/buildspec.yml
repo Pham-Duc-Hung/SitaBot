@@ -17,6 +17,7 @@ phases:
       - python scripts/verify_backend_artifacts.py
       - python scripts/build_frontend_ci.py
       - cdk synth --app "python infrastructure/backend_sprint2_app.py" --output dist/cdk.out
+      - python scripts/verify_canary_rollback.py
 artifacts:
   base-directory: dist
   files:

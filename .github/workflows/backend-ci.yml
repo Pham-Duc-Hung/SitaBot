@@ -31,6 +31,7 @@ jobs:
       - run: python scripts/verify_backend_artifacts.py
       - run: python scripts/build_frontend_ci.py
       - run: cdk synth --app "python infrastructure/backend_sprint2_app.py" --output dist/cdk.out
+      - run: python scripts/verify_canary_rollback.py
       - uses: actions/upload-artifact@v4
         with:
           name: sprint2-build

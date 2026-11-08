@@ -14,7 +14,7 @@ from botocore.exceptions import BotoCoreError, ClientError
 from backend.shared import gemini
 from backend.shared.cloud_errors import BackendError, failure
 from backend.shared.http_api import body, response, user_id, reject_constant
-from backend.shared.runtime import get_aws_region
+from backend.shared.runtime import cached_boto_client, get_aws_region, is_access_denied
 from backend.shared.tool_registry import llm_tools, validate_call
 from backend.shared.workflow_store import Store
 
@@ -31,7 +31,7 @@ def start_workflow(item):
         raise BackendError("WorkflowNotConfigured", "Chưa cấu hình Step Functions.", 503)
     data = json.dumps({"user_id": item["user_id"], "action_id": item["action_id"]}, sort_keys=True, separators=(",", ":"))
     try:
-        boto3.client("stepfunctions").start_execution(stateMachineArn=arn, name=item["action_id"], input=data)
+        cached_boto_client(boto3.client, "stepfunctions").start_execution(stateMachineArn=arn, name=item["action_id"], input=data)
     except ClientError as exc:
         if exc.response["Error"]["Code"] != "ExecutionAlreadyExists":
             raise
@@ -111,5 +111,7 @@ def handle(event, context):
         return response(exc.status, failure(exc))
     except (ValueError, TypeError, AttributeError, KeyError):
         return response(400, failure(BackendError("InvalidPayload", "Dữ liệu request hoặc tool call không hợp lệ.")))
-    except (ClientError, BotoCoreError):
+    except (ClientError, BotoCoreError) as exc:
+        if is_access_denied(exc):
+            return response(403, failure(BackendError("AccessDenied", "Lambda Chatbot không đủ quyền truy cập tài nguyên nội bộ AWS.", 403)))
         return response(503, failure(BackendError("BackendUnavailable", "Backend gián đoạn; kiểm tra lịch sử trước khi gửi lại.", 503)))

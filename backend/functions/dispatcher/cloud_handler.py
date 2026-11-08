@@ -10,9 +10,11 @@ import boto3
 from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError
 from backend.shared.cloud_errors import BackendError, failure
-from backend.shared.runtime import redact_sensitive
+from backend.shared.runtime import cached_boto_client, is_access_denied, redact_sensitive
 from backend.shared.tool_registry import validate_call
 from backend.shared.workflow_store import Store, json_safe, connection_identity
+
+_STS_CONFIG = Config(retries={"max_attempts": 2})
 
 
 def _execute(item, credentials):
@@ -39,6 +41,8 @@ def normalize(raw):
     if isinstance(error, dict):
         error = error.get("code") or error.get("Code") or "ServiceError"
     result["error_code"] = str(error)[:128] if error else None
+    if isinstance(raw.get("required_permission"), str) and raw["required_permission"]:
+        result["required_permission"] = raw["required_permission"][:128]
     result = json_safe(result)
     if len(json.dumps(result, default=str).encode()) > 96000:
         result["data"] = {"truncated": True, "message": "Kết quả quá lớn; tra cứu tài nguyên để xem chi tiết."}
@@ -66,20 +70,26 @@ def handle(event, context):
         store.claim(item)
     except BackendError as exc:
         return failure(exc)
-    except (ClientError, BotoCoreError):
+    except (ClientError, BotoCoreError) as exc:
+        if is_access_denied(exc):
+            return failure(BackendError("AccessDenied", "Dispatcher không đủ quyền truy cập bảng điều phối tác vụ.", 403))
         return failure(BackendError("ActionStoreUnavailable", "Không đối soát được tác vụ; chưa thực thi.", 503))
     try:
         connection = store.connection(owner)
         if connection_identity(connection) != item["connection_id"]:
             raise BackendError("ConnectionChanged", "Kết nối AWS đã thay đổi; hãy tạo và duyệt yêu cầu mới.", 409)
-        credentials = boto3.client("sts", config=Config(retries={"max_attempts": 2})).assume_role(
+        sts_client = cached_boto_client(boto3.client, "sts", config=_STS_CONFIG, config_tag="dispatcher-sts")
+        credentials = sts_client.assume_role(
             RoleArn=connection["role_arn"], ExternalId=connection["external_id"],
             RoleSessionName="satibot-" + action_id[-32:], DurationSeconds=900)["Credentials"]
         credentials = {**credentials, "Region": item["region"]}
     except BackendError as exc:
         result = failure(exc)
-    except (ClientError, BotoCoreError):
-        result = failure(BackendError("AwsConnectionUnavailable", "Không thể lấy quyền AWS; chưa thực thi tác vụ.", 502))
+    except (ClientError, BotoCoreError) as exc:
+        if is_access_denied(exc):
+            result = failure(BackendError("AccessDenied", "Không đủ quyền STS AssumeRole hoặc đọc kết nối AWS; chưa thực thi tác vụ.", 403))
+        else:
+            result = failure(BackendError("AwsConnectionUnavailable", "Không thể lấy quyền AWS; chưa thực thi tác vụ.", 502))
     else:
         # A transport failure can happen after mutation. Never retry a service here.
         try:

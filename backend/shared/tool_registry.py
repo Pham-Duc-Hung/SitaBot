@@ -17,11 +17,30 @@ SOURCES = (
     ("iam", "backend.functions.dispatcher.services.iam_service", "IAM_TOOL_SCHEMAS"),
 )
 
+_CACHE_SIGNATURE = None
+_REGISTRY_CACHE = None
+_VALIDATOR_CACHE = {}
+_LLM_TOOLS_CACHE = None
+_REGISTRY_STATS = {"hits": 0, "misses": 0}
 
-def registry():
-    result = {}
+
+def _ensure_cache():
+    global _CACHE_SIGNATURE, _REGISTRY_CACHE, _VALIDATOR_CACHE, _LLM_TOOLS_CACHE
+    loaded = []
+    signature = []
     for service, module, constant in SOURCES:
-        for raw in getattr(importlib.import_module(module), constant, ()):
+        raw_items = getattr(importlib.import_module(module), constant, ())
+        loaded.append((service, raw_items))
+        signature.append((service, id(raw_items), len(raw_items)))
+    signature_tuple = tuple(signature)
+    if _REGISTRY_CACHE is not None and _CACHE_SIGNATURE == signature_tuple:
+        _REGISTRY_STATS["hits"] += 1
+        return _REGISTRY_CACHE
+    _REGISTRY_STATS["misses"] += 1
+    result = {}
+    validators = {}
+    for service, raw_items in loaded:
+        for raw in raw_items:
             tool = deepcopy(raw)
             tool["service"] = service
             tool["action"] = tool.get("action", tool["name"])
@@ -32,18 +51,57 @@ def registry():
             if tool["name"] in result:
                 raise BackendError("InvalidToolConfiguration", "Trùng tên công cụ.", 503)
             result[tool["name"]] = tool
-    return result
+            validators[tool["name"]] = Draft7Validator(tool["parameters"])
+    _CACHE_SIGNATURE = signature_tuple
+    _REGISTRY_CACHE = result
+    _VALIDATOR_CACHE = validators
+    _LLM_TOOLS_CACHE = tuple(
+        {
+            "type": "function",
+            "function": {
+                "name": t["name"],
+                "description": t["description"],
+                "parameters": t["parameters"],
+            },
+        }
+        for t in result.values()
+    )
+    return _REGISTRY_CACHE
+
+
+def clear_registry_cache():
+    global _CACHE_SIGNATURE, _REGISTRY_CACHE, _VALIDATOR_CACHE, _LLM_TOOLS_CACHE
+    _CACHE_SIGNATURE = None
+    _REGISTRY_CACHE = None
+    _VALIDATOR_CACHE = {}
+    _LLM_TOOLS_CACHE = None
+    _REGISTRY_STATS["hits"] = 0
+    _REGISTRY_STATS["misses"] = 0
+
+
+def registry_cache_stats():
+    return {
+        "hits": _REGISTRY_STATS["hits"],
+        "misses": _REGISTRY_STATS["misses"],
+        "tool_count": len(_REGISTRY_CACHE or {}),
+    }
+
+
+def registry():
+    return _ensure_cache()
 
 
 def validate_call(name, parameters):
-    tool = registry().get(name) if isinstance(name, str) else None
+    tools = _ensure_cache()
+    tool = tools.get(name) if isinstance(name, str) else None
     if not tool:
         raise BackendError("UnsupportedTool", "Công cụ chưa có schema được đăng ký.")
-    if not isinstance(parameters, dict) or not Draft7Validator(tool["parameters"]).is_valid(parameters):
+    validator = _VALIDATOR_CACHE[name]
+    if not isinstance(parameters, dict) or not validator.is_valid(parameters):
         raise BackendError("InvalidParameters", "Tham số công cụ không hợp lệ; hãy bổ sung hoặc sửa yêu cầu.")
     return tool
 
 
 def llm_tools():
-    return [{"type": "function", "function": {"name": t["name"], "description": t["description"],
-             "parameters": t["parameters"]}} for t in registry().values()]
+    _ensure_cache()
+    return list(_LLM_TOOLS_CACHE)

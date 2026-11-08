@@ -10,7 +10,7 @@ import logging
 from botocore.exceptions import ClientError
 from backend.shared import appsync, gemini
 from backend.shared.cloud_errors import BackendError, failure
-from backend.shared.runtime import redact_sensitive
+from backend.shared.runtime import is_access_denied, redact_sensitive
 from backend.shared.workflow_store import pack, table
 
 logger = logging.getLogger(__name__)
@@ -28,6 +28,8 @@ def handle(event, context):
     record.update(status=result.get("status", "ERROR"), data=result.get("data", {}),
                   message=result.get("message") or "Đã nhận kết quả AWS.", error_code=result.get("error_code"),
                   formatter_fallback=False, publication_status="PENDING")
+    if isinstance(result.get("required_permission"), str) and result["required_permission"]:
+        record["required_permission"] = result["required_permission"][:128]
     # Keep authoritative status/data/resource identifiers outside model-generated prose.
     try:
         reply = gemini.complete([
@@ -46,6 +48,8 @@ def handle(event, context):
                          ReturnValuesOnConditionCheckFailure="ALL_OLD")
     except ClientError as exc:
         if exc.response["Error"]["Code"] != "ConditionalCheckFailedException":
+            if is_access_denied(exc):
+                return failure(BackendError("AccessDenied", "Formatter không đủ quyền ghi bảng lịch sử ActionHistory.", 403))
             raise  # Workflow may retry Formatter only; resource execution is already cached.
         old = exc.response.get("Item")
         if not old:
@@ -62,11 +66,19 @@ def handle(event, context):
         except Exception:
             delivery = "FAILED"
             logger.warning("AppSync publication failed action_id=%s", event["action_id"])
-        history.update_item(Key={"user_id": record["user_id"], "created_at": record["created_at"]},
-            UpdateExpression="SET publication_status = :status",
-            ConditionExpression="action_id = :action",
-            ExpressionAttributeValues={":status": delivery, ":action": record["action_id"]})
+        try:
+            history.update_item(Key={"user_id": record["user_id"], "created_at": record["created_at"]},
+                UpdateExpression="SET publication_status = :status",
+                ConditionExpression="action_id = :action",
+                ExpressionAttributeValues={":status": delivery, ":action": record["action_id"]})
+        except ClientError as exc:
+            if is_access_denied(exc):
+                return failure(BackendError("AccessDenied", "Formatter không đủ quyền cập nhật bảng lịch sử ActionHistory.", 403))
+            raise
         record["publication_status"] = delivery
-    return {k: record.get(k) for k in PUBLIC if k != "user_id"} | {
+    output = {k: record.get(k) for k in PUBLIC if k != "user_id"} | {
         "type": "action_result", "error_code": record.get("error_code"),
         "formatter_fallback": record["formatter_fallback"], "publication_status": record["publication_status"]}
+    if record.get("required_permission"):
+        output["required_permission"] = record["required_permission"]
+    return output

@@ -5,6 +5,7 @@ Ký IAM SigV4 và gửi kết quả tác vụ tới AppSync GraphQL.
 
 import json
 import os
+import urllib.error
 import urllib.request
 from urllib.parse import urlsplit
 
@@ -12,6 +13,7 @@ import boto3
 from botocore.auth import SigV4Auth
 from botocore.awsrequest import AWSRequest
 from backend.shared.cloud_errors import BackendError
+from backend.shared.runtime import cached_boto_session
 
 MUTATION = '''mutation PublishActionResult($event: ActionResultInput!) {
   publishActionResult(event: $event) {
@@ -27,13 +29,20 @@ def publish(event):
     if host.scheme != "https" or not host.hostname or not host.hostname.endswith(".amazonaws.com") or ".appsync-api." not in host.hostname or host.path != "/graphql":
         raise BackendError("AppSyncNotConfigured", "Chưa cấu hình endpoint AppSync hợp lệ.", 503)
     data = json.dumps({"query": MUTATION, "variables": {"event": {**event, "data": json.dumps(event.get("data", {}), ensure_ascii=False, default=str)}}}, ensure_ascii=False).encode()
-    credentials = boto3.Session().get_credentials()
+    credentials = cached_boto_session(boto3.Session).get_credentials()
     if not credentials:
         raise BackendError("AppSyncUnavailable", "Thiếu IAM credentials cho AppSync.", 503)
     region = host.hostname.split(".appsync-api.", 1)[1].split(".")[0]
     request = AWSRequest(method="POST", url=endpoint, data=data, headers={"Content-Type": "application/json"})
     SigV4Auth(credentials.get_frozen_credentials(), "appsync", region).add_auth(request)
-    with urllib.request.urlopen(urllib.request.Request(endpoint, data=data, headers=dict(request.headers), method="POST"), timeout=5) as reply:
-        result = json.loads(reply.read(131073))
+    try:
+        with urllib.request.urlopen(urllib.request.Request(endpoint, data=data, headers=dict(request.headers), method="POST"), timeout=5) as reply:
+            result = json.loads(reply.read(131073))
+    except urllib.error.HTTPError as exc:
+        if exc.code in {401, 403}:
+            raise BackendError("AppSyncAccessDenied", "Formatter không đủ quyền phát sự kiện AppSync GraphQL.", 403) from None
+        raise BackendError("AppSyncUnavailable", "Không phát được kết quả AppSync.", 502) from None
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError):
+        raise BackendError("AppSyncUnavailable", "Không phát được kết quả AppSync.", 502) from None
     if result.get("errors") or not result.get("data", {}).get("publishActionResult"):
         raise BackendError("AppSyncUnavailable", "Không phát được kết quả AppSync.", 502)
