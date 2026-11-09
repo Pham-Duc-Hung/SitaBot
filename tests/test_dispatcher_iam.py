@@ -46,6 +46,13 @@ def run(action, confirmed=False, **p):
     return iam.execute(None, {"action": action, "parameters": p, "confirmed": confirmed})
 
 
+def approved_delete(action, **parameters):
+    preview = run("preview_" + action, **parameters)
+    assert preview["status"] == "SUCCESS"
+    return run(action, True, **parameters,
+               preview_fingerprint=preview["data"]["preview_fingerprint"])
+
+
 def writes(client):
     prefixes = ("create_", "update_", "put_", "delete_", "attach_", "detach_", "remove_")
     return [c for c in client.mock_calls if c[0].startswith(prefixes)]
@@ -143,7 +150,7 @@ def test_changed_preview_requires_new_confirmation(clients):
 
 
 def test_delete_role_removes_only_direct_links_in_order(clients):
-    result = run("delete_role", True, role_name="demo")
+    result = approved_delete("delete_role", role_name="demo")
     assert result["status"] == "SUCCESS"
     assert writes(clients[0]) == [
         call.detach_role_policy(RoleName="demo", PolicyArn=ARN),
@@ -153,7 +160,7 @@ def test_delete_role_removes_only_direct_links_in_order(clients):
 
 
 def test_explicit_optional_profile_deletion_checks_all_enabled_regions(clients):
-    assert run("delete_role", True, role_name="demo", delete_instance_profiles=["demo"])["status"] == "SUCCESS"
+    assert approved_delete("delete_role", role_name="demo", delete_instance_profiles=["demo"])["status"] == "SUCCESS"
     clients[0].delete_instance_profile.assert_called_once_with(InstanceProfileName="demo")
     assert clients[1].describe_iam_instance_profile_associations.call_count == 4
 
@@ -161,13 +168,13 @@ def test_explicit_optional_profile_deletion_checks_all_enabled_regions(clients):
 def test_in_use_profile_stops_before_mutations(clients):
     clients[1].describe_iam_instance_profile_associations.return_value = {"IamInstanceProfileAssociations": [
         {"State": "associated", "IamInstanceProfile": {"Arn": PROFILE_ARN}}]}
-    assert run("delete_role", True, role_name="demo", delete_instance_profiles=["demo"])["status"] == "ERROR"
+    assert approved_delete("delete_role", role_name="demo", delete_instance_profiles=["demo"])["status"] == "ERROR"
     assert not writes(clients[0])
 
 
 def test_profile_still_nonempty_does_not_delete_profile_or_role(clients):
     clients[0].get_instance_profile.return_value = {"InstanceProfile": {"Roles": [{"RoleName": "other"}]}}
-    result = run("delete_role", True, role_name="demo", delete_instance_profiles=["demo"])
+    result = approved_delete("delete_role", role_name="demo", delete_instance_profiles=["demo"])
     assert result["status"] == "ERROR" and result["data"]["completed_steps"]
     clients[0].delete_instance_profile.assert_not_called()
     clients[0].delete_role.assert_not_called()
@@ -176,7 +183,7 @@ def test_profile_still_nonempty_does_not_delete_profile_or_role(clients):
 @pytest.mark.parametrize("code", ["AccessDenied", "DeleteConflict", "NoSuchEntity", "Throttling", "ServiceFailure"])
 def test_failure_reports_partial_progress_without_claiming_rollback(clients, code):
     clients[0].delete_role_policy.side_effect = ClientError({"Error": {"Code": code, "Message": "AWS failure"}}, "DeleteRolePolicy")
-    result = run("delete_role", True, role_name="demo")
+    result = approved_delete("delete_role", role_name="demo")
     assert result["error_code"] == code
     assert len(result["data"]["completed_steps"]) == 1
     assert result["data"]["failed_step"]["operation"] == "delete_role_policy"
@@ -185,7 +192,7 @@ def test_failure_reports_partial_progress_without_claiming_rollback(clients, cod
 
 
 def test_policy_delete_only_nondefault_versions_and_role_attachments(clients):
-    assert run("delete_policy", True, policy_arn=ARN)["status"] == "SUCCESS"
+    assert approved_delete("delete_policy", policy_arn=ARN)["status"] == "SUCCESS"
     assert writes(clients[0]) == [call.detach_role_policy(RoleName="demo", PolicyArn=ARN),
         call.delete_policy_version(PolicyArn=ARN, VersionId="v1"), call.delete_policy(PolicyArn=ARN)]
 
@@ -198,7 +205,7 @@ def test_out_of_scope_policy_dependencies_never_detached(clients, dependency):
         c.list_entities_for_policy.return_value = {"PolicyRoles": [{"RoleName": "boundary-role"}]}
     else:
         c.list_entities_for_policy.return_value[dependency] = [{"Name": "outside"}]
-    assert run("delete_policy", True, policy_arn=ARN)["error_code"] == "DependenciesOutsideScope"
+    assert approved_delete("delete_policy", policy_arn=ARN)["error_code"] == "DependenciesOutsideScope"
     assert not writes(c)
 
 
@@ -258,7 +265,7 @@ def test_policy_preview_is_read_only(clients):
 
 def test_profile_check_without_ec2_permissions_never_mutates(clients):
     clients[1].describe_regions.side_effect = ClientError({"Error": {"Code": "AccessDenied", "Message": "Missing EC2 permissions"}}, "DescribeRegions")
-    assert run("delete_role", True, role_name="demo", delete_instance_profiles=["demo"])["error_code"] == "AccessDenied"
+    assert approved_delete("delete_role", role_name="demo", delete_instance_profiles=["demo"])["error_code"] == "AccessDenied"
     assert not writes(clients[0])
 
 
@@ -298,3 +305,143 @@ def test_write_parameters_match_real_botocore_api_model(monkeypatch):
         assert run("update_policy", True, policy_arn=ARN, policy_document=PERMISSION)["status"] == "SUCCESS"
         assert run("update_assume_role_policy", True, role_name="demo", trust_policy=TRUST)["status"] == "SUCCESS"
         stub.assert_no_pending_responses()
+
+
+@pytest.mark.parametrize("action,parameters", [
+    ("delete_role", {"role_name": "demo"}),
+    ("delete_policy", {"policy_arn": ARN}),
+])
+@pytest.mark.parametrize("fingerprint", [None, "", "old", 123])
+def test_confirmed_delete_requires_matching_server_preview(clients, action, parameters, fingerprint):
+    result = run(action, True, **parameters, preview_fingerprint=fingerprint)
+    assert result["status"] == "CONFIRMATION_REQUIRED"
+    assert result["data"]["preview_fingerprint"]
+    assert result["data"]["preview"]
+    assert not writes(clients[0])
+
+
+@pytest.mark.parametrize("action,parameters", [
+    ("delete_role", {"role_name": "demo"}),
+    ("delete_policy", {"policy_arn": ARN}),
+])
+def test_changed_dependencies_block_previously_approved_delete(clients, action, parameters):
+    preview = run("preview_" + action, **parameters)
+    if action == "delete_role":
+        clients[0].list_role_policies.return_value = {"PolicyNames": ["new-inline"]}
+    else:
+        clients[0].list_policy_versions.return_value["Versions"].append(
+            {"VersionId": "v3", "IsDefaultVersion": False})
+    result = run(action, True, **parameters,
+                 preview_fingerprint=preview["data"]["preview_fingerprint"])
+    assert result["status"] == "CONFIRMATION_REQUIRED"
+    assert not writes(clients[0])
+
+
+def test_cloud_registry_exposes_all_iam_actions_with_confirmation_metadata():
+    from backend.shared.tool_registry import registry, llm_tools, validate_call
+    from jsonschema import Draft7Validator
+
+    registered = {tool["action"]: tool for tool in registry().values() if tool["service"] == "iam"}
+    assert set(registered) == iam.READ_ACTIONS | iam.WRITE_ACTIONS
+    for action, tool in registered.items():
+        Draft7Validator.check_schema(tool["parameters"])
+        assert tool["name"] == "iam_" + action
+        assert tool["requires_confirmation"] == (action in iam.WRITE_ACTIONS)
+        assert tool["parameters"]["additionalProperties"] is False
+        assert not {"confirmed", "credentials", "preview_fingerprint"} & set(tool["parameters"]["properties"])
+    assert any(tool["function"]["name"] == "iam_delete_role" for tool in llm_tools())
+    assert validate_call("iam_create_role", {"role_name": "demo", "trust_policy": TRUST})["action"] == "create_role"
+
+
+def test_unchanged_role_links_in_different_order_keep_approval_valid(clients):
+    clients[0].list_role_policies.return_value = {"PolicyNames": ["a", "b"]}
+    preview = run("preview_delete_role", role_name="demo")
+    clients[0].list_role_policies.return_value = {"PolicyNames": ["b", "a"]}
+    result = run("delete_role", True, role_name="demo",
+                 preview_fingerprint=preview["data"]["preview_fingerprint"])
+    assert result["status"] == "SUCCESS"
+    clients[0].delete_role.assert_called_once()
+
+
+@pytest.mark.parametrize("parameters", [
+    {}, {"role_name": "demo", "confirmed": True},
+    {"role_name": "demo", "preview_fingerprint": "forged"},
+    {"role_name": "demo", "credentials": {}},
+    {"role_name": 123}, {"role_name": "demo", "unexpected": "value"},
+])
+def test_cloud_schema_rejects_missing_arguments_and_client_approval_metadata(parameters):
+    from backend.shared.cloud_errors import BackendError
+    from backend.shared.tool_registry import validate_call
+    with pytest.raises(BackendError) as error:
+        validate_call("iam_delete_role", parameters)
+    assert error.value.code == "InvalidParameters"
+
+
+WORKFLOW_ARNS = {
+    "state_machine_arn": "arn:aws:states:ap-southeast-1:123456789012:stateMachine:test-actions",
+    "dispatcher_function_arn": "arn:aws:lambda:ap-southeast-1:123456789012:function:test-dispatcher",
+    "formatter_function_arn": "arn:aws:lambda:ap-southeast-1:123456789012:function:test-formatter",
+    "appsync_api_arn": "arn:aws:appsync:ap-southeast-1:123456789012:apis/testapi",
+}
+
+
+def iam_template(context=None, **kwargs):
+    from aws_cdk import App
+    from aws_cdk.assertions import Template
+    from infrastructure.stacks.data_stack import DataStack
+    from infrastructure.stacks.iam_stack import IamStack
+    app = App(context=context)
+    data = DataStack(app, "Data")
+    stack = IamStack(app, "Iam", data_stack=data, **kwargs)
+    return Template.from_stack(stack)
+
+
+@pytest.mark.parametrize("use_context", [False, True])
+def test_workflow_permissions_use_correct_roles_and_exact_resources(use_context):
+    template = iam_template(context=WORKFLOW_ARNS) if use_context else iam_template(**WORKFLOW_ARNS)
+    roles = template.find_resources("AWS::IAM::Role")
+    policies = template.find_resources("AWS::IAM::Policy")
+    expected = {
+        "states:StartExecution": ("SatiBot-Chatbot-ExecutionRole", [WORKFLOW_ARNS["state_machine_arn"]]),
+        "appsync:GraphQL": ("SatiBot-Formatter-ExecutionRole", [
+            WORKFLOW_ARNS["appsync_api_arn"] + "/types/Mutation/fields/publishActionResult"]),
+        "lambda:InvokeFunction": (None, [WORKFLOW_ARNS["dispatcher_function_arn"], WORKFLOW_ARNS["formatter_function_arn"]]),
+    }
+    seen = set()
+    for policy in policies.values():
+        properties = policy["Properties"]
+        for statement in properties["PolicyDocument"]["Statement"]:
+            actions = statement["Action"]
+            actions = [actions] if isinstance(actions, str) else actions
+            for action in set(actions) & expected.keys():
+                role_name, resources = expected[action]
+                actual = statement["Resource"]
+                assert sorted([actual] if isinstance(actual, str) else actual) == sorted(resources)
+                assert statement["Effect"] == "Allow"
+                assert len(properties["Roles"]) == 1
+                role = roles[properties["Roles"][0]["Ref"]]["Properties"]
+                if role_name:
+                    assert role["RoleName"] == role_name
+                else:
+                    assert role["AssumeRolePolicyDocument"]["Statement"][0]["Principal"] == {"Service": "states.amazonaws.com"}
+                assert action not in seen
+                seen.add(action)
+    assert seen == set(expected)
+
+
+def test_unconfigured_workflow_does_not_grant_placeholder_or_wildcard_permissions():
+    rendered = json.dumps(iam_template().to_json())
+    assert "states:StartExecution" not in rendered
+    assert "appsync:GraphQL" not in rendered
+    assert "lambda:InvokeFunction" not in rendered
+
+
+@pytest.mark.parametrize("config", [
+    {"state_machine_arn": "*"},
+    {"appsync_api_arn": WORKFLOW_ARNS["appsync_api_arn"] + "/*"},
+    {"dispatcher_function_arn": WORKFLOW_ARNS["dispatcher_function_arn"]},
+    {"dispatcher_function_arn": "*", "formatter_function_arn": WORKFLOW_ARNS["formatter_function_arn"]},
+])
+def test_workflow_configuration_rejects_overbroad_or_incomplete_resource_grants(config):
+    with pytest.raises(ValueError):
+        iam_template(**config)
