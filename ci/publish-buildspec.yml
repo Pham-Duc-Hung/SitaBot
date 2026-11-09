@@ -1,0 +1,16 @@
+# Author: Trịnh Thiên Quang
+# Publish CDK assets và tạo cấu hình triển khai từ tham số pipeline.
+version: 0.2
+phases:
+  install:
+    runtime-versions:
+      python: '3.12'
+      nodejs: '22'
+  build:
+    commands:
+      - python deployment/write_deploy_config.py
+      - npx --yes cdk-assets@2 publish --path cdk.out/SatiBotBackendSprint2.assets.json -v
+artifacts:
+  base-directory: deploy-config
+  files:
+    - template-configuration.json

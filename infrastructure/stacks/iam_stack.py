@@ -1,6 +1,8 @@
 """Least-privilege Lambda execution roles for the Sprint 2 backend."""
 
-from aws_cdk import Aws, CfnOutput, Stack, aws_dynamodb as dynamodb, aws_iam as iam
+import re
+
+from aws_cdk import Aws, CfnOutput, Stack, Token, aws_dynamodb as dynamodb, aws_iam as iam
 from constructs import Construct
 
 from .data_stack import DataStack
@@ -25,11 +27,33 @@ class IamStack(Stack):
         *,
         data_stack: DataStack,
         llm_secret_arn: str | None = None,
+        state_machine_arn: str | None = None,
+        dispatcher_function_arn: str | None = None,
+        formatter_function_arn: str | None = None,
+        appsync_api_arn: str | None = None,
         **kwargs,
     ) -> None:
         super().__init__(scope, construct_id, **kwargs)
         self.roles: dict[str, iam.Role] = {}
         tables = data_stack.tables
+
+        # Callers can wire CDK tokens directly or supply deployed ARNs through
+        # matching `cdk -c` context keys without changing the shared app entrypoint.
+        state_machine_arn = state_machine_arn or self.node.try_get_context("state_machine_arn")
+        dispatcher_function_arn = dispatcher_function_arn or self.node.try_get_context("dispatcher_function_arn")
+        formatter_function_arn = formatter_function_arn or self.node.try_get_context("formatter_function_arn")
+        appsync_api_arn = appsync_api_arn or self.node.try_get_context("appsync_api_arn")
+        for value, pattern in (
+            (state_machine_arn, r"arn:[\w-]+:states:[\w-]+:\d{12}:stateMachine:[\w-]+"),
+            (dispatcher_function_arn, r"arn:[\w-]+:lambda:[\w-]+:\d{12}:function:[\w-]+(?::[\w-]+)?"),
+            (formatter_function_arn, r"arn:[\w-]+:lambda:[\w-]+:\d{12}:function:[\w-]+(?::[\w-]+)?"),
+            (appsync_api_arn, r"arn:[\w-]+:appsync:[\w-]+:\d{12}:apis/[A-Za-z0-9_-]+"),
+        ):
+            if value and (not isinstance(value, str) or
+                          (not Token.is_unresolved(value) and not re.fullmatch(pattern, value))):
+                raise ValueError("Provide a concrete resource ARN or a CDK ARN token; wildcards are not supported.")
+        if bool(dispatcher_function_arn) != bool(formatter_function_arn):
+            raise ValueError("Configure both Dispatcher and Formatter function ARNs for the workflow role.")
 
         for name in self.ROLE_NAMES:
             role = iam.Role(
@@ -79,6 +103,25 @@ class IamStack(Stack):
 
         for name, role in self.roles.items():
             CfnOutput(self, f"{self._role_label(name)}RoleArn", value=role.role_arn)
+
+        if state_machine_arn:
+            self.roles["chatbot"].add_to_policy(iam.PolicyStatement(
+                actions=["states:StartExecution"], resources=[state_machine_arn]))
+        if appsync_api_arn:
+            self.roles["formatter"].add_to_policy(iam.PolicyStatement(
+                actions=["appsync:GraphQL"],
+                resources=[appsync_api_arn + "/types/Mutation/fields/publishActionResult"]))
+        self.workflow_role = None
+        if dispatcher_function_arn and formatter_function_arn:
+            self.workflow_role = iam.Role(
+                self, "ActionWorkflowExecutionRole",
+                assumed_by=iam.ServicePrincipal("states.amazonaws.com"),
+                description="SatiBot action workflow invokes Dispatcher then Formatter",
+            )
+            self.workflow_role.add_to_policy(iam.PolicyStatement(
+                actions=["lambda:InvokeFunction"],
+                resources=[dispatcher_function_arn, formatter_function_arn]))
+            CfnOutput(self, "ActionWorkflowRoleArn", value=self.workflow_role.role_arn)
 
     @staticmethod
     def _role_label(name: str) -> str:
