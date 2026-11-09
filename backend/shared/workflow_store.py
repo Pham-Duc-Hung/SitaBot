@@ -15,7 +15,7 @@ from decimal import Decimal
 import boto3
 from botocore.exceptions import ClientError
 from backend.shared.cloud_errors import BackendError
-from backend.shared.runtime import redact_sensitive
+from backend.shared.runtime import cached_dynamodb_table, redact_sensitive
 
 
 def pack(value):
@@ -30,7 +30,7 @@ def table(env):
     name = os.environ.get(env)
     if not name:
         raise BackendError("BackendNotConfigured", f"Chưa cấu hình {env}.", 503)
-    return boto3.resource("dynamodb").Table(name)
+    return cached_dynamodb_table(boto3.resource, name)
 
 
 def connection_identity(connection):

@@ -1,6 +1,6 @@
 {
   "AWSTemplateFormatVersion": "2010-09-09",
-  "Description": "Quang Sprint 2 CI only; roles and artifact bucket supplied by infrastructure owner.",
+  "Description": "Author: Trinh Thien Quang - SatiBot Backend CI/CD Pipeline with Manual Approval, CDK Asset Publishing, TemplateConfiguration ChangeSet Deployment, and CodeDeploy Canary/Rollback.",
   "Parameters": {
     "ConnectionArn": {
       "Type": "String",
@@ -15,12 +15,137 @@
     "BuildRoleArn": {
       "Type": "String"
     },
+    "CloudFormationExecutionRoleArn": {
+      "Type": "String"
+    },
     "ArtifactBucket": {
       "Type": "String"
     },
     "Branch": {
       "Type": "String",
       "Default": "main"
+    },
+    "ApprovalNotificationTopicArn": {
+      "Type": "String",
+      "Default": ""
+    },
+    "BackendStackName": {
+      "Type": "String",
+      "Default": "SatiBotBackendSprint2"
+    },
+    "BackendChangeSetName": {
+      "Type": "String",
+      "Default": "satibot-backend-canary-changeset"
+    },
+    "ConfigurationReleaseId": {
+      "Type": "String",
+      "Default": "v1"
+    },
+    "CanaryDeploymentConfig": {
+      "Type": "String",
+      "Default": "CodeDeployDefault.LambdaCanary10Percent5Minutes"
+    },
+    "ConnectionsTableName": {
+      "Type": "String"
+    },
+    "HistoryTableName": {
+      "Type": "String"
+    },
+    "SessionStateTableName": {
+      "Type": "String"
+    },
+    "PendingActionTableName": {
+      "Type": "String"
+    },
+    "GeminiSecretArn": {
+      "Type": "String",
+      "Default": "",
+      "AllowedPattern": "^$|^arn:aws[a-zA-Z-]*:secretsmanager:[a-z0-9-]+:\\d{12}:secret:.+$",
+      "ConstraintDescription": "Provide a Secrets Manager ARN, never a plaintext API key."
+    },
+    "ActionStateMachineArn": {
+      "Type": "String",
+      "Default": ""
+    },
+    "AppSyncGraphqlUrl": {
+      "Type": "String",
+      "Default": ""
+    },
+    "AppSyncApiArn": {
+      "Type": "String",
+      "Default": ""
+    },
+    "ApiGatewaySourceArn": {
+      "Type": "String",
+      "Default": ""
+    },
+    "GrantIntegrationPermissions": {
+      "Type": "String",
+      "Default": "false",
+      "AllowedValues": [
+        "true",
+        "false"
+      ]
+    },
+    "ChatbotRoleArn": {
+      "Type": "String"
+    },
+    "DispatcherRoleArn": {
+      "Type": "String"
+    },
+    "FormatterRoleArn": {
+      "Type": "String"
+    },
+    "ConnectorRoleArn": {
+      "Type": "String"
+    },
+    "HistoryRoleArn": {
+      "Type": "String"
+    },
+    "CodeDeployRoleArn": {
+      "Type": "String"
+    },
+    "ChatbotAlarmName": {
+      "Type": "String",
+      "Default": ""
+    },
+    "DispatcherAlarmName": {
+      "Type": "String",
+      "Default": ""
+    },
+    "FormatterAlarmName": {
+      "Type": "String",
+      "Default": ""
+    },
+    "ConnectorAlarmName": {
+      "Type": "String",
+      "Default": ""
+    },
+    "HistoryAlarmName": {
+      "Type": "String",
+      "Default": ""
+    }
+  },
+  "Conditions": {
+    "CreateConnection": {
+      "Fn::Equals": [
+        {
+          "Ref": "ConnectionArn"
+        },
+        ""
+      ]
+    },
+    "HasApprovalNotificationTopic": {
+      "Fn::Not": [
+        {
+          "Fn::Equals": [
+            {
+              "Ref": "ApprovalNotificationTopicArn"
+            },
+            ""
+          ]
+        }
+      ]
     }
   },
   "Resources": {
@@ -61,6 +186,171 @@
           ]
         },
         "TimeoutInMinutes": 30
+      }
+    },
+    "PublishAssets": {
+      "Type": "AWS::CodeBuild::Project",
+      "Properties": {
+        "ServiceRole": {
+          "Ref": "BuildRoleArn"
+        },
+        "Artifacts": {
+          "Type": "CODEPIPELINE"
+        },
+        "Source": {
+          "Type": "CODEPIPELINE",
+          "BuildSpec": "deployment/publish-buildspec.yml"
+        },
+        "Environment": {
+          "Type": "LINUX_CONTAINER",
+          "ComputeType": "BUILD_GENERAL1_SMALL",
+          "Image": "aws/codebuild/standard:7.0",
+          "EnvironmentVariables": [
+            {
+              "Name": "AWS_DEFAULT_REGION",
+              "Value": "ap-southeast-1"
+            },
+            {
+              "Name": "PARAM_ConfigurationReleaseId",
+              "Value": {
+                "Ref": "ConfigurationReleaseId"
+              }
+            },
+            {
+              "Name": "PARAM_ConnectionsTableName",
+              "Value": {
+                "Ref": "ConnectionsTableName"
+              }
+            },
+            {
+              "Name": "PARAM_HistoryTableName",
+              "Value": {
+                "Ref": "HistoryTableName"
+              }
+            },
+            {
+              "Name": "PARAM_SessionStateTableName",
+              "Value": {
+                "Ref": "SessionStateTableName"
+              }
+            },
+            {
+              "Name": "PARAM_PendingActionTableName",
+              "Value": {
+                "Ref": "PendingActionTableName"
+              }
+            },
+            {
+              "Name": "PARAM_ActionStateMachineArn",
+              "Value": {
+                "Ref": "ActionStateMachineArn"
+              }
+            },
+            {
+              "Name": "PARAM_AppSyncGraphqlUrl",
+              "Value": {
+                "Ref": "AppSyncGraphqlUrl"
+              }
+            },
+            {
+              "Name": "PARAM_AppSyncApiArn",
+              "Value": {
+                "Ref": "AppSyncApiArn"
+              }
+            },
+            {
+              "Name": "PARAM_ApiGatewaySourceArn",
+              "Value": {
+                "Ref": "ApiGatewaySourceArn"
+              }
+            },
+            {
+              "Name": "PARAM_GrantIntegrationPermissions",
+              "Value": {
+                "Ref": "GrantIntegrationPermissions"
+              }
+            },
+            {
+              "Name": "PARAM_ChatbotRoleArn",
+              "Value": {
+                "Ref": "ChatbotRoleArn"
+              }
+            },
+            {
+              "Name": "PARAM_DispatcherRoleArn",
+              "Value": {
+                "Ref": "DispatcherRoleArn"
+              }
+            },
+            {
+              "Name": "PARAM_FormatterRoleArn",
+              "Value": {
+                "Ref": "FormatterRoleArn"
+              }
+            },
+            {
+              "Name": "PARAM_ConnectorRoleArn",
+              "Value": {
+                "Ref": "ConnectorRoleArn"
+              }
+            },
+            {
+              "Name": "PARAM_HistoryRoleArn",
+              "Value": {
+                "Ref": "HistoryRoleArn"
+              }
+            },
+            {
+              "Name": "PARAM_CodeDeployRoleArn",
+              "Value": {
+                "Ref": "CodeDeployRoleArn"
+              }
+            },
+            {
+              "Name": "PARAM_CanaryDeploymentConfig",
+              "Value": {
+                "Ref": "CanaryDeploymentConfig"
+              }
+            },
+            {
+              "Name": "PARAM_ChatbotAlarmName",
+              "Value": {
+                "Ref": "ChatbotAlarmName"
+              }
+            },
+            {
+              "Name": "PARAM_DispatcherAlarmName",
+              "Value": {
+                "Ref": "DispatcherAlarmName"
+              }
+            },
+            {
+              "Name": "PARAM_FormatterAlarmName",
+              "Value": {
+                "Ref": "FormatterAlarmName"
+              }
+            },
+            {
+              "Name": "PARAM_ConnectorAlarmName",
+              "Value": {
+                "Ref": "ConnectorAlarmName"
+              }
+            },
+            {
+              "Name": "PARAM_HistoryAlarmName",
+              "Value": {
+                "Ref": "HistoryAlarmName"
+              }
+            },
+            {
+              "Name": "PARAM_GeminiSecretArn",
+              "Value": {
+                "Ref": "GeminiSecretArn"
+              }
+            }
+          ]
+        },
+        "TimeoutInMinutes": 15
       }
     },
     "Pipeline": {
@@ -146,25 +436,143 @@
                 ]
               }
             ]
+          },
+          {
+            "Name": "ManualApproval",
+            "Actions": [
+              {
+                "Name": "ApproveBackendDeployment",
+                "ActionTypeId": {
+                  "Category": "Approval",
+                  "Owner": "AWS",
+                  "Provider": "Manual",
+                  "Version": "1"
+                },
+                "Configuration": {
+                  "CustomData": "X\u00e1c nh\u1eadn k\u1ebft qu\u1ea3 pytest, ki\u1ec3m tra g\u00f3i ZIP v\u00e0 CDK synth \u1edf b\u01b0\u1edbc BuildTestSynth tr\u01b0\u1edbc khi tri\u1ec3n khai Canary Backend l\u00ean ap-southeast-1.",
+                  "NotificationArn": {
+                    "Fn::If": [
+                      "HasApprovalNotificationTopic",
+                      {
+                        "Ref": "ApprovalNotificationTopicArn"
+                      },
+                      {
+                        "Ref": "AWS::NoValue"
+                      }
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "Name": "DeployBackend",
+            "Actions": [
+              {
+                "Name": "PublishCdkAssets",
+                "RunOrder": 1,
+                "Region": "ap-southeast-1",
+                "ActionTypeId": {
+                  "Category": "Build",
+                  "Owner": "AWS",
+                  "Provider": "CodeBuild",
+                  "Version": "1"
+                },
+                "Configuration": {
+                  "ProjectName": {
+                    "Ref": "PublishAssets"
+                  }
+                },
+                "InputArtifacts": [
+                  {
+                    "Name": "BuildOutput"
+                  }
+                ],
+                "OutputArtifacts": [
+                  {
+                    "Name": "DeployConfig"
+                  }
+                ]
+              },
+              {
+                "Name": "CreateReplaceChangeSet",
+                "RunOrder": 2,
+                "Region": "ap-southeast-1",
+                "ActionTypeId": {
+                  "Category": "Deploy",
+                  "Owner": "AWS",
+                  "Provider": "CloudFormation",
+                  "Version": "1"
+                },
+                "InputArtifacts": [
+                  {
+                    "Name": "BuildOutput"
+                  },
+                  {
+                    "Name": "DeployConfig"
+                  }
+                ],
+                "Configuration": {
+                  "ActionMode": "CHANGE_SET_REPLACE",
+                  "StackName": {
+                    "Ref": "BackendStackName"
+                  },
+                  "ChangeSetName": {
+                    "Ref": "BackendChangeSetName"
+                  },
+                  "RoleArn": {
+                    "Ref": "CloudFormationExecutionRoleArn"
+                  },
+                  "TemplatePath": "BuildOutput::cdk.out/SatiBotBackendSprint2.template.json",
+                  "TemplateConfiguration": "DeployConfig::template-configuration.json",
+                  "Capabilities": "CAPABILITY_NAMED_IAM,CAPABILITY_AUTO_EXPAND"
+                }
+              },
+              {
+                "Name": "ExecuteChangeSet",
+                "RunOrder": 3,
+                "Region": "ap-southeast-1",
+                "ActionTypeId": {
+                  "Category": "Deploy",
+                  "Owner": "AWS",
+                  "Provider": "CloudFormation",
+                  "Version": "1"
+                },
+                "Configuration": {
+                  "ActionMode": "CHANGE_SET_EXECUTE",
+                  "StackName": {
+                    "Ref": "BackendStackName"
+                  },
+                  "ChangeSetName": {
+                    "Ref": "BackendChangeSetName"
+                  }
+                }
+              }
+            ]
           }
         ]
       }
-    }
-  },
-  "Conditions": {
-    "CreateConnection": {
-      "Fn::Equals": [
-        {
-          "Ref": "ConnectionArn"
-        },
-        ""
-      ]
     }
   },
   "Outputs": {
     "PipelineName": {
       "Value": {
         "Ref": "Pipeline"
+      }
+    },
+    "BuildProjectName": {
+      "Value": {
+        "Ref": "Build"
+      }
+    },
+    "AssetPublishProjectName": {
+      "Value": {
+        "Ref": "PublishAssets"
+      }
+    },
+    "TargetBackendStackName": {
+      "Value": {
+        "Ref": "BackendStackName"
       }
     }
   }

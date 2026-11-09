@@ -13,10 +13,11 @@ import urllib.request
 import boto3
 from botocore.config import Config
 from backend.shared.cloud_errors import BackendError
-from backend.shared.runtime import redact_sensitive
+from backend.shared.runtime import cached_boto_client, is_access_denied, redact_sensitive
 from backend.shared.http_api import reject_constant
 
 _SECRET_CACHE = {}
+_SM_CONFIG = Config(connect_timeout=2, read_timeout=2, retries={"total_max_attempts": 2})
 ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
 
 
@@ -28,7 +29,8 @@ def get_api_key():
     if cached and cached[0] > time.monotonic():
         return cached[1]
     try:
-        raw = boto3.client("secretsmanager", config=Config(connect_timeout=2, read_timeout=2, retries={"total_max_attempts": 2})).get_secret_value(SecretId=secret_id)["SecretString"]
+        client = cached_boto_client(boto3.client, "secretsmanager", config=_SM_CONFIG, config_tag="gemini-sm")
+        raw = client.get_secret_value(SecretId=secret_id)["SecretString"]
         try:
             value = json.loads(raw)
         except ValueError:
@@ -36,7 +38,9 @@ def get_api_key():
         key = (value.get("api_key") or value.get("GEMINI_API_KEY")) if isinstance(value, dict) else value
         if not isinstance(key, str) or not key.strip():
             raise ValueError("empty key")
-    except Exception:
+    except Exception as exc:
+        if is_access_denied(exc):
+            raise BackendError("GeminiSecretAccessDenied", "Lambda không đủ quyền đọc khóa Gemini từ Secrets Manager.", 403) from None
         raise BackendError("GeminiSecretUnavailable", "Không đọc được khóa Gemini.", 503) from None
     _SECRET_CACHE[secret_id] = (time.monotonic() + 300, key)
     return key
