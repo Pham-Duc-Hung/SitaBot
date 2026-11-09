@@ -37,6 +37,11 @@
         </div>
       </div>
 
+      <button type="button" class="connection-nav-button" id="awsConnectionOpen" aria-haspopup="dialog" aria-controls="awsConnectionDialog">
+        <span aria-hidden="true">☁</span>
+        <span class="btn-text">Kết nối tài khoản AWS</span>
+      </button>
+
       <!-- User Profile at Bottom -->
       <div class="sidebar-user" id="userProfileBtn" title="AWS Workspace (ap-southeast-1)">
         <div class="user-avatar-symbolic">
@@ -58,6 +63,7 @@
         </div>
         <div class="header-right">
           <span class="pill-badge" id="awsStatusPill">☁️ ap-southeast-1</span>
+          <button type="button" class="connection-badge" id="awsConnectionBadge" aria-haspopup="dialog" aria-controls="awsConnectionDialog">AWS: Chưa kiểm tra</button>
           <span class="pill-badge green" id="toolsPill">⚡ 11 Tools</span>
         </div>
       </header>
@@ -133,6 +139,52 @@
     </main>
   </div>
 
+  <dialog class="connection-dialog" id="awsConnectionDialog" aria-labelledby="awsConnectionTitle">
+    <div class="connection-dialog-header">
+      <div>
+        <p class="connection-eyebrow">AWS WORKSPACE</p>
+        <h2 id="awsConnectionTitle">Liên kết tài khoản AWS</h2>
+      </div>
+      <button type="button" class="connection-close" id="awsConnectionClose" aria-label="Đóng">×</button>
+    </div>
+    <p class="connection-intro">Tài khoản đăng nhập SatiBot và tài khoản AWS được quản lý là hai thứ khác nhau. SatiBot dùng IAM Role cùng ExternalId để xin quyền tạm thời; bạn không cần nhập AWS password hay access key.</p>
+    <p class="connection-message" id="awsConnectionMessage" role="status" aria-live="polite">Đang kiểm tra trạng thái kết nối…</p>
+
+    <section class="connection-current" id="awsConnectionCurrent" hidden aria-label="Tài khoản AWS đã kết nối">
+      <strong>Đã kết nối</strong>
+      <p>Account ID: <code id="awsConnectedAccount"></code></p>
+      <p>Role ARN: <code id="awsConnectedRole"></code></p>
+    </section>
+
+    <section class="connection-setup" aria-labelledby="awsConnectionSetupTitle">
+      <h3 id="awsConnectionSetupTitle">Thiết lập hoặc thay đổi kết nối</h3>
+      <p><strong>1.</strong> Lấy ExternalId riêng cho tài khoản SatiBot của bạn.</p>
+      <button type="button" class="connection-action" id="awsExternalIdButton">Lấy ExternalId</button>
+      <div class="connection-external" id="awsExternalSection" hidden>
+        <label for="awsExternalId">ExternalId</label>
+        <div class="connection-copy-row">
+          <input id="awsExternalId" readonly autocomplete="off" spellcheck="false">
+          <button type="button" id="awsCopyExternalId">Sao chép</button>
+        </div>
+        <p><strong>2.</strong> Trong tài khoản AWS cần liên kết, tạo IAM Role với path <code>/satibot/</code> và tên <code>SatiBotAccessRole</code>. Dùng trust policy dưới đây, rồi gắn chính sách quyền tối thiểu cho các thao tác S3/EC2/Lambda/IAM bạn cho phép.</p>
+        <div id="awsTrustSection" hidden>
+          <div class="connection-policy-heading">
+            <span>Trust policy</span>
+            <button type="button" id="awsCopyTrustPolicy">Sao chép JSON</button>
+          </div>
+          <pre id="awsTrustPolicy"></pre>
+        </div>
+        <p class="connection-message connection-warning" id="awsTrustUnavailable" hidden>Máy chủ chưa cấu hình ARN của Connector và Dispatcher. Cần cấu hình hai role này trước khi tạo trust policy.</p>
+        <form id="awsVerifyForm">
+          <label for="awsRoleArn"><strong>3.</strong> Dán Role ARN vừa tạo</label>
+          <input id="awsRoleArn" name="role_arn" type="text" required autocomplete="off" spellcheck="false" placeholder="arn:aws:iam::&lt;AWS_ACCOUNT_ID&gt;:role/satibot/SatiBotAccessRole">
+          <button type="submit" class="connection-action" id="awsVerifyButton">Kiểm tra và liên kết</button>
+        </form>
+      </div>
+    </section>
+  </dialog>
+
+  <script src="/aws-connection.js" defer></script>
   <script src="/app.js" defer></script>
 </body>
 </html>

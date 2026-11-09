@@ -44,6 +44,24 @@ def test_external_id_creation_is_user_scoped(monkeypatch):
     assert json.loads(result["body"])["external_id"] == item["external_id"]
 
 
+def test_external_id_includes_trust_policy_for_connector_and_dispatcher(monkeypatch):
+    table = setup_table(monkeypatch, connector, "AWS_CONNECTIONS_TABLE")
+    connector_arn = "arn:aws:iam::111122223333:role/SatiBotConnector"
+    dispatcher_arn = "arn:aws:iam::111122223333:role/SatiBotDispatcher"
+    monkeypatch.setenv("SATIBOT_CONNECTOR_ROLE_ARN", connector_arn)
+    monkeypatch.setenv("SATIBOT_DISPATCHER_ROLE_ARN", dispatcher_arn)
+
+    result = json.loads(connector.lambda_handler(event(), None)["body"])
+    statement = result["trust_policy"]["Statement"][0]
+
+    assert result["role_path"] == "satibot/"
+    assert result["role_name"] == "SatiBotAccessRole"
+    assert statement["Principal"]["AWS"] == [connector_arn, dispatcher_arn]
+    assert statement["Action"] == "sts:AssumeRole"
+    assert statement["Condition"]["StringEquals"]["sts:ExternalId"] == table.put_item.call_args.kwargs["Item"]["external_id"]
+    assert "SecretAccessKey" not in json.dumps(result)
+
+
 def test_external_id_is_stable(monkeypatch):
     table = setup_table(monkeypatch, connector, "AWS_CONNECTIONS_TABLE")
     table.put_item.side_effect = ClientError({"Error": {"Code": "ConditionalCheckFailedException"}}, "PutItem")

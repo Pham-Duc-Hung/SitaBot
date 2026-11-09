@@ -20,12 +20,17 @@ pending = cdk.CfnParameter(stack, "PendingActionTableName", type="String")
 secret = cdk.CfnParameter(stack, "GeminiSecretArn", type="String", default="")
 workflow = cdk.CfnParameter(stack, "ActionStateMachineArn", type="String", default="")
 appsync_url = cdk.CfnParameter(stack, "AppSyncGraphqlUrl", type="String", default="")
+role_arns = {
+    name: cdk.CfnParameter(stack, f"{name.title()}RoleArn", type="String").value_as_string
+    for name in ("chatbot", "dispatcher", "formatter", "connector", "history")
+}
 for name in ("chatbot", "dispatcher", "formatter", "connector", "history"):
-    role_arn = cdk.CfnParameter(stack, f"{name.title()}RoleArn", type="String")
-    role = iam.Role.from_role_arn(stack, f"{name}Role", role_arn.value_as_string, mutable=False)
+    role = iam.Role.from_role_arn(stack, f"{name}Role", role_arns[name], mutable=False)
     environment = {"SATIBOT_MODE": "cloud"}
     if name == "connector":
         environment["AWS_CONNECTIONS_TABLE"] = connections.value_as_string
+        environment["SATIBOT_CONNECTOR_ROLE_ARN"] = role_arns["connector"]
+        environment["SATIBOT_DISPATCHER_ROLE_ARN"] = role_arns["dispatcher"]
     if name == "chatbot":
         environment.update(SESSION_STATE_TABLE=sessions.value_as_string, PENDING_ACTION_TABLE=pending.value_as_string,
                            GEMINI_SECRET_ARN=secret.value_as_string, ACTION_STATE_MACHINE_ARN=workflow.value_as_string)

@@ -14,6 +14,27 @@ from backend.shared.workflow_store import utc_now
 from backend.shared.http_api import body, response, user_id
 
 
+def _trust_setup(external_id):
+    """Describe the exact roles allowed to assume a customer role."""
+    connector_arn = os.environ.get("SATIBOT_CONNECTOR_ROLE_ARN", "").strip()
+    dispatcher_arn = os.environ.get("SATIBOT_DISPATCHER_ROLE_ARN", "").strip()
+    if not connector_arn or not dispatcher_arn:
+        return {}
+    return {
+        "role_path": "satibot/",
+        "role_name": "SatiBotAccessRole",
+        "trust_policy": {
+            "Version": "2012-10-17",
+            "Statement": [{
+                "Effect": "Allow",
+                "Principal": {"AWS": [connector_arn, dispatcher_arn]},
+                "Action": "sts:AssumeRole",
+                "Condition": {"StringEquals": {"sts:ExternalId": external_id}},
+            }],
+        },
+    }
+
+
 def lambda_handler(event, context):
     try:
         owner = user_id(event)
@@ -44,7 +65,7 @@ def lambda_handler(event, context):
                 if exc.response["Error"]["Code"] != "ConditionalCheckFailedException":
                     raise
                 external_id = table.get_item(Key={"user_id": owner}, ConsistentRead=True)["Item"]["external_id"]
-            return response(200, {"external_id": external_id})
+            return response(200, {"external_id": external_id, **_trust_setup(external_id)})
         role_arn = payload.get("role_arn", "")
         if not isinstance(role_arn, str) or not re.fullmatch(r"arn:aws:iam::\d{12}:role/[\w+=,.@/-]+", role_arn):
             raise ValueError("role_arn is invalid")
