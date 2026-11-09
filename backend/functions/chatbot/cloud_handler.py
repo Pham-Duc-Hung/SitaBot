@@ -103,7 +103,13 @@ def handle(event, context):
         call = calls[0].get("function", {})
         parameters = json.loads(call.get("arguments", "{}"), parse_constant=reject_constant)
         tool = validate_call(call.get("name"), parameters)
-        item = store.create_action(owner, session, tool, parameters, region)
+        delete_intent = None
+        if tool["service"] == "iam" and tool["action"] in {"delete_role", "delete_policy"}:
+            delete_intent = {"action": tool["action"], "tool_name": tool["name"], "parameters": parameters}
+            preview_parameters = {key: value for key, value in parameters.items() if key != "delete_instance_profiles"}
+            tool = validate_call("iam_preview_" + tool["action"], preview_parameters)
+            parameters = preview_parameters
+        item = store.create_action(owner, session, tool, parameters, region, delete_intent=delete_intent)
         # Resolve the session CAS before exposing or executing this intent.
         store.save_session(owner, session, previous, history + [{"role": "assistant", "content": f"Đề xuất {tool['name']}; chờ kết quả hoặc xác nhận."}], action_id=item["action_id"])
         if tool["requires_confirmation"]:

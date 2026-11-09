@@ -20,6 +20,52 @@ DEFAULT_PIPELINE = ROOT / "ci" / "pipeline.template.json"
 CODEPIPELINE_PARAMETER_OVERRIDES_MAX_BYTES = 1000
 
 
+def verify_action_workflow(template):
+    resources = template["Resources"]
+    machines = {key: value for key, value in resources.items() if value["Type"] == "AWS::StepFunctions::StateMachine"}
+    if len(machines) != 1:
+        raise AssertionError("Backend phải quản lý đúng một State Machine.")
+    machine_id, machine = next(iter(machines.items()))
+    props = machine["Properties"]
+    definition = props.get("Definition", {})
+    if props.get("StateMachineType") != "STANDARD" or definition.get("TimeoutSeconds") != 300:
+        raise AssertionError("Workflow phải là STANDARD và timeout 300 giây.")
+    states = definition["States"]
+    outputs = template["Outputs"]
+    if outputs.get("ActionStateMachineArn", {}).get("Value") != {"Fn::GetAtt": [machine_id, "Arn"]}:
+        raise AssertionError("Thiếu output ARN của workflow được backend quản lý.")
+    if definition.get("StartAt") != "Dispatcher" or states["Dispatcher"].get("Retry"):
+        raise AssertionError("Workflow phải bắt đầu tại Dispatcher và không retry Dispatcher.")
+    for task_name, function in (("Dispatcher", "Dispatcher"), ("Formatter", "Formatter"), ("RepublishFormatter", "Formatter")):
+        task = states[task_name]
+        if task["Parameters"]["FunctionName"] != outputs[function + "LiveAliasArn"]["Value"]:
+            raise AssertionError("Workflow phải invoke đúng alias live.")
+        if task_name != "Dispatcher" and task.get("Retry") != [{
+            "ErrorEquals": ["States.TaskFailed", "States.Timeout"], "MaxAttempts": 2
+        }]:
+            raise AssertionError("Formatter phải retry lỗi Lambda tối đa hai lần.")
+    if states["Dispatcher"].get("OutputPath") != "$.Payload" or states["Dispatcher"]["Next"] != "HasResultEnvelope":
+        raise AssertionError("Dispatcher phải chuyển Payload qua bước kiểm tra envelope.")
+    if states["Formatter"].get("Next") != "CheckPublication" or states["RepublishFormatter"].get("Next") != "CheckResult":
+        raise AssertionError("AppSync chỉ được republish một lần.")
+    publication = states["CheckPublication"]["Choices"][0]
+    if publication["Next"] != "RepublishFormatter" or {
+        "Variable": "$.formatted.Payload.publication_status", "StringEquals": "FAILED"
+    } not in publication.get("And", []):
+        raise AssertionError("Chỉ publication FAILED mới được republish.")
+    if states["CheckResult"]["Default"] != "ActionFailed" or states["ActionFailed"]["Type"] != "Fail":
+        raise AssertionError("Workflow phải kết thúc lỗi khi hành động hoặc publish thất bại.")
+    role_id = props["RoleArn"]["Fn::GetAtt"][0]
+    if resources[role_id]["Properties"]["AssumeRolePolicyDocument"]["Statement"][0]["Principal"] != {"Service": "states.amazonaws.com"}:
+        raise AssertionError("Workflow role phải tin cậy Step Functions.")
+    grants = [statement for resource in resources.values() if resource["Type"] == "AWS::IAM::Policy"
+              and {"Ref": role_id} in resource["Properties"]["Roles"]
+              for statement in resource["Properties"]["PolicyDocument"]["Statement"]]
+    expected = [outputs[name + "LiveAliasArn"]["Value"] for name in ("Dispatcher", "Formatter")]
+    if len(grants) != 1 or grants[0]["Action"] not in ("lambda:InvokeFunction", ["lambda:InvokeFunction"]) or grants[0]["Resource"] != expected:
+        raise AssertionError("Workflow role chỉ được invoke Dispatcher/Formatter live.")
+
+
 def verify_cdk_canary_template(template_path: Path = DEFAULT_TEMPLATE) -> dict:
     """Xác thực template CDK sinh đủ Version gắn cấu hình, Alias 'live', Alarm Metric Math và CodeDeploy Canary."""
     if not template_path.exists():
@@ -31,6 +77,7 @@ def verify_cdk_canary_template(template_path: Path = DEFAULT_TEMPLATE) -> dict:
     parameters = template.get("Parameters", {})
     conditions = template.get("Conditions", {})
     outputs = template.get("Outputs", {})
+    verify_action_workflow(template)
 
     for required_param in (
         "CodeDeployRoleArn",
