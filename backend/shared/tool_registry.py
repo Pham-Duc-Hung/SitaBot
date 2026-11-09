@@ -15,7 +15,7 @@ from backend.shared.cloud_errors import BackendError
 SOURCES = (
     ("lambda", "backend.functions.dispatcher.services.lambda_service", "LAMBDA_TOOL_SCHEMAS"),
     ("ec2", "backend.functions.dispatcher.services.ec2_service", "EC2_TOOL_SCHEMAS"),
-    ("s3", "backend.functions.chatbot.tools.s3_tools", "S3_TOOL_SCHEMAS"),
+    ("s3", "backend.functions.dispatcher.services.s3_service", "S3_TOOL_SCHEMAS"),
     ("iam", "backend.functions.dispatcher.services.iam_service", "IAM_TOOL_SCHEMAS"),
 )
 

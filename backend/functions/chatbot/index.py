@@ -64,7 +64,7 @@ def _dispatch_action(
     """Kết nối và chuyển tiếp yêu cầu đến Dispatcher Lambda."""
     if service == "s3":
         try:
-            from backend.functions.chatbot.tools.s3_tools import build_s3_dispatch_request
+            from backend.functions.dispatcher.services.s3_service import build_s3_dispatch_request
 
             s3_request = build_s3_dispatch_request(action, parameters)
         except (KeyError, TypeError, ValueError) as exc:
@@ -196,7 +196,7 @@ def _get_all_tool_schemas() -> List[Dict[str, Any]]:
     schemas = []
     schemas.extend(_get_lambda_tool_schemas())
     schemas.extend(_get_ec2_tool_schemas())
-    from backend.functions.chatbot.tools.s3_tools import S3_TOOL_SCHEMAS
+    from backend.functions.dispatcher.services.s3_service import S3_TOOL_SCHEMAS
 
     schemas.extend(S3_TOOL_SCHEMAS)
     return schemas

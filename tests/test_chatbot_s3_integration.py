@@ -5,7 +5,7 @@ from unittest.mock import Mock
 
 from backend.functions.chatbot import index as chatbot
 from backend.functions.chatbot.agent_executor import AgentExecutor
-from backend.functions.chatbot.tools.s3_tools import S3_TOOL_SCHEMAS
+from backend.functions.dispatcher.services.s3_service import S3_TOOL_SCHEMAS
 from backend.functions.dispatcher import index as dispatcher
 
 
