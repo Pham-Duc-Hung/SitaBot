@@ -31,8 +31,6 @@ def package(output=None, with_dependencies=False):
         sources = [ROOT / "backend" / "shared", ROOT / "backend" / "functions" / name]
         if name == "chatbot":
             sources.append(ROOT / "backend" / "functions" / "dispatcher")
-        if name == "dispatcher":
-            sources.append(ROOT / "backend" / "functions" / "chatbot" / "tools")
         target = output / f"{name}.zip"
         with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as archive:
             packages = {"backend", "backend/shared", "backend/functions"}

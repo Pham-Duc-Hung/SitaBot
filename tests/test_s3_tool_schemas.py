@@ -3,14 +3,12 @@ import re
 
 import pytest
 
-from backend.functions.chatbot.tools.s3_tools import (
+from backend.functions.dispatcher.services.s3_service import (
     MAX_PRESIGNED_URL_EXPIRATION_SECONDS,
     S3_LIFECYCLE_STORAGE_CLASSES,
     S3_TOOL_SCHEMAS,
     build_s3_dispatch_request,
     get_s3_tool_schema,
-)
-from backend.functions.dispatcher.services.s3_service import (
     SUPPORTED_LIFECYCLE_STORAGE_CLASSES,
 )
 

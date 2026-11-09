@@ -123,7 +123,7 @@ class AgentExecutor:
         if invalid_types:
             return tool_name, parameters, f"Sai kiểu dữ liệu cho: {', '.join(invalid_types)}. Hãy tự sửa tool call."
         if self._tool_service(tool_name) == "s3":
-            from backend.functions.chatbot.tools.s3_tools import build_s3_dispatch_request
+            from backend.functions.dispatcher.services.s3_service import build_s3_dispatch_request
 
             try:
                 build_s3_dispatch_request(tool_name, parameters)
