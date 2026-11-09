@@ -22,9 +22,9 @@ def _matches_alias_uri(target: str, alias_arn: str) -> bool:
     return target == alias_arn or target.endswith(f"/{alias_arn}/invocations")
 
 
-def verify_callers(session, parameters, aliases):
+def verify_callers(session, parameters, aliases, *, workflow_arn=None):
     source = parameters.get("ApiGatewaySourceArn", "")
-    workflow = parameters.get("ActionStateMachineArn", "")
+    workflow = workflow_arn or parameters.get("ActionStateMachineArn", "")
     if not source or not workflow:
         raise ValueError(
             "Provide ApiGatewaySourceArn and ActionStateMachineArn to verify caller wiring."
