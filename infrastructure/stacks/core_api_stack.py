@@ -143,36 +143,62 @@ class CoreApiStack(Stack):
             allow_test_invoke=True,
         )
 
-        auth_options = apigateway.MethodOptions(
+        # 5. Define 6 Business Routes to :live aliases
+        # Từng method sử dụng Cognito User Pool Authorizer để bảo vệ endpoint
+
+        # Route 1: POST /chat (Chatbot tương tác hội thoại tự nhiên)
+        chat_resource = self.api.root.add_resource("chat")
+        chat_resource.add_method(
+            "POST",
+            chatbot_integration,
             authorizer=self.authorizer,
             authorization_type=apigateway.AuthorizationType.COGNITO,
         )
 
-        # 5. Define 6 Business Routes to :live aliases
-
-        # Route 1: POST /chat (Chatbot tương tác hội thoại tự nhiên)
-        chat_resource = self.api.root.add_resource("chat")
-        chat_resource.add_method("POST", chatbot_integration, **auth_options.__dict__)
-
         # Route 2: POST /confirm (Xác nhận các hành động ghi hạ tầng EC2/S3/Lambda)
         confirm_resource = self.api.root.add_resource("confirm")
-        confirm_resource.add_method("POST", chatbot_integration, **auth_options.__dict__)
+        confirm_resource.add_method(
+            "POST",
+            chatbot_integration,
+            authorizer=self.authorizer,
+            authorization_type=apigateway.AuthorizationType.COGNITO,
+        )
 
         # Route 3: GET /connections (Lấy thông tin kết nối AWS của user)
         connections_resource = self.api.root.add_resource("connections")
-        connections_resource.add_method("GET", connector_integration, **auth_options.__dict__)
+        connections_resource.add_method(
+            "GET",
+            connector_integration,
+            authorizer=self.authorizer,
+            authorization_type=apigateway.AuthorizationType.COGNITO,
+        )
 
         # Route 4: POST /connections/external-id (Tạo ExternalId ngẫu nhiên để gắn Role ARN)
         ext_id_resource = connections_resource.add_resource("external-id")
-        ext_id_resource.add_method("POST", connector_integration, **auth_options.__dict__)
+        ext_id_resource.add_method(
+            "POST",
+            connector_integration,
+            authorizer=self.authorizer,
+            authorization_type=apigateway.AuthorizationType.COGNITO,
+        )
 
         # Route 5: POST /connections/verify (Xác minh quyền AssumeRole tài khoản AWS của user)
         verify_resource = connections_resource.add_resource("verify")
-        verify_resource.add_method("POST", connector_integration, **auth_options.__dict__)
+        verify_resource.add_method(
+            "POST",
+            connector_integration,
+            authorizer=self.authorizer,
+            authorization_type=apigateway.AuthorizationType.COGNITO,
+        )
 
         # Route 6: GET /history (Truy vấn lịch sử các lệnh ChatOps trong quá khứ)
         history_resource = self.api.root.add_resource("history")
-        history_resource.add_method("GET", history_integration, **auth_options.__dict__)
+        history_resource.add_method(
+            "GET",
+            history_integration,
+            authorizer=self.authorizer,
+            authorization_type=apigateway.AuthorizationType.COGNITO,
+        )
 
         # 6. Route 7: GET /health (Mock Integration HTTP 200 không tốn chi phí Lambda)
         # Endpoint công khai phục vụ kiểm tra sức khỏe hệ thống và Route 53 DNS Failover
