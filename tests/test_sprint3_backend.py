@@ -430,3 +430,120 @@ def test_s3_explicit_phrase_cannot_be_supplied_only_by_model(cloud, monkeypatch)
     result = chat.handle(request({**payload, "confirmation_text": "DELETE test-bucket"}, "/confirm"), None)
     assert result["statusCode"] == 202
     assert cloud.get_action("alice", item["action_id"])["approved"] is True
+
+
+def queued_iam_preview(store, monkeypatch, action="delete_role", parameters=None):
+    parameters = parameters or {"role_name": "demo"}
+    monkeypatch.setattr(chat.gemini, "complete", Mock(return_value=llm_call("iam_" + action, parameters)))
+    started = Mock(side_effect=lambda item: {"status": "ACCEPTED", "action_id": item["action_id"]})
+    monkeypatch.setattr(chat, "start_workflow", started)
+    response = chat.handle(request({"message": "Xóa tài nguyên IAM", "session_id": "iam-session"}), None)
+    assert response["statusCode"] == 202
+    source = store.get_action("alice", json.loads(response["body"])["action_id"])
+    assert source["action"] == "preview_" + action
+    assert not source["requires_confirmation"]
+    preview_result = {"status": "SUCCESS", "warnings": ["EC2 có thể mất quyền"],
+                      "data": {"preview": {"resource": parameters}, "preview_fingerprint": "a" * 64}}
+    execute = Mock(return_value=preview_result)
+    monkeypatch.setattr(dispatch, "_execute", execute)
+    result = dispatch.handle({"user_id": "alice", "action_id": source["action_id"]}, None)["result"]
+    assert result["status"] == "CONFIRMATION_REQUIRED"
+    return source, result, execute
+
+
+@pytest.mark.parametrize("action,parameters", [
+    ("delete_role", {"role_name": "demo", "delete_instance_profiles": []}),
+    ("delete_policy", {"policy_arn": "arn:aws:iam::123456789012:policy/demo"}),
+])
+def test_iam_preview_persists_immutable_confirmation_and_retry_does_not_duplicate(cloud, monkeypatch, action, parameters):
+    source, result, execute = queued_iam_preview(cloud, monkeypatch, action, parameters)
+    item = cloud.get_action("alice", result["data"]["action_id"])
+    assert item["action_id"] != source["action_id"]
+    assert item["preview_action_id"] == source["action_id"]
+    assert item["preview_fingerprint"] == "a" * 64
+    assert item["parameters"] == parameters
+    assert item["expires_at"] == source["expires_at"]
+    assert not item.get("approved")
+    replay = dispatch.handle({"user_id": "alice", "action_id": source["action_id"]}, None)
+    assert replay["result"] == result
+    execute.assert_called_once()
+    assert table("PENDING_ACTION_TABLE").scan()["Count"] == 2
+    # The first stored snapshot wins even if preview delivery is retried.
+    changed = {"warnings": [], "data": {"preview": {"changed": True}, "preview_fingerprint": "b" * 64}}
+    assert cloud.create_iam_confirmation(source, changed)["preview_fingerprint"] == "a" * 64
+
+
+def test_iam_confirmation_injects_only_stored_fingerprint_after_schema_validation(cloud, monkeypatch):
+    native_execute = dispatch._execute
+    source, result, _ = queued_iam_preview(cloud, monkeypatch)
+    action_id = result["data"]["action_id"]
+    approved = chat.handle(request({"confirmed": True, "action_id": action_id,
+        "preview_fingerprint": "forged", "parameters": {"role_name": "other"}}, "/confirm"), None)
+    assert approved["statusCode"] == 202
+    monkeypatch.setattr(dispatch, "_execute", native_execute)
+    from backend.functions.dispatcher import index as dispatcher_index
+    execute = Mock(return_value={"status": "SUCCESS", "data": {}})
+    monkeypatch.setattr(dispatcher_index.iam_service, "execute", execute)
+    outcome = dispatch.handle({"user_id": "alice", "action_id": action_id}, None)
+    assert outcome["result"]["status"] == "SUCCESS"
+    assert execute.call_args.args[1]["parameters"] == {"role_name": "demo", "preview_fingerprint": "a" * 64}
+    dispatch.handle({"user_id": "alice", "action_id": action_id}, None)
+    execute.assert_called_once()
+
+
+def test_iam_changed_links_return_new_action_requiring_new_approval(cloud, monkeypatch):
+    _, initial, execute = queued_iam_preview(cloud, monkeypatch)
+    old_id = initial["data"]["action_id"]
+    cloud.approve("alice", old_id)
+    execute.return_value = {"status": "CONFIRMATION_REQUIRED", "warnings": ["Liên kết thay đổi"],
+        "data": {"preview": {"managed_policies": ["new"]}, "preview_fingerprint": "b" * 64}}
+    outcome = dispatch.handle({"user_id": "alice", "action_id": old_id}, None)["result"]
+    new_id = outcome["data"]["action_id"]
+    assert new_id != old_id
+    new = cloud.get_action("alice", new_id)
+    assert new["preview_fingerprint"] == "b" * 64 and not new.get("approved")
+    execute.reset_mock()
+    assert dispatch.handle({"user_id": "alice", "action_id": new_id}, None)["error_code"] == "ActionConflict"
+    execute.assert_not_called()
+
+
+def test_iam_preview_owner_expiry_and_cancel_guards(cloud, monkeypatch):
+    _, result, execute = queued_iam_preview(cloud, monkeypatch)
+    action_id = result["data"]["action_id"]
+    assert chat.handle(request({"confirmed": True, "action_id": action_id}, "/confirm", owner="bob"), None)["statusCode"] == 404
+    execute.reset_mock()
+    # A cancelled card never approves the action. Direct internal dispatch is blocked too.
+    assert dispatch.handle({"user_id": "alice", "action_id": action_id}, None)["error_code"] == "ActionConflict"
+    execute.assert_not_called()
+    table("PENDING_ACTION_TABLE").update_item(Key={"action_id": action_id},
+        UpdateExpression="SET expires_at = :expired", ExpressionAttributeValues={":expired": int(time.time()) - 1})
+    assert chat.handle(request({"confirmed": True, "action_id": action_id}, "/confirm"), None)["statusCode"] == 410
+
+
+def test_iam_legacy_delete_without_preview_cannot_be_approved(cloud):
+    item = proposed(cloud, "iam_delete_role", {"role_name": "demo"})
+    with pytest.raises(BackendError) as error:
+        cloud.approve("alice", item["action_id"])
+    assert error.value.code == "PreviewRequired"
+
+
+def test_iam_formatter_preserves_confirmation_snapshot_and_warning(cloud, monkeypatch):
+    source, result, _ = queued_iam_preview(cloud, monkeypatch)
+    monkeypatch.setattr(formatter.gemini, "complete", Mock(return_value={"content": "Đã xóa thành công"}))
+    publish = Mock()
+    monkeypatch.setattr(formatter.appsync, "publish", publish)
+    outcome = formatter.handle(dispatch.envelope(source, result), None)
+    assert outcome["status"] == "CONFIRMATION_REQUIRED"
+    assert outcome["message"] == result["message"]
+    assert outcome["data"]["action_id"] == result["data"]["action_id"]
+    assert publish.call_args.args[0]["data"]["warnings"] == ["EC2 có thể mất quyền"]
+
+
+def test_iam_preview_read_can_recover_worker_failure_before_completion(cloud, monkeypatch):
+    source, result, execute = queued_iam_preview(cloud, monkeypatch)
+    table("PENDING_ACTION_TABLE").update_item(Key={"action_id": source["action_id"]},
+        UpdateExpression="SET #s = :running REMOVE #r", ExpressionAttributeNames={"#s": "status", "#r": "result"},
+        ExpressionAttributeValues={":running": "EXECUTING"})
+    replay = dispatch.handle({"user_id": "alice", "action_id": source["action_id"]}, None)
+    assert replay["result"]["data"]["action_id"] == result["data"]["action_id"]
+    assert table("PENDING_ACTION_TABLE").scan()["Count"] == 2

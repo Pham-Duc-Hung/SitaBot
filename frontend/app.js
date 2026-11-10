@@ -584,10 +584,13 @@ async function handleSendMessage() {
 }
 
 function handleConfirmation(res, agentRow, originalPrompt) {
+  // Async IAM results carry the new confirmation action inside data.
+  const confirmation = res.data?.preview ? res.data : res;
   state.pending = {
-    service: res.service || "lambda",
-    tool_name: res.tool_name,
-    parameters: res.parameters || {},
+    action_id: confirmation.preview ? (confirmation.action_id || res.action_id) : undefined,
+    service: confirmation.service || res.service || "lambda",
+    tool_name: confirmation.tool_name || res.tool_name,
+    parameters: confirmation.parameters || res.parameters || {},
     agent_state: res.agent_state,
     model: state.selectedModel,
     originalPrompt: originalPrompt
@@ -597,12 +600,24 @@ function handleConfirmation(res, agentRow, originalPrompt) {
   card.className = "approval-card";
   card.innerHTML = `
     <div class="approval-title">⚠️ Yêu cầu phê duyệt thao tác AWS</div>
-    <div class="approval-msg">${res.message || "Agent đang chuẩn bị thực hiện thay đổi trên AWS Lambda."}</div>
+    <div class="approval-msg"></div>
     <div class="approval-buttons">
       <button class="btn-approve" id="confirmApprove">Xác nhận thực hiện</button>
       <button class="btn-reject" id="confirmReject">Hủy bỏ</button>
     </div>
   `;
+  card.querySelector(".approval-msg").textContent = res.message || "Xem tác động trước khi xác nhận thay đổi AWS.";
+  if (confirmation.preview) {
+    const details = document.createElement("pre");
+    details.style.whiteSpace = "pre-wrap";
+    details.style.overflowWrap = "anywhere";
+    details.textContent = JSON.stringify({
+      parameters: confirmation.parameters,
+      preview: confirmation.preview,
+      warnings: confirmation.warnings || res.warnings || []
+    }, null, 2);
+    card.querySelector(".approval-buttons").before(details);
+  }
 
   agentRow.append(card);
   els.chatScroll.scrollTop = els.chatScroll.scrollHeight;
@@ -622,14 +637,18 @@ function handleConfirmation(res, agentRow, originalPrompt) {
     logsBox.append(workingStep);
 
     try {
-      const execRes = await fetchChat({
+      const confirmationPayload = approvedAction.action_id ? {
+        confirmed: true,
+        action_id: approvedAction.action_id
+      } : {
         confirmed: true,
         service: approvedAction.service,
         tool_name: approvedAction.tool_name,
         parameters: approvedAction.parameters,
         agent_state: approvedAction.agent_state,
         model: approvedAction.model || state.selectedModel
-      });
+      };
+      const execRes = await fetchChat(confirmationPayload);
 
       workingStep.remove();
 

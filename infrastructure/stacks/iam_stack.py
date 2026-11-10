@@ -75,7 +75,7 @@ class IamStack(Stack):
                           "dynamodb:GetItem")
 
         self._grant_table(self.roles["dispatcher"], tables["PendingAction"],
-                          "dynamodb:GetItem", "dynamodb:UpdateItem")
+                          "dynamodb:GetItem", "dynamodb:UpdateItem", "dynamodb:PutItem")
         self._grant_table(self.roles["dispatcher"], tables["AwsConnections"],
                           "dynamodb:GetItem")
         self.roles["dispatcher"].add_to_policy(self._assume_customer_role_policy())

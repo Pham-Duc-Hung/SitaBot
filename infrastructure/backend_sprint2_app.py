@@ -13,6 +13,7 @@ from aws_cdk import (
     aws_codedeploy as codedeploy,
     aws_iam as iam,
     aws_lambda as lambda_,
+    aws_stepfunctions as sfn,
 )
 
 FUNCTIONS = ("chatbot", "dispatcher", "formatter", "connector", "history")
@@ -45,7 +46,11 @@ secret = cdk.CfnParameter(
     allowed_pattern=r"^$|^arn:aws[a-zA-Z-]*:secretsmanager:[a-z0-9-]+:\d{12}:secret:.+$",
     constraint_description="Provide a Secrets Manager ARN, never a plaintext API key.",
 )
-workflow = cdk.CfnParameter(stack, "ActionStateMachineArn", type="String", default="")
+workflow_role = iam.Role(stack, "ActionWorkflowRole", assumed_by=iam.ServicePrincipal("states.amazonaws.com"))
+workflow = sfn.CfnStateMachine(
+    stack, "ActionWorkflow", state_machine_type="STANDARD",
+    role_arn=workflow_role.role_arn, definition={},
+)
 appsync_url = cdk.CfnParameter(stack, "AppSyncGraphqlUrl", type="String", default="")
 appsync_arn = cdk.CfnParameter(stack, "AppSyncApiArn", type="String", default="")
 api_gateway_source_arn = cdk.CfnParameter(
@@ -78,19 +83,14 @@ role_arns = {
 cdk.CfnRule(
     stack,
     "IntegrationRoleNamesRequired",
-    rule_condition=cdk.Fn.condition_equals(grant_integration.value_as_string, "true"),
     assertions=[
         cdk.CfnRuleAssertion(
-            assert_=cdk.Fn.condition_or(
-                cdk.Fn.condition_equals(workflow.value_as_string, ""),
-                cdk.Fn.condition_not(
-                    cdk.Fn.condition_equals(role_names["chatbot"].value_as_string, "")
-                ),
-            ),
+            assert_=cdk.Fn.condition_not(cdk.Fn.condition_equals(role_names["chatbot"].value_as_string, "")),
             assert_description="Provide ChatbotRoleName when granting Step Functions start permission.",
         ),
         cdk.CfnRuleAssertion(
             assert_=cdk.Fn.condition_or(
+                cdk.Fn.condition_equals(grant_integration.value_as_string, "false"),
                 cdk.Fn.condition_equals(appsync_arn.value_as_string, ""),
                 cdk.Fn.condition_not(
                     cdk.Fn.condition_equals(role_names["formatter"].value_as_string, "")
@@ -117,14 +117,6 @@ has_api_gw_source = cdk.CfnCondition(
         cdk.Fn.condition_equals(api_gateway_source_arn.value_as_string, "")
     ),
 )
-should_grant_sfn = cdk.CfnCondition(
-    stack,
-    "ShouldGrantChatbotWorkflowStart",
-    expression=cdk.Fn.condition_and(
-        cdk.Fn.condition_equals(grant_integration.value_as_string, "true"),
-        cdk.Fn.condition_not(cdk.Fn.condition_equals(workflow.value_as_string, "")),
-    ),
-)
 should_grant_appsync = cdk.CfnCondition(
     stack,
     "ShouldGrantFormatterAppSync",
@@ -143,6 +135,7 @@ codedeploy_role = iam.Role.from_role_arn(
 codedeploy_app = codedeploy.LambdaApplication(stack, "BackendCodeDeployApplication")
 cdk.CfnOutput(stack, "CodeDeployApplicationName", value=codedeploy_app.application_name)
 
+live_aliases = {}
 for name in FUNCTIONS:
     title = name.title()
     alarm_name = cdk.CfnParameter(stack, f"{title}AlarmName", type="String", default="")
@@ -164,10 +157,11 @@ for name in FUNCTIONS:
         environment["SATIBOT_DISPATCHER_ROLE_ARN"] = role_arns["dispatcher"]
     if name == "chatbot":
         environment.update(
+            AWS_CONNECTIONS_TABLE=connections.value_as_string,
             SESSION_STATE_TABLE=sessions.value_as_string,
             PENDING_ACTION_TABLE=pending.value_as_string,
             GEMINI_SECRET_ARN=secret.value_as_string,
-            ACTION_STATE_MACHINE_ARN=workflow.value_as_string,
+            ACTION_STATE_MACHINE_ARN=workflow.attr_arn,
         )
     if name == "dispatcher":
         environment.update(
@@ -213,6 +207,7 @@ for name in FUNCTIONS:
         alias_name="live",
         version=function.current_version,
     )
+    live_aliases[name] = live_alias
 
     if name in HTTP_FUNCTIONS:
         api_perm = lambda_.CfnPermission(
@@ -348,6 +343,65 @@ for name in FUNCTIONS:
         value=deployment_group.deployment_group_name,
     )
 
+# The workflow references only Dispatcher/Formatter aliases. Chatbot may depend
+# on the workflow ARN without introducing a CloudFormation dependency cycle.
+workflow_role.add_to_policy(iam.PolicyStatement(
+    actions=["lambda:InvokeFunction"],
+    resources=[live_aliases[name].function_arn for name in ("dispatcher", "formatter")],
+))
+workflow.node.add_dependency(workflow_role.node.find_child("DefaultPolicy"))
+invoke_resource = f"arn:{cdk.Aws.PARTITION}:states:::lambda:invoke"
+formatter_task = {
+    "Type": "Task", "Resource": invoke_resource,
+    "Parameters": {"FunctionName": live_aliases["formatter"].function_arn, "Payload.$": "$"},
+    "ResultPath": "$.formatted",
+    "Retry": [{"ErrorEquals": ["States.TaskFailed", "States.Timeout"], "MaxAttempts": 2}],
+    "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.workflow_error", "Next": "InvocationFailed"}],
+}
+workflow.definition = {
+    "StartAt": "Dispatcher", "TimeoutSeconds": 300,
+    "States": {
+        "Dispatcher": {
+            "Type": "Task", "Resource": invoke_resource,
+            "Parameters": {"FunctionName": live_aliases["dispatcher"].function_arn,
+                           "Payload": {"user_id.$": "$.user_id", "action_id.$": "$.action_id"}},
+            "OutputPath": "$.Payload", "Next": "HasResultEnvelope",
+            "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.workflow_error", "Next": "InvocationFailed"}],
+        },
+        "HasResultEnvelope": {
+            "Type": "Choice", "Choices": [{"And": [
+                {"Variable": "$.result", "IsPresent": True},
+                *[{"Variable": "$." + key, "IsString": True} for key in
+                  ("user_id", "session_id", "action_id", "created_at", "service", "tool_name")],
+            ], "Next": "Formatter"}, {"And": [
+                {"Variable": "$.error_code", "IsString": True},
+                {"Variable": "$.message", "IsString": True},
+            ], "Next": "DispatcherError"}], "Default": "DispatcherRejected",
+        },
+        "Formatter": {**formatter_task, "Next": "CheckPublication"},
+        "CheckPublication": {"Type": "Choice", "Choices": [{"And": [
+            {"Variable": "$.formatted.Payload.publication_status", "IsPresent": True},
+            {"Variable": "$.formatted.Payload.publication_status", "StringEquals": "FAILED"}], "Next": "RepublishFormatter"}],
+            "Default": "CheckResult"},
+        # Keep the original Dispatcher envelope. Republish never calls Dispatcher.
+        "RepublishFormatter": {**formatter_task, "Next": "CheckResult"},
+        "CheckResult": {"Type": "Choice", "Choices": [{"And": [
+            {"Variable": "$.formatted.Payload.publication_status", "IsPresent": True},
+            {"Variable": "$.formatted.Payload.publication_status", "StringEquals": "PUBLISHED"},
+            {"Variable": "$.formatted.Payload.status", "IsPresent": True},
+            {"Variable": "$.result.status", "IsPresent": True},
+            {"Not": {"Variable": "$.formatted.Payload.status", "StringEquals": "ERROR"}},
+            {"Not": {"Variable": "$.result.status", "StringEquals": "ERROR"}},
+        ], "Next": "Completed"}], "Default": "ActionFailed"},
+        "Completed": {"Type": "Pass", "OutputPath": "$.formatted.Payload", "End": True},
+        "DispatcherRejected": {"Type": "Fail", "Error": "DispatcherRejected", "Cause": "Dispatcher returned no valid action envelope."},
+        "DispatcherError": {"Type": "Fail", "ErrorPath": "$.error_code", "CausePath": "$.message"},
+        "ActionFailed": {"Type": "Fail", "Error": "ActionFailed", "Cause": "The action, formatting or AppSync publication failed. Consult action history."},
+        "InvocationFailed": {"Type": "Fail", "ErrorPath": "$.workflow_error.Error", "CausePath": "$.workflow_error.Cause"},
+    },
+}
+cdk.CfnOutput(stack, "ActionStateMachineArn", value=workflow.attr_arn)
+
 chatbot_sfn_policy = iam.CfnPolicy(
     stack,
     "ChatbotWorkflowInvokeSupplementaryPolicy",
@@ -359,12 +413,11 @@ chatbot_sfn_policy = iam.CfnPolicy(
             {
                 "Effect": "Allow",
                 "Action": ["states:StartExecution"],
-                "Resource": workflow.value_as_string,
+                "Resource": workflow.attr_arn,
             }
         ],
     },
 )
-chatbot_sfn_policy.cfn_options.condition = should_grant_sfn
 
 formatter_appsync_policy = iam.CfnPolicy(
     stack,
