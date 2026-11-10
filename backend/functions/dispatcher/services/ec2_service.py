@@ -36,6 +36,9 @@ SUPPORTED_ACTIONS = {
     'terminate_ec2_instance',
     'get_metrics',
     'get_ec2_metrics',
+    'audit_security_group',
+    'audit_security_groups',
+    'audit_ec2_security',
 }
 
 
@@ -718,6 +721,174 @@ def _handle_get_metrics(credentials: dict, params: dict) -> dict:
     )
 
 
+# --- SecOps Constants for Port Auditing ---
+CRITICAL_PORTS = {
+    22: ("SSH (Remote Shell)", "Nguy cơ cao bị brute-force mật khẩu hoặc tấn công botnet quét cổng."),
+    3389: ("RDP (Windows Remote Desktop)", "Nguy cơ cao bị khai thác lỗ hổng Remote Desktop và mã độc tống tiền (Ransomware)."),
+    23: ("Telnet (Clear text)", "Giao thức truyền văn bản rõ không mã hóa, rất dễ bị nghe lén (Sniffing)."),
+    21: ("FTP (Clear text)", "Truyền tải tập tin không mã hóa, nguy cơ lộ thông tin đăng nhập."),
+}
+
+DATABASE_PORTS = {
+    3306: ("MySQL / MariaDB", "Cơ sở dữ liệu đang phơi bày ra toàn bộ Internet."),
+    5432: ("PostgreSQL", "Cơ sở dữ liệu PostgreSQL đang mở công khai."),
+    1433: ("Microsoft SQL Server", "Cơ sở dữ liệu MSSQL đang mở công khai."),
+    27017: ("MongoDB", "Cơ sở dữ liệu NoSQL MongoDB mở công khai (nguy cơ bị ransomware xóa dữ liệu)."),
+    6379: ("Redis In-Memory Cache", "Redis thường không cấu hình mật khẩu mạnh, rất dễ bị chiếm quyền kiểm soát."),
+}
+
+
+def _handle_audit_security_group(client, params: dict) -> dict:
+    """
+    Kịch bản 5: Kiểm tra an ninh tường lửa (Security Group SecOps Audit).
+    Quét các cổng nhạy cảm (SSH 22, RDP 3389, Database) bị mở công khai ra Internet (0.0.0.0/0 hoặc ::/0).
+    Đưa ra đánh giá rủi ro (CRITICAL, HIGH, MEDIUM, SAFE) và hướng dẫn khắc phục.
+    """
+    instance_id = params.get('instance_id')
+    group_id = params.get('group_id')
+    group_ids = list(params.get('group_ids', []))
+    if group_id and group_id not in group_ids:
+        group_ids.append(group_id)
+
+    target_instance = None
+    if instance_id:
+        resp = client.describe_instances(InstanceIds=[instance_id])
+        reservations = resp.get('Reservations', [])
+        if not reservations or not reservations[0].get('Instances'):
+            return _build_response(
+                success=False,
+                action="audit_security_group",
+                message=f"Không tìm thấy máy ảo với ID '{instance_id}'.",
+                error="InvalidInstanceID.NotFound"
+            )
+        target_instance = reservations[0]['Instances'][0]
+        instance_sgs = target_instance.get('SecurityGroups', [])
+        for sg in instance_sgs:
+            if sg.get('GroupId') and sg['GroupId'] not in group_ids:
+                group_ids.append(sg['GroupId'])
+
+    # Truy vấn thông tin các Security Groups
+    sg_describe_kwargs = {}
+    if group_ids:
+        sg_describe_kwargs['GroupIds'] = group_ids
+
+    sg_resp = client.describe_security_groups(**sg_describe_kwargs)
+    security_groups = sg_resp.get('SecurityGroups', [])
+
+    findings = []
+    has_critical = False
+    has_high = False
+    has_medium = False
+    total_rules = 0
+
+    for sg in security_groups:
+        sg_id = sg.get('GroupId', '')
+        sg_name = sg.get('GroupName', '')
+        ip_permissions = sg.get('IpPermissions', [])
+        total_rules += len(ip_permissions)
+
+        for perm in ip_permissions:
+            from_port = perm.get('FromPort')
+            to_port = perm.get('ToPort')
+            ip_proto = perm.get('IpProtocol', '')
+            ip_ranges = [r.get('CidrIp') for r in perm.get('IpRanges', []) if r.get('CidrIp')]
+            ipv6_ranges = [r.get('CidrIpv6') for r in perm.get('Ipv6Ranges', []) if r.get('CidrIpv6')]
+            all_ranges = ip_ranges + ipv6_ranges
+
+            is_open_to_world = any(r in ('0.0.0.0/0', '::/0') for r in all_ranges)
+
+            if not is_open_to_world:
+                continue
+
+            # Kiểm tra mở toàn bộ tất cả các cổng (-1 all traffic hoặc dải lớn)
+            if ip_proto == '-1' or (from_port == 0 and to_port == 65535):
+                has_critical = True
+                findings.append({
+                    "group_id": sg_id,
+                    "group_name": sg_name,
+                    "port_range": "ALL PORTS (0-65535)",
+                    "protocol": "ALL",
+                    "source": "0.0.0.0/0",
+                    "severity": "CRITICAL",
+                    "service_name": "All Traffic",
+                    "description": "Tường lửa đang mở toàn bộ tất cả các cổng ra Internet không giới hạn! Rủi ro bảo mật cực kỳ nghiêm trọng."
+                })
+                continue
+
+            if from_port is None or to_port is None:
+                continue
+
+            # Kiểm tra từng cổng quan trọng trong khoảng from_port -> to_port
+            # 1. Cổng quản trị từ xa (Critical)
+            for p, (srv_name, risk_desc) in CRITICAL_PORTS.items():
+                if from_port <= p <= to_port:
+                    has_critical = True
+                    findings.append({
+                        "group_id": sg_id,
+                        "group_name": sg_name,
+                        "port": p,
+                        "protocol": ip_proto,
+                        "source": "0.0.0.0/0",
+                        "severity": "CRITICAL",
+                        "service_name": srv_name,
+                        "description": f"Cổng {srv_name} (Port {p}) đang mở công khai toàn bộ Internet. {risk_desc}"
+                    })
+
+            # 2. Cổng cơ sở dữ liệu (High)
+            for p, (srv_name, risk_desc) in DATABASE_PORTS.items():
+                if from_port <= p <= to_port:
+                    has_high = True
+                    findings.append({
+                        "group_id": sg_id,
+                        "group_name": sg_name,
+                        "port": p,
+                        "protocol": ip_proto,
+                        "source": "0.0.0.0/0",
+                        "severity": "HIGH",
+                        "service_name": srv_name,
+                        "description": f"Cổng cơ sở dữ liệu {srv_name} (Port {p}) đang mở trực tiếp ra Internet. {risk_desc}"
+                    })
+
+    # Xác định mức độ rủi ro tổng thể
+    if has_critical:
+        overall_risk = "CRITICAL"
+        status_msg = "CẢNH BÁO BẢO MẬT NGHIÊM TRỌNG: Phát hiện cổng quản trị nhạy cảm (SSH 22 / RDP 3389) đang mở công khai ra toàn bộ Internet (0.0.0.0/0)!"
+    elif has_high:
+        overall_risk = "HIGH"
+        status_msg = "CẢNH BÁO RỦI RO CAO: Phát hiện cổng cơ sở dữ liệu đang mở trực tiếp ra Internet!"
+    elif has_medium:
+        overall_risk = "MEDIUM"
+        status_msg = "CẢNH BÁO: Phát hiện cấu hình tường lửa cần xem xét lại phạm vi truy cập."
+    else:
+        overall_risk = "SAFE"
+        status_msg = "AN TOÀN BẢO MẬT: Không phát hiện cổng quản trị nhạy cảm nào bị mở công khai ra Internet (0.0.0.0/0)."
+
+    # Đưa ra khuyến nghị khắc phục
+    recommendations = []
+    if has_critical:
+        recommendations.append("Thu hẹp dải IP nguồn: Chỉ cho phép IP tĩnh cụ thể của người quản trị (ví dụ: <Your_IP>/32) thay vì 0.0.0.0/0.")
+        recommendations.append("Sử dụng AWS Systems Manager (SSM) Session Manager hoặc EC2 Instance Connect Endpoint để SSH vào máy ảo an toàn mà không cần mở Port 22 công khai.")
+    if has_high:
+        recommendations.append("Chuyển các cơ sở dữ liệu vào Private Subnet và chỉ cho phép Security Group của Web/App server truy cập.")
+    if overall_risk == "SAFE":
+        recommendations.append("Tiếp tục duy trì nguyên tắc đặc quyền tối thiểu (Least Privilege) cho các nhóm bảo mật.")
+
+    return _build_response(
+        success=True,
+        action="audit_security_group",
+        data={
+            "instance_id": instance_id,
+            "security_groups_scanned": len(security_groups),
+            "total_rules_scanned": total_rules,
+            "risks_found": len(findings),
+            "risk_level": overall_risk,
+            "findings": findings,
+            "recommendations": recommendations,
+        },
+        message=f"{status_msg} Đã quét {len(security_groups)} Security Group, phát hiện {len(findings)} điểm rủi ro."
+    )
+
+
 ACTION_HANDLERS = {
     'create_instance': _handle_create_instance,
     'create_ec2_instance': _handle_create_instance,
@@ -732,6 +903,9 @@ ACTION_HANDLERS = {
     'terminate_ec2_instance': _handle_terminate_instance,
     'get_metrics': _handle_get_metrics,
     'get_ec2_metrics': _handle_get_metrics,
+    'audit_security_group': _handle_audit_security_group,
+    'audit_security_groups': _handle_audit_security_group,
+    'audit_ec2_security': _handle_audit_security_group,
 }
 
 # --- Tool Schemas for LLM Function Calling (ChatOps AI Agent) ---
@@ -861,6 +1035,25 @@ EC2_TOOL_SCHEMAS = [
                 }
             },
             "required": ["instance_id"]
+        }
+    },
+    {
+        "name": "audit_ec2_security",
+        "service": "ec2",
+        "description": "Kiểm tra và đánh giá an toàn tường lửa (Security Group SecOps Audit) của máy ảo EC2. Phát hiện các cổng nhạy cảm (SSH 22, RDP 3389, Database) bị mở công khai ra Internet (0.0.0.0/0) và đưa ra cảnh báo rủi ro kèm khuyến nghị bảo mật.",
+        "requires_confirmation": False,
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "instance_id": {
+                    "type": "string",
+                    "description": "Mã định danh của máy ảo EC2 cần kiểm tra an toàn tường lửa (ví dụ: 'i-015aad95042137744'). Nếu bỏ trống sẽ quét tất cả Security Group trong Region."
+                },
+                "group_id": {
+                    "type": "string",
+                    "description": "ID nhóm bảo mật cụ thể cần kiểm tra (ví dụ: 'sg-0123456789abcdef0')."
+                }
+            }
         }
     }
 ]
