@@ -247,7 +247,54 @@ def _handle_create_instance(client, params: dict) -> dict:
     if subnet_id and isinstance(subnet_id, str):
         run_kwargs["SubnetId"] = subnet_id.strip()
 
-    run_response = client.run_instances(**run_kwargs)
+    try:
+        run_response = client.run_instances(**run_kwargs)
+    except ClientError as e:
+        error_code = e.response.get("Error", {}).get("Code", "")
+        if error_code in ("VcpuLimitExceeded", "InstanceLimitExceeded"):
+            # Kịch bản 2: Xử lý vượt hạn mức tài nguyên (Cost Guardrails & Quota)
+            running_instances = []
+            try:
+                running_resp = client.describe_instances(
+                    Filters=[{"Name": "instance-state-name", "Values": ["running"]}]
+                )
+                for res in running_resp.get("Reservations", []):
+                    for inst in res.get("Instances", []):
+                        running_instances.append({
+                            "instance_id": inst.get("InstanceId"),
+                            "name": _extract_name_tag(inst.get("Tags")),
+                            "instance_type": inst.get("InstanceType"),
+                            "state": "running"
+                        })
+            except Exception:
+                pass
+
+            inst_list_str = ""
+            if running_instances:
+                inst_list_str = " Danh sách máy ảo đang chạy: " + ", ".join(
+                    [f"{inst['name'] or 'Không tên'} ({inst['instance_id']})" for inst in running_instances[:5]]
+                ) + "."
+
+            remedy_msg = (
+                f"Cảnh báo vượt hạn mức tài nguyên AWS (Quota Exceeded): Không thể tạo máy '{instance_name}' "
+                f"do tài khoản đã chạm ngưỡng giới hạn vCPU/Instance ({error_code}).{inst_list_str} "
+                "Khuyến nghị: Bạn có thể tắt bớt các máy ảo không sử dụng bằng lệnh 'manage_power' (stop), "
+                "chuyển về loại máy nhỏ hơn thuộc Free Tier (t3.micro), hoặc gửi yêu cầu nâng hạn mức Service Quotas trên AWS Console."
+            )
+            return _build_response(
+                success=False,
+                action="create_instance",
+                data={
+                    "instance_name": instance_name,
+                    "instance_type": instance_type,
+                    "error_code": error_code,
+                    "running_instances": running_instances,
+                    "remedy": "stop_unused_instances_or_request_quota_increase"
+                },
+                message=remedy_msg,
+                error=error_code
+            )
+        raise
 
     # Step 1.4: Immediate, non-blocking response
     created_instances = run_response.get("Instances", [])
