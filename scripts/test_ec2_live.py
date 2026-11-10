@@ -80,10 +80,11 @@ CHỌN THAO TÁC EC2 ĐỂ TEST TRỰC TIẾP TRÊN AWS:
   5. Điều khiển nguồn máy ảo (manage_power: start / stop / reboot)
   6. Giám sát hiệu năng CPU & Đề xuất FinOps (get_metrics)
   7. Xóa máy ảo an toàn có bảo vệ & xác nhận (terminate_instance)
+  8. Kiểm tra an ninh tường lửa SecOps (audit_security_group)
   0. Thoát
 -----------------------------------------------------------
 """)
-        choice = input("Lựa chọn của bạn (0-7): ").strip()
+        choice = input("Lựa chọn của bạn (0-8): ").strip()
 
         if choice == "1":
             print("\n⏳ Đang gọi ec2.describe_instances() trên AWS...")
@@ -149,6 +150,15 @@ CHỌN THAO TÁC EC2 ĐỂ TEST TRỰC TIẾP TRÊN AWS:
                 "confirm": is_confirmed
             })
             print_result("Xóa máy chủ EC2", res)
+
+        elif choice == "8":
+            target = input("Nhập Instance ID cần quét an ninh (Enter để quét toàn bộ Security Group): ").strip()
+            params = {"action": "audit_security_group"}
+            if target:
+                params["instance_id"] = target
+            print(f"\n⏳ Đang phân tích rủi ro an ninh tường lửa (Port 22 SSH, Port 3389 RDP, Database)...")
+            res = execute(creds, params)
+            print_result("Đánh giá an ninh tường lửa SecOps", res)
 
         elif choice == "0":
             print("Tạm biệt!")

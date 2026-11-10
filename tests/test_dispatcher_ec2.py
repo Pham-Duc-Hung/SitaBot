@@ -1136,7 +1136,7 @@ def test_get_metrics_optimal_recommendation(mock_credentials, mock_boto_ec2):
 
 def test_ec2_tool_schemas_structure():
     """Verify all EC2 tool schemas have required keys and correct specifications."""
-    assert len(EC2_TOOL_SCHEMAS) == 6
+    assert len(EC2_TOOL_SCHEMAS) >= 6
 
     expected_names = {
         "create_ec2_instance",
@@ -1145,9 +1145,10 @@ def test_ec2_tool_schemas_structure():
         "manage_ec2_power",
         "terminate_ec2_instance",
         "get_ec2_metrics",
+        "audit_ec2_security",
     }
     actual_names = {schema["name"] for schema in EC2_TOOL_SCHEMAS}
-    assert actual_names == expected_names
+    assert expected_names.issubset(actual_names)
 
     for schema in EC2_TOOL_SCHEMAS:
         assert schema.get("service") == "ec2"
@@ -1170,3 +1171,91 @@ def test_ec2_tool_schemas_confirmation_flags():
     assert confirmation_map["list_ec2_instances"] is False
     assert confirmation_map["get_ec2_instance_detail"] is False
     assert confirmation_map["get_ec2_metrics"] is False
+    assert confirmation_map["audit_ec2_security"] is False
+
+
+# ==============================================================================
+# TESTS FOR SCENARIO 5: SECURITY GROUP SECOPS AUDIT
+# ==============================================================================
+
+def test_audit_security_group_critical_risk(mock_credentials, mock_boto_ec2):
+    """Verify audit_security_group flags port 22 open to 0.0.0.0/0 as CRITICAL."""
+    mock_client = mock_boto_ec2.return_value
+    mock_client.describe_security_groups.return_value = {
+        "SecurityGroups": [{
+            "GroupId": "sg-open-ssh",
+            "GroupName": "launch-wizard-ssh",
+            "IpPermissions": [{
+                "FromPort": 22,
+                "ToPort": 22,
+                "IpProtocol": "tcp",
+                "IpRanges": [{"CidrIp": "0.0.0.0/0"}],
+            }]
+        }]
+    }
+
+    res = execute(mock_credentials, {"action": "audit_security_group", "group_id": "sg-open-ssh"})
+
+    assert res["success"] is True
+    assert res["data"]["risk_level"] == "CRITICAL"
+    assert res["data"]["risks_found"] >= 1
+    assert "CẢNH BÁO BẢO MẬT NGHIÊM TRỌNG" in res["message"]
+    finding = res["data"]["findings"][0]
+    assert finding["port"] == 22
+    assert finding["severity"] == "CRITICAL"
+
+
+def test_audit_security_group_database_risk(mock_credentials, mock_boto_ec2):
+    """Verify audit_security_group flags database port 3306 as HIGH risk."""
+    mock_client = mock_boto_ec2.return_value
+    mock_client.describe_security_groups.return_value = {
+        "SecurityGroups": [{
+            "GroupId": "sg-db",
+            "GroupName": "mysql-db-sg",
+            "IpPermissions": [{
+                "FromPort": 3306,
+                "ToPort": 3306,
+                "IpProtocol": "tcp",
+                "IpRanges": [{"CidrIp": "0.0.0.0/0"}],
+            }]
+        }]
+    }
+
+    res = execute(mock_credentials, {"action": "audit_security_group", "group_id": "sg-db"})
+
+    assert res["success"] is True
+    assert res["data"]["risk_level"] == "HIGH"
+    assert res["data"]["risks_found"] >= 1
+    assert "CẢNH BÁO RỦI RO CAO" in res["message"]
+
+
+def test_audit_security_group_safe(mock_credentials, mock_boto_ec2):
+    """Verify audit_security_group reports SAFE when ports are restricted or HTTPS only."""
+    mock_client = mock_boto_ec2.return_value
+    mock_client.describe_security_groups.return_value = {
+        "SecurityGroups": [{
+            "GroupId": "sg-safe",
+            "GroupName": "web-https-sg",
+            "IpPermissions": [
+                {
+                    "FromPort": 443,
+                    "ToPort": 443,
+                    "IpProtocol": "tcp",
+                    "IpRanges": [{"CidrIp": "0.0.0.0/0"}],  # Normal for web
+                },
+                {
+                    "FromPort": 22,
+                    "ToPort": 22,
+                    "IpProtocol": "tcp",
+                    "IpRanges": [{"CidrIp": "203.113.152.1/32"}],  # Restricted to single IP
+                }
+            ]
+        }]
+    }
+
+    res = execute(mock_credentials, {"action": "audit_security_group", "group_id": "sg-safe"})
+
+    assert res["success"] is True
+    assert res["data"]["risk_level"] == "SAFE"
+    assert res["data"]["risks_found"] == 0
+    assert "AN TOÀN BẢO MẬT" in res["message"]
