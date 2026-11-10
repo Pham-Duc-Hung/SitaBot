@@ -148,9 +148,8 @@ class DnsFailoverStack(Stack):
             failover="PRIMARY",
             set_identifier="Primary-SatiBot-ApiGateway-Endpoint",
             health_check_id=self.health_check.attr_health_check_id,
-            ttl="60",
             alias_target=route53.CfnRecordSet.AliasTargetProperty(
-                hosted_zone_id=self.custom_domain.domain_name_hosted_zone_id,
+                hosted_zone_id=self.custom_domain.domain_name_alias_hosted_zone_id,
                 dns_name=self.custom_domain.domain_name_alias_domain_name,
                 evaluate_target_health=True,
             ),
