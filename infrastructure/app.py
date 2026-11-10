@@ -9,6 +9,7 @@ from stacks.ai_stack import AiStack
 from stacks.auth_stack import AuthStack
 from stacks.core_api_stack import CoreApiStack
 from stacks.data_stack import DataStack
+from stacks.dns_failover_stack import DnsFailoverStack
 from stacks.iam_stack import IamStack
 from stacks.monitoring_stack import MonitoringStack
 
@@ -49,7 +50,15 @@ core_api_stack = CoreApiStack(
     env=target_env,
 )
 
-# 5. Các Stack bổ trợ
+# 5. Hạ tầng Tên miền, Chứng chỉ số & Điều hướng Chịu lỗi (DnsFailoverStack - Nguyễn Đức Huy)
+dns_failover_stack = DnsFailoverStack(
+    app,
+    "DnsFailoverStack",
+    core_api_stack=core_api_stack,
+    env=target_env,
+)
+
+# 6. Các Stack bổ trợ
 AiStack(app, "AiStack", env=target_env)
 MonitoringStack(app, "MonitoringStack", env=target_env)
 
