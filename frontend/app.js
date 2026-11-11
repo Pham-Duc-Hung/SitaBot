@@ -1151,9 +1151,8 @@ window.addEventListener("satibot-auth-changed", () => {
   }
 });
 window.addEventListener("online", () => {
-  if (state.currentSessionId && state.realtime?.status !== "connected") {
-    state.realtime.start(state.currentSessionId);
-  }
+  state.realtime?.networkOnline();
 });
+window.addEventListener("offline", () => state.realtime?.networkOffline());
 loadHealth();
 els.promptInput.focus();

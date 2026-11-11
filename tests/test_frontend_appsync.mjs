@@ -140,6 +140,25 @@ test("missing authentication never opens a socket", async () => {
   channel.stop();
 });
 
+test("browser offline event updates state immediately and online reconnects the same session", async () => {
+  const { channel, results, states, scheduled, connect } = testChannel();
+  channel.start("ses_one");
+  const { socket } = await connect();
+  channel.networkOffline();
+  assert.equal(socket.readyState, 3);
+  assert.equal(channel.status, "reconnecting");
+  assert.equal(scheduled.size, 0);
+  channel.networkOnline();
+  const next = await connect();
+  assert.notEqual(next.socket, socket);
+  assert.equal(channel.status, "connected");
+  next.socket.receive({ type: "data", id: next.start.id,
+    payload: { data: { onActionResult: event } } });
+  assert.equal(results.length, 1);
+  assert.deepEqual(states, ["connecting", "connected", "reconnecting", "connected"]);
+  channel.stop();
+});
+
 test("history reconciles only matching action and session", async () => {
   const fetchImpl = async url => ({ ok: true, status: 200, json: async () => {
     if (url.includes("created_at=")) return { item: { ...event, session_id: "other" } };

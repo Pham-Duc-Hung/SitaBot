@@ -65,6 +65,7 @@ export function createAppSyncSubscription({
   let retryTimer = null;
   let heartbeatTimer = null;
   let phase = "disconnected";
+  let online = globalThis.navigator?.onLine !== false;
   let connectionTimeoutMs = 300000;
   const seen = new Map();
   const waiters = new Map();
@@ -93,6 +94,7 @@ export function createAppSyncSubscription({
     if (heartbeatTimer !== null) clearTimer(heartbeatTimer);
     heartbeatTimer = null;
     emitState("reconnecting");
+    if (!online) return;
     const delay = Math.min(30000, 1000 * 2 ** Math.min(retry++, 5));
     retryTimer = setTimer(() => {
       retryTimer = null;
@@ -106,7 +108,7 @@ export function createAppSyncSubscription({
   };
 
   async function connect() {
-    if (!sessionId || socket) return;
+    if (!sessionId || socket || !online) return;
     const current = ++generation;
     emitState(retry ? "reconnecting" : "connecting");
     let token;
@@ -179,8 +181,27 @@ export function createAppSyncSubscription({
     seen.clear();
     sessionId = nextSessionId || null;
     retry = 0;
-    if (sessionId) void connect();
+    if (sessionId && online) void connect();
+    else if (sessionId) emitState("reconnecting");
     else emitState("disconnected");
+  }
+
+  function networkOffline() {
+    online = false;
+    generation++;
+    clearTimers();
+    closeSocket();
+    for (const done of waiters.values()) done(null);
+    waiters.clear();
+    emitState(sessionId ? "reconnecting" : "disconnected");
+  }
+
+  function networkOnline() {
+    online = true;
+    if (!sessionId || socket) return;
+    clearTimers();
+    retry = 1;
+    void connect();
   }
 
   function waitForResult(actionId, timeoutMs = 30000) {
@@ -206,5 +227,5 @@ export function createAppSyncSubscription({
     emitState("disconnected");
   }
 
-  return { start, stop, waitForResult, get status() { return phase; } };
+  return { start, stop, networkOffline, networkOnline, waitForResult, get status() { return phase; } };
 }
