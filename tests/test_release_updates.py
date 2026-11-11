@@ -65,7 +65,6 @@ def test_release_bootstraps_only_new_stack(monkeypatch, tmp_path, already_active
         **{f"{n.title()}RoleArn": "role" for n in release.FUNCTIONS},
     }
     integration = {
-        "ActionStateMachineArn": "arn:aws:states:ap-southeast-1:123456789012:stateMachine:satibot",
         "AppSyncGraphqlUrl": "https://abc123.appsync-api.ap-southeast-1.amazonaws.com/graphql",
         "AppSyncApiArn": "arn:aws:appsync:ap-southeast-1:123456789012:apis/abc123",
         "ApiGatewaySourceArn": "arn:aws:execute-api:ap-southeast-1:123456789012:api123/*/*",
@@ -106,7 +105,7 @@ def test_release_rejects_missing_integration_parameters():
     )
     env["PARAM_GrantIntegrationPermissions"] = "true"
     result = build_configuration(template, env, require_integrations=True)
-    assert result["Parameters"]["ActionStateMachineArn"] == "configured"
+    assert result["Parameters"]["AppSyncApiArn"] == "configured"
     assert (
         bootstrap["Parameters"]["ConfigurationVersion"]
         != result["Parameters"]["ConfigurationVersion"]
@@ -119,7 +118,7 @@ def test_release_checks_external_outputs_before_any_aws_change(monkeypatch, tmp_
     from scripts import deploy_release as release
 
     integration_file = tmp_path / "integration.json"
-    integration_file.write_text(json.dumps({"SatiBotIntegration": {"ActionStateMachineArn": "arn:aws:states:ap-southeast-1:123456789012:stateMachine:satibot"}}))
+    integration_file.write_text(json.dumps({"SatiBotIntegration": {"AppSyncGraphqlUrl": "https://abc123.appsync-api.ap-southeast-1.amazonaws.com/graphql"}}))
     run = Mock()
     session = Mock()
     session.return_value.client.return_value.get_caller_identity.return_value = {"Account": "123456789012"}
@@ -139,7 +138,6 @@ def test_release_checks_external_outputs_before_any_aws_change(monkeypatch, tmp_
 
 def test_release_rejects_integration_outputs_from_another_account_or_region():
     valid = {
-        "ActionStateMachineArn": "arn:aws:states:ap-southeast-1:123456789012:stateMachine:satibot",
         "AppSyncGraphqlUrl": "https://abc123.appsync-api.ap-southeast-1.amazonaws.com/graphql",
         "AppSyncApiArn": "arn:aws:appsync:ap-southeast-1:123456789012:apis/abc123",
         "ApiGatewaySourceArn": "arn:aws:execute-api:ap-southeast-1:123456789012:api123/*/*",

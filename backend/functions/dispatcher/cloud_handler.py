@@ -31,7 +31,11 @@ def _execute(item, credentials):
     from backend.functions.dispatcher.services import ec2_service, iam_service, lambda_service, s3_service
 
     service = item["service"]
-    parameters = item["parameters"]
+    parameters = dict(item["parameters"])
+    if service == "iam" and item["action"] in {"delete_role", "delete_policy"}:
+        # Model arguments have already passed validate_call. Only server-stored
+        # approval metadata is added to the IAM invocation.
+        parameters["preview_fingerprint"] = item["preview_fingerprint"]
     if service in {"ec2", "s3"}:
         # These teammate modules use flat parameters, unlike Lambda and IAM.
         params = {
@@ -78,6 +82,7 @@ def normalize(raw):
             ),
             "data": raw.get("data", {}),
             "error_code": raw.get("error_code") or raw.get("error"),
+            "warnings": raw.get("warnings", []),
         }
     )
     result["message"] = str(result["message"])[:8000]
@@ -239,5 +244,27 @@ def handle(event, context):
                     "data": {},
                 }
     # A failed completion write leaves EXECUTING, deliberately preventing replay.
-    store.finish(item, result)
+    if item["service"] == "iam" and (
+        (item.get("delete_intent") and result.get("status") == "SUCCESS")
+        or (item["action"] in {"delete_role", "delete_policy"} and result.get("status") == "CONFIRMATION_REQUIRED")
+    ):
+        try:
+            confirmation = store.create_iam_confirmation(item, result)
+            result = {"status": "CONFIRMATION_REQUIRED", "message": "Xem đầy đủ liên kết và ảnh hưởng trước khi xác nhận xóa IAM.",
+                      "warnings": confirmation["warnings"], "data": {
+                          "action_id": confirmation["action_id"], "session_id": confirmation["session_id"],
+                          "service": "iam", "tool_name": confirmation["tool_name"],
+                          "parameters": confirmation["parameters"], "preview": confirmation["preview"],
+                          "warnings": confirmation["warnings"], "expires_at": confirmation["expires_at"]}}
+        except BackendError as exc:
+            result = failure(exc)
+    try:
+        store.finish(item, result)
+    except ClientError as exc:
+        if exc.response["Error"]["Code"] != "ConditionalCheckFailedException":
+            raise
+        cached = store.get_action(owner, action_id)
+        if cached["status"] != "COMPLETED":
+            raise
+        result = cached["result"]
     return envelope(item, result)

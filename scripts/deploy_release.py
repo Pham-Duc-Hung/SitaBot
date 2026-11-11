@@ -47,7 +47,6 @@ def required(values, key):
 def validate_integration_outputs(values, account, region):
     """Reject integration outputs for another account or region before deploying."""
     prefixes = {
-        "ActionStateMachineArn": f"arn:aws:states:{region}:{account}:stateMachine:",
         "AppSyncApiArn": f"arn:aws:appsync:{region}:{account}:apis/",
         "ApiGatewaySourceArn": f"arn:aws:execute-api:{region}:{account}:",
     }
@@ -248,7 +247,6 @@ def main():
             **backend_params,
             # Bootstrap has no functioning workflow; do not canary traffic back to it.
             "CanaryDeploymentConfig": args.canary_config if activated else "CodeDeployDefault.LambdaAllAtOnce",
-            "ActionStateMachineArn": required(integration, "ActionStateMachineArn"),
             "AppSyncGraphqlUrl": required(integration, "AppSyncGraphqlUrl"),
             "AppSyncApiArn": required(integration, "AppSyncApiArn"),
             "ApiGatewaySourceArn": required(integration, "ApiGatewaySourceArn"),

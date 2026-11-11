@@ -219,6 +219,7 @@ def verify_live_aws_sandbox(
                 name: item["live_alias_arn"]
                 for name, item in evidence["functions"].items()
             },
+            workflow_arn=outputs.get("ActionStateMachineArn"),
         )
     evidence["validated"] = not collect_only
     return evidence

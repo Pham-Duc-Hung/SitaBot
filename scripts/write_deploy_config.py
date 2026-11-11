@@ -12,7 +12,7 @@ from pathlib import Path
 
 RELEASE_REQUIRED = (
     "ConnectionsTableName", "HistoryTableName", "SessionStateTableName",
-    "PendingActionTableName", "GeminiSecretArn", "ActionStateMachineArn",
+    "PendingActionTableName", "GeminiSecretArn",
     "AppSyncGraphqlUrl", "AppSyncApiArn", "ApiGatewaySourceArn",
     "ChatbotRoleArn", "DispatcherRoleArn", "FormatterRoleArn",
     "ConnectorRoleArn", "HistoryRoleArn", "CodeDeployRoleArn",

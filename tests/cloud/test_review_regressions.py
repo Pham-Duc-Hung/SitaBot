@@ -186,6 +186,9 @@ def test_verifier_checks_gateway_and_workflow_aliases():
         "ActionStateMachineArn": "workflow",
     }
     assert len(verify_callers(session, params, aliases)["gateway_routes"]) == 6
+    managed_params = {key: value for key, value in params.items() if key != "ActionStateMachineArn"}
+    verify_callers(session, managed_params, aliases, workflow_arn="managed-workflow")
+    workflow.describe_state_machine.assert_called_with(stateMachineArn="managed-workflow")
     # Chặn cả trường hợp trỏ hàm gốc lẫn trỏ nhầm sang alias khác có cùng tiền tố ':live-canary'
     for bad_uri in (
         aliases["chatbot"].removesuffix(":live"),

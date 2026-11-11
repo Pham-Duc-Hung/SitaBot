@@ -35,6 +35,8 @@ def handle(event, context):
                   formatter_fallback=False, publication_status="PENDING")
     if isinstance(result.get("required_permission"), str) and result["required_permission"]:
         record["required_permission"] = result["required_permission"][:128]
+    if result.get("warnings"):
+        record["data"] = {**record["data"], "warnings": result["warnings"]}
     # Keep authoritative status/data/resource identifiers outside model-generated prose.
     try:
         reply = gemini.complete([
@@ -43,7 +45,8 @@ def handle(event, context):
         text = reply.get("content")
         if not isinstance(text, str) or not text.strip() or reply.get("tool_calls"):
             raise ValueError("Invalid formatter message")
-        record["message"] = text[:8000]
+        if record["status"] != "CONFIRMATION_REQUIRED":
+            record["message"] = text[:8000]
     except Exception as exc:
         if isinstance(exc, BackendError) and exc.code in PLATFORM_FAULT_CODES:
             emit_platform_fault("formatter", exc.code, context=context)

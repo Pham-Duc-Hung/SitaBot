@@ -53,9 +53,9 @@ class TestChatbotEc2Integration(unittest.TestCase):
     # ==============================================================================
 
     def test_ec2_tool_schemas_loaded(self):
-        """Kiểm tra nạp đủ 6 tool schemas của EC2 vào Chatbot."""
+        """Kiểm tra nạp đủ 7 tool schemas của EC2 vào Chatbot."""
         ec2_schemas = _get_ec2_tool_schemas()
-        self.assertGreaterEqual(len(ec2_schemas), 6)
+        self.assertGreaterEqual(len(ec2_schemas), 7)
         tool_names = [s.get("name") for s in ec2_schemas]
         self.assertIn("create_ec2_instance", tool_names)
         self.assertIn("list_ec2_instances", tool_names)
@@ -63,6 +63,7 @@ class TestChatbotEc2Integration(unittest.TestCase):
         self.assertIn("manage_ec2_power", tool_names)
         self.assertIn("terminate_ec2_instance", tool_names)
         self.assertIn("get_ec2_metrics", tool_names)
+        self.assertIn("audit_ec2_security", tool_names)
 
     def test_all_tool_schemas_contains_ec2_and_lambda(self):
         """Kiểm tra _get_all_tool_schemas nạp đồng thời cả công cụ Lambda và EC2."""
@@ -72,6 +73,7 @@ class TestChatbotEc2Integration(unittest.TestCase):
         self.assertIn("create_ec2_instance", tool_names)
         self.assertIn("get_ec2_metrics", tool_names)
         self.assertIn("list_ec2_instances", tool_names)
+        self.assertIn("audit_ec2_security", tool_names)
 
     def test_resolve_service_for_ec2_tools(self):
         """Kiểm tra định tuyến chính xác tên service 'ec2' cho các công cụ EC2."""
@@ -82,6 +84,7 @@ class TestChatbotEc2Integration(unittest.TestCase):
         self.assertEqual(_resolve_service_for_tool("manage_ec2_power", raw_schemas), "ec2")
         self.assertEqual(_resolve_service_for_tool("terminate_ec2_instance", raw_schemas), "ec2")
         self.assertEqual(_resolve_service_for_tool("get_ec2_metrics", raw_schemas), "ec2")
+        self.assertEqual(_resolve_service_for_tool("audit_ec2_security", raw_schemas), "ec2")
 
     # ==============================================================================
     # 2. KIỂM THỬ CÁC THAO TÁC THAY ĐỔI HẠ TẦNG (YÊU CẦU PHÊ DUYỆT / CONFIRMATION)
@@ -311,6 +314,45 @@ class TestChatbotEc2Integration(unittest.TestCase):
         self.assertEqual(body["status"], "CONFIRMATION_REQUIRED")
         self.assertEqual(body["service"], "ec2")
         self.assertEqual(body["tool_name"], "create_ec2_instance")
+
+    # ==============================================================================
+    # 6. KIỂM THỬ ĐÁNH GIÁ AN NINH TƯỜNG LỬA (SECOPS SECURITY GROUP AUDIT)
+    # ==============================================================================
+
+    @patch("backend.functions.chatbot.index._dispatch_action")
+    @patch("backend.functions.chatbot.index.call_llm_api")
+    def test_audit_ec2_security_executes_immediately(self, mock_llm, mock_dispatch):
+        """Quét an ninh tường lửa là tác vụ đọc/kiểm toán, tự động thực thi ngay."""
+        mock_llm.return_value = {
+            "content": "Đang phân tích cấu hình an ninh tường lửa...",
+            "tool_calls": [{
+                "id": "call_audit_01",
+                "type": "function",
+                "function": {
+                    "name": "audit_ec2_security",
+                    "arguments": json.dumps({"instance_id": "i-015aad95042137744"}),
+                },
+            }],
+        }
+        mock_dispatch.return_value = {
+            "status": "SUCCESS",
+            "message": "CẢNH BÁO BẢO MẬT: Phát hiện cổng 22 SSH đang mở công khai ra Internet (0.0.0.0/0).",
+            "data": {
+                "instance_id": "i-015aad95042137744",
+                "risk_level": "CRITICAL",
+                "risks_found": 1,
+            },
+        }
+
+        event = {"message": "Kiểm tra an toàn tường lửa của máy i-015aad95042137744"}
+        res = lambda_handler(event, None)
+
+        self.assertEqual(res["status"], "SUCCESS")
+        self.assertEqual(res["type"], "action_executed")
+        self.assertEqual(res["service"], "ec2")
+        self.assertEqual(res["tool_name"], "audit_ec2_security")
+        self.assertEqual(res["data"]["risk_level"], "CRITICAL")
+        mock_dispatch.assert_called_once()
 
 
 if __name__ == "__main__":

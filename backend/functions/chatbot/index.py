@@ -212,7 +212,8 @@ def _resolve_service_for_tool(tool_name: str, raw_schemas: Optional[List[Dict[st
     if isinstance(tool_name, str) and tool_name.startswith("s3_"):
         return "s3"
     if "ec2" in tool_name or tool_name in (
-        "create_instance", "list_instances", "get_instance", "manage_power", "terminate_instance", "get_metrics"
+        "create_instance", "list_instances", "get_instance", "manage_power", "terminate_instance", "get_metrics",
+        "audit_security_group", "audit_security_groups", "audit_ec2_security"
     ):
         return "ec2"
     return "lambda"
