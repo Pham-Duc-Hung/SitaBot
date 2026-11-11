@@ -480,9 +480,9 @@ def test_iam_confirmation_injects_only_stored_fingerprint_after_schema_validatio
         "preview_fingerprint": "forged", "parameters": {"role_name": "other"}}, "/confirm"), None)
     assert approved["statusCode"] == 202
     monkeypatch.setattr(dispatch, "_execute", native_execute)
-    from backend.functions.dispatcher import index as dispatcher_index
+    from backend.functions.dispatcher.services import iam_service
     execute = Mock(return_value={"status": "SUCCESS", "data": {}})
-    monkeypatch.setattr(dispatcher_index.iam_service, "execute", execute)
+    monkeypatch.setattr(iam_service, "execute", execute)
     outcome = dispatch.handle({"user_id": "alice", "action_id": action_id}, None)
     assert outcome["result"]["status"] == "SUCCESS"
     assert execute.call_args.args[1]["parameters"] == {"role_name": "demo", "preview_fingerprint": "a" * 64}
