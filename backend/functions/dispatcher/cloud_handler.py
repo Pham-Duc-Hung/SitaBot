@@ -28,7 +28,7 @@ _MIN_EXECUTION_BUDGET_MS = 5000
 
 
 def _execute(item, credentials):
-    from backend.functions.dispatcher import index
+    from backend.functions.dispatcher.services import ec2_service, iam_service, lambda_service, s3_service
 
     service = item["service"]
     parameters = dict(item["parameters"])
@@ -52,10 +52,10 @@ def _execute(item, credentials):
             "region": item["region"],
         }
     module = {
-        "ec2": index.ec2_service,
-        "s3": index.s3_service,
-        "lambda": index.lambda_service,
-        "iam": index.iam_service,
+        "ec2": ec2_service,
+        "s3": s3_service,
+        "lambda": lambda_service,
+        "iam": iam_service,
     }[service]
     return module.execute(credentials, params)
 

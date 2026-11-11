@@ -1,6 +1,6 @@
 """
 Author: Trịnh Thiên Quang
-Kiểm thử Connector, History, Formatter và đóng gói backend Sprint 2.
+Kiểm thử Connector, History, Formatter và đóng gói các gói ZIP Lambda backend.
 """
 
 import base64
@@ -12,7 +12,7 @@ from botocore.exceptions import ClientError
 from backend.functions.connector import index as connector
 from backend.functions.history import index as history
 from backend.functions.formatter import index as formatter
-from scripts.package_sprint2 import package
+from scripts.package_backend import package
 
 
 def event(path="/connections/external-id", payload=None):
@@ -67,6 +67,13 @@ def test_external_id_is_stable(monkeypatch):
     table.put_item.side_effect = ClientError({"Error": {"Code": "ConditionalCheckFailedException"}}, "PutItem")
     table.get_item.return_value = {"Item": {"external_id": "saved"}}
     assert json.loads(connector.lambda_handler(event(), None)["body"])["external_id"] == "saved"
+    table.update_item.assert_not_called()
+
+    # Nếu bản ghi cũ chưa có external_id hợp lệ, tự động bổ sung và lưu lại
+    table.get_item.return_value = {"Item": {"status": "PENDING"}}
+    backfilled = json.loads(connector.lambda_handler(event(), None)["body"])["external_id"]
+    assert len(backfilled) >= 32
+    table.update_item.assert_called_once()
 
 
 def test_verify_uses_stored_external_id_and_never_returns_credentials(monkeypatch):
@@ -99,6 +106,19 @@ def test_sts_denial_does_not_mark_connected(monkeypatch):
     assert "private" not in result["body"]
 
 
+def test_verify_rejects_missing_saved_external_id(monkeypatch):
+    table = setup_table(monkeypatch, connector, "AWS_CONNECTIONS_TABLE")
+    table.get_item.return_value = {"Item": {"status": "PENDING"}}
+    sts = Mock()
+    monkeypatch.setattr(connector.boto3, "client", Mock(return_value=sts))
+    result = connector.lambda_handler(event("/connections/verify", {
+        "role_arn": "arn:aws:iam::123456789012:role/demo"}), None)
+    assert result["statusCode"] == 409
+    assert json.loads(result["body"])["error_code"] == "ExternalIdRequired"
+    sts.assume_role.assert_not_called()
+    table.update_item.assert_not_called()
+
+
 def test_history_rejects_other_users_cursor(monkeypatch):
     table = setup_table(monkeypatch, history, "ACTION_HISTORY_TABLE")
     request = event()
@@ -127,13 +147,33 @@ def test_formatter_redacts_credentials():
     assert result["data"]["SecretAccessKey"] == "<redacted>"
 
 
-def test_five_packages_contain_handlers_and_no_secrets(tmp_path):
+def test_backend_packages_contain_handlers_and_no_secrets(tmp_path):
     package(tmp_path)
-    for name in ("chatbot", "dispatcher", "formatter", "connector", "history"):
+    for name in ("chatbot", "dispatcher", "formatter", "connector", "history", "auth_handler"):
         with zipfile.ZipFile(tmp_path / f"{name}.zip") as archive:
             files = archive.namelist()
             assert f"backend/functions/{name}/index.py" in files
-            assert "backend/shared/runtime.py" in files
+            assert ("backend/shared/runtime.py" in files) == (name != "auth_handler")
             assert "backend/__init__.py" in files
             assert f"backend/functions/{name}/__init__.py" in files
             assert not any(".env" in path or "__pycache__" in path for path in files)
+            assert not any(path.endswith(("local_handler.py", "agent_executor.py")) for path in files)
+            assert "backend/shared/db.py" not in files or name == "auth_handler"
+
+
+def test_external_id_repair_returns_concurrent_winner(monkeypatch):
+    table = setup_table(monkeypatch, connector, "AWS_CONNECTIONS_TABLE")
+    conflict = ClientError({"Error": {"Code": "ConditionalCheckFailedException"}}, "UpdateItem")
+    table.put_item.side_effect = conflict
+    table.get_item.side_effect = [
+        {"Item": {"external_id": "", "status": "CONNECTED"}},
+        {"Item": {"external_id": "concurrent-winner", "status": "PENDING"}},
+    ]
+    table.update_item.side_effect = conflict
+    result = connector.lambda_handler(event(), None)
+    assert result["statusCode"] == 200
+    assert json.loads(result["body"])["external_id"] == "concurrent-winner"
+    update = table.update_item.call_args.kwargs
+    assert update["ConditionExpression"] == "external_id = :previous"
+    assert update["ExpressionAttributeValues"][":previous"] == ""
+    assert update["ExpressionAttributeValues"][":status"] == "PENDING"

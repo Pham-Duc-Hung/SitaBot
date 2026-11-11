@@ -24,7 +24,7 @@ from .helpers import deny_error, api_event
 
 
 def test_chatbot_secretsmanager_access_denied_returns_403_without_arn_leak(
-    sprint4_cloud, monkeypatch
+    cloud_store, monkeypatch
 ):
     sm_mock = Mock()
     sm_mock.get_secret_value.side_effect = deny_error("secretsmanager:GetSecretValue")
@@ -38,7 +38,7 @@ def test_chatbot_secretsmanager_access_denied_returns_403_without_arn_leak(
 
 
 def test_chatbot_dynamodb_and_stepfunctions_access_denied_return_403(
-    sprint4_cloud, monkeypatch
+    cloud_store, monkeypatch
 ):
     real_resource = boto3.resource
     # 1. Thiếu quyền đọc SessionState
@@ -62,7 +62,7 @@ def test_chatbot_dynamodb_and_stepfunctions_access_denied_return_403(
     sfn_mock.start_execution.side_effect = deny_error("states:StartExecution")
     monkeypatch.setattr(chat.boto3, "client", Mock(return_value=sfn_mock))
 
-    action = sprint4_cloud.create_action(
+    action = cloud_store.create_action(
         "alice",
         "ses_1",
         registry()["update_function_resources"],
@@ -78,19 +78,19 @@ def test_chatbot_dynamodb_and_stepfunctions_access_denied_return_403(
 
 
 def test_dispatcher_dynamodb_and_sts_access_denied_never_invoke_target_service(
-    sprint4_cloud, monkeypatch
+    cloud_store, monkeypatch
 ):
     exec_spy = Mock()
     monkeypatch.setattr(dispatch, "_execute", exec_spy)
 
-    action = sprint4_cloud.create_action(
+    action = cloud_store.create_action(
         "alice",
         "ses_disp",
         registry()["update_function_resources"],
         {"function_name": "demo", "memory_mb": 512},
         "ap-southeast-1",
     )
-    sprint4_cloud.approve("alice", action["action_id"])
+    cloud_store.approve("alice", action["action_id"])
 
     # 1. STS AssumeRole bị từ chối bởi Trust Policy của tài khoản khách hàng
     sts_denied = Mock()
@@ -121,16 +121,16 @@ def test_dispatcher_dynamodb_and_sts_access_denied_never_invoke_target_service(
 
 
 def test_customer_role_missing_permission_propagates_through_dispatcher_formatter_and_history(
-    sprint4_cloud, monkeypatch
+    cloud_store, monkeypatch
 ):
-    action = sprint4_cloud.create_action(
+    action = cloud_store.create_action(
         "alice",
         "ses_perm",
         registry()["update_function_resources"],
         {"function_name": "prod-fn", "memory_mb": 512},
         "ap-southeast-1",
     )
-    sprint4_cloud.approve("alice", action["action_id"])
+    cloud_store.approve("alice", action["action_id"])
 
     # Giả lập LambdaService trong tài khoản khách hàng thiếu quyền lambda:UpdateFunctionConfiguration
     svc = object.__new__(LambdaService)
@@ -195,9 +195,9 @@ def test_customer_role_missing_permission_propagates_through_dispatcher_formatte
 
 
 def test_formatter_secret_appsync_and_dynamodb_permission_denials(
-    sprint4_cloud, monkeypatch
+    cloud_store, monkeypatch
 ):
-    action = sprint4_cloud.create_action(
+    action = cloud_store.create_action(
         "alice",
         "ses_fmt",
         registry()["list_lambda_functions"],
@@ -261,7 +261,7 @@ def test_formatter_secret_appsync_and_dynamodb_permission_denials(
 
 
 def test_connector_and_history_dynamodb_access_denied_and_transport_errors(
-    sprint4_cloud, monkeypatch
+    cloud_store, monkeypatch
 ):
     denied_tbl = Mock()
     denied_tbl.get_item.side_effect = deny_error("dynamodb:GetItem")

@@ -10,7 +10,7 @@ import pytest
 
 from backend.shared.runtime import emit_platform_fault
 from scripts.deployment_checks import validate_live_evidence, verify_callers
-from scripts.live_benchmark import _derive_history_url, benchmark_live_endpoint
+from scripts.benchmark_live import _derive_history_url, benchmark_live_endpoint
 from scripts.write_deploy_config import build_configuration
 
 
@@ -232,10 +232,10 @@ def reply(data, status=200):
 
 def test_benchmark_records_timeouts_instead_of_silently_dropping_samples(monkeypatch):
     monkeypatch.setattr(
-        "scripts.live_benchmark.urllib.request.urlopen",
+        "scripts.benchmark_live.urllib.request.urlopen",
         Mock(return_value=reply({"action_id": "a"}, 202)),
     )
-    monkeypatch.setattr("scripts.live_benchmark.time.sleep", Mock())
+    monkeypatch.setattr("scripts.benchmark_live.time.sleep", Mock())
     result = benchmark_live_endpoint(
         "https://example/chat", jwt_token="test", iterations=2, poll_timeout_s=0
     )
@@ -252,8 +252,8 @@ def test_benchmark_finds_action_after_first_page_and_reports_failed_status(monke
             reply({"items": [{"action_id": "target", "status": "ERROR"}]}),
         ]
     )
-    monkeypatch.setattr("scripts.live_benchmark.urllib.request.urlopen", network)
-    monkeypatch.setattr("scripts.live_benchmark.time.sleep", Mock())
+    monkeypatch.setattr("scripts.benchmark_live.urllib.request.urlopen", network)
+    monkeypatch.setattr("scripts.benchmark_live.time.sleep", Mock())
     result = benchmark_live_endpoint(
         "https://example/chat", jwt_token="test", iterations=1
     )
@@ -288,9 +288,9 @@ def test_benchmark_excludes_unaccepted_responses_and_tracks_warm_by_iteration(
         now[0] += delta
         return resp
 
-    monkeypatch.setattr("scripts.live_benchmark.urllib.request.urlopen", _fake_urlopen)
-    monkeypatch.setattr("scripts.live_benchmark.time.perf_counter", lambda: now[0])
-    monkeypatch.setattr("scripts.live_benchmark.time.sleep", Mock())
+    monkeypatch.setattr("scripts.benchmark_live.urllib.request.urlopen", _fake_urlopen)
+    monkeypatch.setattr("scripts.benchmark_live.time.perf_counter", lambda: now[0])
+    monkeypatch.setattr("scripts.benchmark_live.time.sleep", Mock())
     result = benchmark_live_endpoint(
         "https://example/chat", jwt_token="test", iterations=3, poll_timeout_s=5
     )

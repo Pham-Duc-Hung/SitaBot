@@ -69,7 +69,7 @@ test("queued action waits for matching history record and fetches its result", a
       urls.push(url);
       assert.equal(options.headers.Authorization, "Bearer jwt-example");
       if (url.includes("created_at=")) {
-        return jsonResponse({ item: { status: "SUCCESS", action_id: "act_target", message: "Bucket đã tạo", data: { bucket_name: "demo" } } });
+        return jsonResponse({ item: { status: "SUCCESS", action_id: "act_target", session_id: "ses_123", message: "Bucket đã tạo", data: { bucket_name: "demo" } } });
       }
       reads += 1;
       return jsonResponse({ items: reads === 1 ? [] : [
@@ -106,7 +106,7 @@ test("history search follows DynamoDB cursor when filtering hides the first page
     getIdToken: async () => null,
     fetchImpl: async url => {
       urls.push(url);
-      if (url.includes("created_at=")) return jsonResponse({ item: { status: "SUCCESS", action_id: "act_target" } });
+      if (url.includes("created_at=")) return jsonResponse({ item: { status: "SUCCESS", action_id: "act_target", session_id: "ses_1" } });
       if (!url.includes("cursor=")) return jsonResponse({ items: [], cursor: "next-page" });
       return jsonResponse({ items: [
         { action_id: "act_target", status: "SUCCESS", created_at: "2026-11-10T02:00:00Z" }

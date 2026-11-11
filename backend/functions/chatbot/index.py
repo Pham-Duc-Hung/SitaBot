@@ -53,7 +53,8 @@ def _load_env_file():
         except Exception:
             pass
 
-_load_env_file()
+if os.environ.get("SATIBOT_MODE") != "cloud" and not os.environ.get("AWS_LAMBDA_FUNCTION_NAME"):
+    _load_env_file()
 
 
 def _dispatch_action(

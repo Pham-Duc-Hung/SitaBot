@@ -1,6 +1,6 @@
 """
 Author: Trịnh Thiên Quang
-Dữ liệu và request dùng chung cho kiểm thử Sprint 4.
+Dữ liệu và request dùng chung cho kiểm thử các luồng đám mây.
 """
 
 import json

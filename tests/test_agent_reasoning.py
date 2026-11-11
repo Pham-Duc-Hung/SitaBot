@@ -4,17 +4,10 @@ Kiểm thử chu trình ReAct Agent Loop và điều phối công cụ đa bư�
 """
 
 import json
-import os
-import sys
 import unittest
 from unittest.mock import Mock
 
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-CHATBOT_DIR = os.path.abspath(os.path.join(CURRENT_DIR, "..", "backend", "functions", "chatbot"))
-if CHATBOT_DIR not in sys.path:
-    sys.path.insert(0, CHATBOT_DIR)
-
-from agent_executor import AgentExecutor
+from backend.functions.chatbot.agent_executor import AgentExecutor
 
 
 class TestAgentReasoningLoop(unittest.TestCase):

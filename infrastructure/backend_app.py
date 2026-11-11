@@ -29,7 +29,7 @@ ALLOWED_DEPLOYMENT_CONFIGS = [
 app = cdk.App()
 stack = cdk.Stack(
     app,
-    "SatiBotBackendSprint2",
+    "SatiBotBackend",
     env=cdk.Environment(region=os.environ.get("PRIMARY_REGION", "ap-southeast-1")),
 )
 root = Path(__file__).resolve().parents[1]
@@ -98,6 +98,20 @@ cdk.CfnRule(
             ),
             assert_description="Provide FormatterRoleName when granting AppSync publish permission.",
         ),
+        cdk.CfnRuleAssertion(
+            assert_=cdk.Fn.condition_or(
+                cdk.Fn.condition_equals(secret.value_as_string, ""),
+                cdk.Fn.condition_and(
+                    cdk.Fn.condition_not(
+                        cdk.Fn.condition_equals(role_names["chatbot"].value_as_string, "")
+                    ),
+                    cdk.Fn.condition_not(
+                        cdk.Fn.condition_equals(role_names["formatter"].value_as_string, "")
+                    ),
+                ),
+            ),
+            assert_description="Provide ChatbotRoleName and FormatterRoleName when granting Gemini secret read permission.",
+        ),
     ],
 )
 
@@ -123,6 +137,14 @@ should_grant_appsync = cdk.CfnCondition(
     expression=cdk.Fn.condition_and(
         cdk.Fn.condition_equals(grant_integration.value_as_string, "true"),
         cdk.Fn.condition_not(cdk.Fn.condition_equals(appsync_arn.value_as_string, "")),
+    ),
+)
+should_grant_secret = cdk.CfnCondition(
+    stack,
+    "ShouldGrantGeminiSecretRead",
+    expression=cdk.Fn.condition_and(
+        cdk.Fn.condition_equals(grant_integration.value_as_string, "true"),
+        cdk.Fn.condition_not(cdk.Fn.condition_equals(secret.value_as_string, "")),
     ),
 )
 
@@ -155,6 +177,7 @@ for name in FUNCTIONS:
     environment = {
         "SATIBOT_MODE": "cloud",
         "SATIBOT_CONFIGURATION_VERSION": config_version.value_as_string,
+        "SATIBOT_CONFIG_VERSION": config_version.value_as_string,
     }
     if name == "connector":
         environment["AWS_CONNECTIONS_TABLE"] = connections.value_as_string
@@ -444,5 +467,26 @@ formatter_appsync_policy = iam.CfnPolicy(
     },
 )
 formatter_appsync_policy.cfn_options.condition = should_grant_appsync
+
+gemini_secret_policy = iam.CfnPolicy(
+    stack,
+    "GeminiSecretReadSupplementaryPolicy",
+    policy_name="SatiBot-Backend-GeminiSecretRead",
+    roles=[
+        role_names["chatbot"].value_as_string,
+        role_names["formatter"].value_as_string,
+    ],
+    policy_document={
+        "Version": "2012-10-17",
+        "Statement": [
+            {
+                "Effect": "Allow",
+                "Action": ["secretsmanager:GetSecretValue"],
+                "Resource": secret.value_as_string,
+            }
+        ],
+    },
+)
+gemini_secret_policy.cfn_options.condition = should_grant_secret
 
 app.synth()

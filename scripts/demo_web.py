@@ -11,34 +11,14 @@ import sys
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-try:
-    import boto3  # noqa: F401
-except ImportError:
-    conda_py = Path("/home/sora/miniconda3/envs/chatbot/bin/python")
-    if conda_py.exists() and sys.executable != str(conda_py):
-        os.execv(str(conda_py), [str(conda_py)] + sys.argv)
-
 WEB_ROOT = PROJECT_ROOT / "frontend"
-DISPATCHER_PATH = PROJECT_ROOT / "backend" / "functions" / "dispatcher"
-for path in (str(PROJECT_ROOT), str(DISPATCHER_PATH)):
-    if path not in sys.path:
-        sys.path.insert(0, path)
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
-env_file = PROJECT_ROOT / ".env"
-if env_file.exists():
-    with env_file.open(encoding="utf-8") as stream:
-        for raw_line in stream:
-            line = raw_line.strip()
-            if line and not line.startswith("#") and "=" in line:
-                key, value = line.split("=", 1)
-                key = key.strip()
-                if key and key not in os.environ:
-                    os.environ[key] = value.strip().strip("'\"")
+from backend.functions.chatbot.index import lambda_handler, _get_all_tool_schemas
 
 if not os.environ.get("AWS_REGION"):
     os.environ["AWS_REGION"] = os.environ.get("PRIMARY_REGION") or "ap-southeast-1"
-
-from backend.functions.chatbot.index import lambda_handler  # noqa: E402
 
 PORT = 8080
 
@@ -53,7 +33,6 @@ class AgentConsoleHandler(http.server.SimpleHTTPRequestHandler):
         if self.path == "/api/health":
             tool_count = 0
             try:
-                from backend.functions.chatbot.index import _get_all_tool_schemas
                 tool_count = len(_get_all_tool_schemas())
             except Exception:
                 pass
@@ -78,12 +57,7 @@ class AgentConsoleHandler(http.server.SimpleHTTPRequestHandler):
             payload = json.loads(self.rfile.read(length).decode("utf-8"))
             if not isinstance(payload, dict):
                 raise ValueError("Payload phải là JSON object.")
-            import importlib
-            import backend.functions.chatbot.index as chatbot_mod
-            import backend.functions.chatbot.agent_executor as agent_mod
-            importlib.reload(agent_mod)
-            importlib.reload(chatbot_mod)
-            self._send_json(chatbot_mod.lambda_handler(payload, None))
+            self._send_json(lambda_handler(payload, None))
         except (ValueError, json.JSONDecodeError, UnicodeDecodeError) as exc:
             self._send_json({"status": "ERROR", "message": str(exc)}, status=400)
         except Exception as exc:

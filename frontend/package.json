@@ -6,7 +6,7 @@
   "scripts": {
     "build": "vite build",
     "dev": "vite --host 127.0.0.1",
-    "test": "node --test ../tests/test_frontend_chat_contract.mjs ../tests/test_frontend_auth.mjs"
+    "test": "node --test ../tests/test_frontend_chat_contract.mjs ../tests/test_frontend_auth.mjs ../tests/test_frontend_appsync.mjs"
   },
   "dependencies": {
     "html-react-parser": "^5.2.0",

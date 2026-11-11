@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "note": "Illustrative backend HTTP and AppSync contracts. IDs, timestamps and ExternalId are sample values; the server generates real values.",
+  "http": [
+    {
+      "name": "chat_reply",
+      "request": {"method": "POST", "path": "/chat", "body": {"message": "Xin chào", "session_id": "ses_fixture"}},
+      "response": {"statusCode": 200, "body": {"status": "SUCCESS", "type": "chat_reply", "session_id": "ses_fixture", "message": "Chào bạn."}}
+    },
+    {
+      "name": "chat_confirmation",
+      "request": {"method": "POST", "path": "/chat", "body": {"message": "Đổi RAM hàm demo lên 512 MB", "session_id": "ses_fixture", "region": "ap-southeast-1"}},
+      "response": {"statusCode": 200, "body": {"status": "CONFIRMATION_REQUIRED", "type": "action_confirmation", "action_id": "act_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "session_id": "ses_fixture", "expires_at": 1794400000, "service": "lambda", "tool_name": "update_function_resources", "parameters": {"function_name": "demo", "memory_mb": 512}, "region": "ap-southeast-1", "target_account_id": "123456789012", "confirmation_mode": "standard", "required_confirmation": null, "message": "Thao tác này thay đổi hoặc kích hoạt tài nguyên AWS. Bạn có xác nhận không?"}}
+    },
+    {
+      "name": "confirm_accepted",
+      "request": {"method": "POST", "path": "/confirm", "body": {"confirmed": true, "action_id": "act_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}},
+      "response": {"statusCode": 202, "body": {"status": "ACCEPTED", "type": "action_queued", "action_id": "act_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "session_id": "ses_fixture", "message": "Đã tiếp nhận xác nhận. Kết quả sẽ cập nhật qua AppSync và lịch sử."}}
+    },
+    {
+      "name": "connection_external_id",
+      "request": {"method": "POST", "path": "/connections/external-id", "body": {}},
+      "response": {"statusCode": 200, "body": {"external_id": "sample-server-generated-external-id"}}
+    },
+    {
+      "name": "connection_verified",
+      "request": {"method": "POST", "path": "/connections/verify", "body": {"role_arn": "arn:aws:iam::123456789012:role/satibot/SatiBotAccessRole"}},
+      "response": {"statusCode": 200, "body": {"status": "CONNECTED", "role_arn": "arn:aws:iam::123456789012:role/satibot/SatiBotAccessRole"}}
+    },
+    {
+      "name": "connection_missing_external_id",
+      "request": {"method": "POST", "path": "/connections/verify", "body": {"role_arn": "arn:aws:iam::123456789012:role/satibot/SatiBotAccessRole"}},
+      "response": {"statusCode": 409, "body": {"error_code": "ExternalIdRequired"}}
+    },
+    {
+      "name": "connection_role_denied",
+      "request": {"method": "POST", "path": "/connections/verify", "body": {"role_arn": "arn:aws:iam::123456789012:role/satibot/SatiBotAccessRole"}},
+      "response": {"statusCode": 403, "body": {"error_code": "ConnectionFailed"}}
+    },
+    {
+      "name": "connection_status",
+      "request": {"method": "GET", "path": "/connections"},
+      "response": {"statusCode": 200, "body": {"status": "CONNECTED", "role_arn": "arn:aws:iam::123456789012:role/satibot/SatiBotAccessRole", "account_id": "123456789012", "verified_at": "2026-11-08T01:00:00.000000Z"}}
+    },
+    {
+      "name": "history_list",
+      "request": {"method": "GET", "path": "/history", "query": {"limit": "20", "session_id": "ses_fixture"}},
+      "response": {"statusCode": 200, "body": {"items": [{"action_id": "act_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "created_at": "2026-11-08T01:01:00.000000Z", "service": "lambda", "tool_name": "update_function_resources", "status": "SUCCESS", "message": "Đã cập nhật tài nguyên Lambda.", "session_id": "ses_fixture", "publication_status": "PUBLISHED", "formatter_fallback": false, "error_code": null}], "cursor": null}}
+    }
+  ],
+  "appsync": {
+    "mutation": "publishActionResult",
+    "subscription": "onActionResult(session_id: ID!)",
+    "publisher_event": {"user_id": "alice", "session_id": "ses_fixture", "action_id": "act_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "created_at": "2026-11-08T01:01:00.000000Z", "service": "lambda", "tool_name": "update_function_resources", "status": "SUCCESS", "message": "Đã cập nhật tài nguyên Lambda.", "data": {"memory_mb": 512}}
+  }
+}

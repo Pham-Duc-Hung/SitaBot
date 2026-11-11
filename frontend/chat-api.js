@@ -75,39 +75,68 @@ export function confirmationPayload(action, typedPhrase = "") {
   };
 }
 
-export async function pollActionResult(actionId, sessionId, {
+export async function findActionResult(actionId, sessionId, {
   fetchImpl = fetch,
-  getIdToken = browserIdToken,
-  wait = ms => new Promise(resolve => setTimeout(resolve, ms)),
-  attempts = 15,
-  intervalMs = 2000
+  getIdToken = browserIdToken
 } = {}) {
   if (!actionId || !sessionId) return null;
   const token = await getIdToken();
   const headers = { Accept: "application/json" };
   if (token) headers.Authorization = `Bearer ${token}`;
   const options = { headers, credentials: "same-origin", cache: "no-store" };
-  for (let attempt = 0; attempt < attempts; attempt += 1) {
-    let cursor = null;
-    // DynamoDB applies FilterExpression after Limit; the target may be on a later page.
-    for (let pageIndex = 0; pageIndex < 5; pageIndex += 1) {
-      const query = new URLSearchParams({ session_id: sessionId, limit: "100" });
-      if (cursor) query.set("cursor", cursor);
-      const page = await readJson(await fetchImpl(`/api/history?${query}`, options));
-      const match = page.items?.find(item => item.action_id === actionId);
-      if (match && !["PENDING", "EXECUTING", "ACCEPTED"].includes(match.status)) {
-        const detail = await readJson(await fetchImpl(
-          `/api/history?${new URLSearchParams({ created_at: match.created_at })}`,
-          options
-        ));
-        return detail.item;
-      }
-      cursor = page.cursor;
-      if (!cursor) break;
+  let cursor = null;
+  // DynamoDB applies FilterExpression after Limit; the target may be on a later page.
+  for (let pageIndex = 0; pageIndex < 5; pageIndex += 1) {
+    const query = new URLSearchParams({ session_id: sessionId, limit: "100" });
+    if (cursor) query.set("cursor", cursor);
+    const page = await readJson(await fetchImpl(`/api/history?${query}`, options));
+    const match = page.items?.find(item => item.action_id === actionId);
+    if (match && !["PENDING", "EXECUTING", "ACCEPTED"].includes(match.status)) {
+      const detail = await readJson(await fetchImpl(
+        `/api/history?${new URLSearchParams({ created_at: match.created_at })}`,
+        options
+      ));
+      return detail.item?.session_id === sessionId && detail.item.action_id === actionId ? detail.item : null;
     }
+    cursor = page.cursor;
+    if (!cursor) break;
+  }
+  return null;
+}
+
+export async function pollActionResult(actionId, sessionId, {
+  wait = ms => new Promise(resolve => setTimeout(resolve, ms)),
+  attempts = 15,
+  intervalMs = 2000,
+  ...options
+} = {}) {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const result = await findActionResult(actionId, sessionId, options);
+    if (result) return result;
     if (attempt + 1 < attempts) await wait(intervalMs);
   }
   return null;
+}
+
+export async function listSessionResults(sessionId, {
+  fetchImpl = fetch, getIdToken = browserIdToken
+} = {}) {
+  if (!sessionId) return [];
+  const token = await getIdToken();
+  const headers = { Accept: "application/json" };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const options = { headers, credentials: "same-origin", cache: "no-store" };
+  const records = [];
+  let cursor = null;
+  for (let pageIndex = 0; pageIndex < 5; pageIndex += 1) {
+    const query = new URLSearchParams({ session_id: sessionId, limit: "100" });
+    if (cursor) query.set("cursor", cursor);
+    const page = await readJson(await fetchImpl(`/api/history?${query}`, options));
+    records.push(...(page.items || []).filter(item => item.session_id === sessionId));
+    cursor = page.cursor;
+    if (!cursor) break;
+  }
+  return records;
 }
 
 export async function resolveQueuedAction(result, { poll = pollActionResult } = {}) {

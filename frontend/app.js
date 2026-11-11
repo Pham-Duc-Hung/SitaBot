@@ -2,7 +2,8 @@
  * Author: Trịnh Thiên Quang
  * Codex & ChatGPT-style Agent UI with interactive tool log steps & typewriter text stream.
  */
-import { chatRequest, confirmationPayload, resolveQueuedAction } from "./chat-api.js";
+import { chatRequest, confirmationPayload, findActionResult, listSessionResults, pollActionResult, resolveQueuedAction } from "./chat-api.js";
+import { createAppSyncSubscription, mergeActionResult } from "./appsync.js";
 
 "use strict";
 
@@ -21,7 +22,8 @@ const state = {
   autoApproval: true,
   selectedModel: VALID_MODELS.includes(initialModel) ? initialModel : "gemini-3.5-flash-lite",
   sessions: [],
-  currentSessionId: null
+  currentSessionId: null,
+  realtime: null
 };
 
 const SESSION_STORAGE_KEY = "satibot.chat.sessions.v1";
@@ -33,6 +35,7 @@ const els = {
   newChatBtn: $("#newChatBtn"),
   recentList: $("#recentList"),
   statusBadge: $("#statusBadge"),
+  realtimeStatus: $("#realtimeStatus"),
   awsStatusPill: $("#awsStatusPill"),
   toolsPill: $("#toolsPill"),
   chatScroll: $("#chatScroll"),
@@ -291,7 +294,10 @@ function currentSession() {
 
 function ensureSession(firstPrompt) {
   let session = currentSession();
-  if (session) return session;
+  if (session) {
+    state.realtime?.start(session.id);
+    return session;
+  }
   const id = globalThis.crypto && crypto.randomUUID ? crypto.randomUUID() : `chat_${Date.now()}_${Math.random().toString(16).slice(2)}`;
   session = {
     id,
@@ -303,15 +309,24 @@ function ensureSession(firstPrompt) {
   state.sessions.unshift(session);
   state.currentSessionId = id;
   saveSessions();
+  state.realtime?.start(id);
   return session;
 }
 
-function storeMessage(role, content, data = null) {
+function storeMessage(role, content, data = null, actionId = null, status = null) {
   const session = currentSession();
   if (!session || !content) return;
-  session.messages.push({ role, content: String(content), data, createdAt: Date.now() });
+  const existing = actionId && session.messages.find(message => message.actionId === actionId);
+  if (existing) {
+    if (!(existing.status !== "PENDING" && status === "PENDING")) {
+      Object.assign(existing, { content: String(content), data, status });
+    }
+  } else {
+    session.messages.push({ role, content: String(content), data, actionId, status, createdAt: Date.now() });
+  }
   session.updatedAt = Date.now();
   saveSessions();
+  return existing || session.messages.at(-1);
 }
 
 function appendStoredMessage(message) {
@@ -327,6 +342,7 @@ function appendStoredMessage(message) {
   }
   const row = document.createElement("div");
   row.className = "agent-row";
+  if (message.actionId) row.dataset.actionId = message.actionId;
   const header = document.createElement("div");
   header.className = "agent-header";
   header.innerHTML = '<div class="agent-avatar">S</div><span>SatiBot AWS Agent</span>';
@@ -353,6 +369,7 @@ function openSession(sessionId) {
   const session = state.sessions.find(s => s.id === sessionId);
   if (!session) return;
   state.currentSessionId = session.id;
+  state.realtime?.start(session.id);
   state.pending = null;
   state.history = session.messages
     .filter(m => m.role === "user" || m.role === "assistant")
@@ -363,7 +380,77 @@ function openSession(sessionId) {
   els.emptyView.classList.toggle("hidden", session.messages.length > 0);
   els.conversationFeed.classList.toggle("hidden", session.messages.length === 0);
   renderRecentSessions();
+  void syncSessionHistory(session.id);
   requestAnimationFrame(() => { els.chatScroll.scrollTop = els.chatScroll.scrollHeight; });
+}
+
+function updateActionResult(record, appendMissing = false) {
+  const session = state.sessions.find(item => item.id === record.session_id);
+  if (!session || !record.action_id || !record.message) return;
+  const message = mergeActionResult(session, record, appendMissing && !state.isBusy);
+  if (!message) return;
+  saveSessions();
+  if (state.currentSessionId !== session.id) return;
+  const row = [...els.conversationFeed.querySelectorAll(".agent-row")]
+    .find(item => item.dataset.actionId === record.action_id);
+  if (row) {
+    const body = row.querySelector(".agent-text");
+    if (body) body.innerHTML = formatBody(message.content);
+    row.querySelectorAll(".restored-url-link").forEach(link => link.remove());
+    appendS3DownloadLink(row, message.data);
+  } else {
+    appendStoredMessage(message);
+  }
+  els.chatScroll.scrollTop = els.chatScroll.scrollHeight;
+}
+
+async function syncSessionHistory(sessionId) {
+  try {
+    const records = await listSessionResults(sessionId);
+    if (state.currentSessionId !== sessionId) return;
+    for (const record of records.reverse()) {
+      const existing = currentSession()?.messages.find(message => message.actionId === record.action_id);
+      if (existing?.status === "PENDING") {
+        let detail = null;
+        try { detail = await findActionResult(record.action_id, sessionId); } catch { /* use summary */ }
+        updateActionResult(detail || record);
+      } else if (!existing) {
+        let detail = null;
+        try { detail = await findActionResult(record.action_id, sessionId); } catch { /* use summary */ }
+        updateActionResult(detail || record, true);
+      }
+    }
+  } catch {
+    // History is optional for the local demo and retried on the next connection.
+  }
+}
+
+async function waitForActionResult(actionId, sessionId) {
+  if (state.realtime?.status === "connected") {
+    const event = await state.realtime.waitForResult(actionId);
+    if (event) {
+      try { return await findActionResult(actionId, sessionId) || event; } catch { return event; }
+    }
+    // A lost event can still be recovered from the authoritative history.
+    return findActionResult(actionId, sessionId);
+  }
+  return pollActionResult(actionId, sessionId);
+}
+
+async function resolveAction(result) {
+  return resolveQueuedAction(result, { poll: waitForActionResult });
+}
+
+function setRealtimeState(phase) {
+  if (!els.realtimeStatus) return;
+  els.realtimeStatus.textContent = {
+    connected: "Kết quả: trực tiếp",
+    connecting: "Kết quả: đang kết nối",
+    reconnecting: "Kết quả: đang kết nối lại",
+    unauthenticated: "Kết quả: cần đăng nhập",
+    disconnected: "Kết quả: lịch sử"
+  }[phase] || "Kết quả: lịch sử";
+  if (phase === "connected" && state.currentSessionId) void syncSessionHistory(state.currentSessionId);
 }
 
 function renderRecentSessions() {
@@ -499,7 +586,7 @@ async function handleSendMessage() {
   }, 1000);
 
   try {
-    const res = await resolveQueuedAction(await fetchChat({
+    const res = await resolveAction(await fetchChat({
       message: text, history: state.history, model: state.selectedModel
     }));
     clearInterval(progressTimer);
@@ -539,11 +626,13 @@ async function handleSendMessage() {
 
     state.history.push({ role: "user", content: text }, { role: "assistant", content: res.message || "" });
     state.history = state.history.slice(-10);
-    storeMessage("assistant", res.message || (res.status === "SUCCESS" ? "Đã hoàn thành nhiệm vụ." : "Chưa có kết quả cuối cùng."), res.data || null);
+    if (res.action_id) agentRow.dataset.actionId = res.action_id;
+    const saved = storeMessage("assistant", res.message || (res.status === "SUCCESS" ? "Đã hoàn thành nhiệm vụ." : "Chưa có kết quả cuối cùng."), res.data || null,
+      res.action_id || null, res.status === "PENDING" ? "PENDING" : res.status);
 
     // Stream the final response text (Typewriter animation)
-    streamText(textContainer, res.message || (res.status === "SUCCESS" ? "Đã hoàn thành nhiệm vụ." : "Chưa có kết quả cuối cùng."), () => {
-      appendS3DownloadLink(agentRow, res.data);
+    streamText(textContainer, saved?.content || res.message || "Chưa có kết quả cuối cùng.", () => {
+      appendS3DownloadLink(agentRow, saved?.data || res.data);
       // Check for public URL
       const publicUrl = extractPublicUrl(res.message, res.data);
       if (publicUrl) {
@@ -661,7 +750,7 @@ function handleConfirmation(res, agentRow, originalPrompt) {
     logsBox.append(workingStep);
 
     try {
-      const execRes = await resolveQueuedAction(await fetchChat(payload));
+      const execRes = await resolveAction(await fetchChat(payload));
 
       workingStep.remove();
 
@@ -691,11 +780,13 @@ function handleConfirmation(res, agentRow, originalPrompt) {
 
       const textContainer = agentRow.querySelector(".agent-text");
       const finalMessage = execRes.message || (execRes.status === "SUCCESS" ? "Đã thực thi thành công." : "Chưa có kết quả cuối cùng.");
-      storeMessage("assistant", finalMessage, execRes.data || null);
+      if (execRes.action_id) agentRow.dataset.actionId = execRes.action_id;
+      const saved = storeMessage("assistant", finalMessage, execRes.data || null,
+        execRes.action_id || null, execRes.status === "PENDING" ? "PENDING" : execRes.status);
       state.history.push({ role: "assistant", content: finalMessage });
       state.history = state.history.slice(-10);
-      streamText(textContainer, finalMessage, () => {
-        appendS3DownloadLink(agentRow, execRes.data);
+      streamText(textContainer, saved?.content || finalMessage, () => {
+        appendS3DownloadLink(agentRow, saved?.data || execRes.data);
         const publicUrl = extractPublicUrl(execRes.message, execRes.data);
         if (publicUrl) {
           const urlCard = document.createElement("div");
@@ -798,14 +889,14 @@ function handleResolutionOptions(res, agentRow, originalPrompt, pendingAction) {
     logsBox.append(workingStep);
 
     try {
-      const result = await fetchChat({
+      const result = await resolveAction(await fetchChat({
         confirmed: true,
         service: "lambda",
         tool_name: toolName,
         parameters,
         agent_state: pendingAction.agent_state,
         model: pendingAction.model || state.selectedModel
-      });
+      }));
       workingStep.remove();
       card.remove();
 
@@ -824,10 +915,12 @@ function handleResolutionOptions(res, agentRow, originalPrompt, pendingAction) {
 
       state.pending = null;
       const message = result.message || "Đã xử lý lựa chọn thành công.";
-      storeMessage("assistant", message, result.data || null);
+      if (result.action_id) agentRow.dataset.actionId = result.action_id;
+      const saved = storeMessage("assistant", message, result.data || null,
+        result.action_id || null, result.status === "PENDING" ? "PENDING" : result.status);
       state.history.push({ role: "assistant", content: message });
       state.history = state.history.slice(-10);
-      streamText(textContainer, message);
+      streamText(textContainer, saved?.content || message);
       setBusy(false);
     } catch (err) {
       workingStep.remove();
@@ -858,6 +951,7 @@ function handleResolutionOptions(res, agentRow, originalPrompt, pendingAction) {
 }
 
 function resetChat() {
+  state.realtime?.stop();
   state.history = [];
   state.pending = null;
   state.currentSessionId = null;
@@ -889,6 +983,19 @@ async function loadHealth() {
         els.promptInput.disabled = true;
         updateSendBtnState();
         return;
+      }
+      if (typeof config.appsync?.graphql_url === "string") {
+        try {
+          state.realtime = createAppSyncSubscription({
+            graphqlUrl: config.appsync.graphql_url,
+            getIdToken: () => globalThis.SatiBotAuth?.getIdToken?.(),
+            onResult: record => updateActionResult(record, true),
+            onState: setRealtimeState
+          });
+          if (state.currentSessionId) state.realtime.start(state.currentSessionId);
+        } catch {
+          setRealtimeState("disconnected");
+        }
       }
     }
   } catch {
@@ -1037,5 +1144,16 @@ document.addEventListener("keydown", e => {
 
 loadStoredSessions();
 renderRecentSessions();
+window.addEventListener("satibot-auth-changed", () => {
+  if (state.realtime) {
+    state.realtime.stop();
+    if (state.currentSessionId) state.realtime.start(state.currentSessionId);
+  }
+});
+window.addEventListener("online", () => {
+  if (state.currentSessionId && state.realtime?.status !== "connected") {
+    state.realtime.start(state.currentSessionId);
+  }
+});
 loadHealth();
 els.promptInput.focus();

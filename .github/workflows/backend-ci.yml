@@ -1,7 +1,7 @@
 # Author: Trịnh Thiên Quang
-# Chạy kiểm thử, build và CDK synth cho backend trên GitHub Actions.
+# Chạy kiểm thử, đóng gói, kiểm chứng artifact và CDK synth trên GitHub Actions.
 
-name: Backend Sprint 2 CI
+name: Backend CI
 on:
   pull_request:
   push:
@@ -27,17 +27,18 @@ jobs:
       - run: python -m pip install -r ci/requirements.txt
       - run: npm install -g aws-cdk@2
       - run: python -m pytest -q
-      - run: python scripts/package_sprint2.py --with-dependencies
+      - run: python scripts/package_backend.py --with-dependencies
       - run: python scripts/verify_backend_artifacts.py
       - run: python scripts/build_frontend_ci.py
-      - run: node --test tests/test_frontend_chat_contract.mjs tests/test_frontend_auth.mjs
-      - run: cdk synth --app "python infrastructure/backend_sprint2_app.py" --output dist/cdk.out
+      - run: node --test tests/test_frontend_chat_contract.mjs tests/test_frontend_auth.mjs tests/test_frontend_appsync.mjs
       - run: cdk synth --app "python -m infrastructure.web_api_app" --output dist/web-api-cdk.out
+      - run: cdk synth --app "python infrastructure/app.py" --output dist/foundation.out
+      - run: cdk synth --app "python infrastructure/backend_app.py" --output dist/cdk.out
       - run: python scripts/verify_canary_rollback.py
       - run: |
           mkdir -p dist/deployment
           cp scripts/write_deploy_config.py ci/publish-buildspec.yml dist/deployment/
       - uses: actions/upload-artifact@v4
         with:
-          name: sprint2-build
+          name: backend-build
           path: dist/

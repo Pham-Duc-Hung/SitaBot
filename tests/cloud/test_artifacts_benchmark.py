@@ -16,13 +16,13 @@ from scripts.benchmark_coldstart import (
     benchmark_subprocess_coldstart,
     benchmark_tool_registry,
 )
-from scripts.package_sprint2 import package
+from scripts.package_backend import package
 from .helpers import ROOT
 
 
 def test_slim_per_lambda_packaging_and_coldstart_benchmark_suite(tmp_path):
     package(tmp_path, with_dependencies=False)
-    for slim_name in ("formatter", "connector", "history"):
+    for slim_name in ("formatter", "connector", "history", "auth_handler"):
         with zipfile.ZipFile(tmp_path / f"{slim_name}.zip") as zf:
             names = set(zf.namelist())
             assert f"backend/functions/{slim_name}/index.py" in names
@@ -51,7 +51,7 @@ def test_deterministic_zip_hashes_and_subprocess_coldstart(tmp_path):
     package(dir_1, with_dependencies=False)
     time.sleep(1.1)
     package(dir_2, with_dependencies=False)
-    for name in ("chatbot", "dispatcher", "formatter", "connector", "history"):
+    for name in ("chatbot", "dispatcher", "formatter", "connector", "history", "auth_handler"):
         h1 = hashlib.sha256((dir_1 / f"{name}.zip").read_bytes()).hexdigest()
         h2 = hashlib.sha256((dir_2 / f"{name}.zip").read_bytes()).hexdigest()
         assert h1 == h2
@@ -99,8 +99,8 @@ def test_live_benchmark_enforces_jwt_and_tracks_async_workflow_completion(monkey
             )
         return resp
 
-    monkeypatch.setattr("scripts.live_benchmark.urllib.request.urlopen", _fake_urlopen)
-    monkeypatch.setattr("scripts.live_benchmark.time.sleep", lambda *_a: None)
+    monkeypatch.setattr("scripts.benchmark_live.urllib.request.urlopen", _fake_urlopen)
+    monkeypatch.setattr("scripts.benchmark_live.time.sleep", lambda *_a: None)
     metrics = benchmark_live_endpoint(
         "https://example.execute-api.ap-southeast-1.amazonaws.com/api/chat",
         jwt_token="eyJ.demo.token",

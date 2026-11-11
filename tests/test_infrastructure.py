@@ -264,5 +264,3 @@ def test_dns_failover_stack_defines_hosted_zone_acm_and_failover_records():
     failover_types = {r["Properties"].get("Failover") for r in record_sets.values()}
     assert "PRIMARY" in failover_types
     assert "SECONDARY" in failover_types
-
-

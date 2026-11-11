@@ -13,10 +13,7 @@ from typing import Any, Callable, Dict, List, Optional
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
-try:
-    from backend.shared.runtime import get_default_lambda_role_arn
-except ImportError:
-    from runtime import get_default_lambda_role_arn
+from backend.shared.runtime import get_default_lambda_role_arn
 
 
 class AgentExecutor:

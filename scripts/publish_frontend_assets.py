@@ -3,8 +3,10 @@
 import argparse
 import json
 import mimetypes
+import re
 import uuid
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import boto3
 from botocore.exceptions import ClientError
@@ -60,7 +62,13 @@ def preview_auth_config(session, distribution_domain):
     }
 
 
-def publish_site(session, site):
+def publish_site(session, site, appsync_graphql_url=""):
+    if appsync_graphql_url:
+        endpoint = urlsplit(appsync_graphql_url)
+        if (endpoint.scheme != "https" or endpoint.path != "/graphql" or
+                endpoint.query or endpoint.fragment or not re.fullmatch(
+                    r"[a-z0-9-]+\.appsync-api\.ap-southeast-1\.amazonaws\.com", endpoint.hostname or "")):
+            raise ValueError("AppSync URL must be the primary-region AWS GraphQL endpoint")
     region, stack_name, output_prefix = SITES[site]
     files = site_files(site)
     outputs = stack_outputs(session, region, stack_name)
@@ -89,6 +97,8 @@ def publish_site(session, site):
         behaviors = distribution.get("CacheBehaviors", {}).get("Items", [])
         api_enabled = any(item.get("PathPattern") == "api/*" for item in behaviors)
         config = {"api_enabled": api_enabled, "tools_loaded": len(registry())}
+        if appsync_graphql_url:
+            config["appsync"] = {"graphql_url": appsync_graphql_url}
         auth = preview_auth_config(session, outputs[f"{output_prefix}DistributionDomain"])
         if auth:
             config["auth"] = auth
@@ -120,6 +130,7 @@ def main():
     parser.add_argument("--profile", required=True, help="AWS CLI profile")
     parser.add_argument("--expected-account", required=True, help="12-digit AWS account ID")
     parser.add_argument("--site", choices=(*SITES, "both"), default="both")
+    parser.add_argument("--appsync-graphql-url", default="", help="AppSync GraphQL HTTPS endpoint, after the API is deployed")
     args = parser.parse_args()
 
     if len(args.expected_account) != 12 or not args.expected_account.isascii() or not args.expected_account.isdigit():
@@ -133,7 +144,7 @@ def main():
         )
 
     for site in SITES if args.site == "both" else (args.site,):
-        publish_site(session, site)
+        publish_site(session, site, args.appsync_graphql_url)
 
 
 if __name__ == "__main__":
