@@ -1,6 +1,6 @@
 """
 Author: Trịnh Thiên Quang
-Kiểm thử luồng ChatOps Sprint 3 với DynamoDB và AWS giả lập.
+Kiểm thử luồng ChatOps với DynamoDB và AWS giả lập.
 Bao gồm xác nhận, chống thực thi lặp, Gemini, lịch sử và AppSync.
 """
 
@@ -11,7 +11,6 @@ from unittest.mock import Mock
 
 import boto3
 import pytest
-from botocore.exceptions import ClientError
 from moto import mock_aws
 
 from backend.functions.chatbot import cloud_handler as chat
@@ -281,9 +280,9 @@ def test_tool_adapter_preserves_s3_action_and_validates_arguments():
 
 
 def test_flat_service_adapter_preserves_service_contract(monkeypatch):
-    from backend.functions.dispatcher import index
+    from backend.functions.dispatcher.services import s3_service
     execute = Mock(return_value={"ok": True})
-    monkeypatch.setattr(index.s3_service, "execute", execute)
+    monkeypatch.setattr(s3_service, "execute", execute)
     dispatch._execute({"service": "s3", "action": "create_bucket", "parameters": {"bucket_name": "test-bucket"}, "region": "ap-southeast-1"}, {"Region": "ap-southeast-1"})
     params = execute.call_args.args[1]
     assert params["bucket_name"] == "test-bucket"
@@ -481,9 +480,9 @@ def test_iam_confirmation_injects_only_stored_fingerprint_after_schema_validatio
         "preview_fingerprint": "forged", "parameters": {"role_name": "other"}}, "/confirm"), None)
     assert approved["statusCode"] == 202
     monkeypatch.setattr(dispatch, "_execute", native_execute)
-    from backend.functions.dispatcher import index as dispatcher_index
+    from backend.functions.dispatcher.services import iam_service
     execute = Mock(return_value={"status": "SUCCESS", "data": {}})
-    monkeypatch.setattr(dispatcher_index.iam_service, "execute", execute)
+    monkeypatch.setattr(iam_service, "execute", execute)
     outcome = dispatch.handle({"user_id": "alice", "action_id": action_id}, None)
     assert outcome["result"]["status"] == "SUCCESS"
     assert execute.call_args.args[1]["parameters"] == {"role_name": "demo", "preview_fingerprint": "a" * 64}

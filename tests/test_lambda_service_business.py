@@ -3,19 +3,12 @@ Author: Trịnh Thiên Quang
 Kiểm thử các luồng nghiệp vụ của LambdaService qua mock Boto3.
 """
 import io
-import os
-import sys
 import unittest
 from unittest.mock import Mock
 
 from botocore.exceptions import ClientError
 
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-SERVICE_DIR = os.path.abspath(os.path.join(CURRENT_DIR, "..", "backend", "functions", "dispatcher", "services"))
-if SERVICE_DIR not in sys.path:
-    sys.path.insert(0, SERVICE_DIR)
-
-from lambda_service import LambdaService
+from backend.functions.dispatcher.services.lambda_service import LambdaService
 
 
 class LambdaServiceBusinessTests(unittest.TestCase):

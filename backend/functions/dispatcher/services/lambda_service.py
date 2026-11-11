@@ -19,10 +19,7 @@ import boto3
 from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError
 
-try:
-    from backend.shared.runtime import credential_fingerprint, get_aws_region
-except ImportError:
-    from runtime import credential_fingerprint, get_aws_region
+from backend.shared.runtime import credential_fingerprint, get_aws_region
 
 
 def _is_strict_int(value: Any) -> bool:

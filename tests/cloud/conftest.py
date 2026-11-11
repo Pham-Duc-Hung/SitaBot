@@ -1,6 +1,6 @@
 """
 Author: Trịnh Thiên Quang
-Chuẩn bị môi trường AWS giả lập cho kiểm thử Sprint 4.
+Chuẩn bị môi trường AWS giả lập cho kiểm thử các luồng đám mây.
 """
 
 import boto3
@@ -13,7 +13,7 @@ from backend.shared.workflow_store import Store, table
 
 
 @pytest.fixture
-def sprint4_cloud(monkeypatch):
+def cloud_store(monkeypatch):
     env_vars = {
         "AWS_ACCESS_KEY_ID": "testing",
         "AWS_SECRET_ACCESS_KEY": "testing",

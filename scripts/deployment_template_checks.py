@@ -12,10 +12,10 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.package_sprint2 import FUNCTIONS
+from scripts.package_backend import FUNCTIONS
 
 HTTP_FUNCTIONS = {"chatbot", "connector", "history"}
-DEFAULT_TEMPLATE = ROOT / "dist" / "cdk.out" / "SatiBotBackendSprint2.template.json"
+DEFAULT_TEMPLATE = ROOT / "dist" / "cdk.out" / "SatiBotBackend.template.json"
 DEFAULT_PIPELINE = ROOT / "ci" / "pipeline.template.json"
 CODEPIPELINE_PARAMETER_OVERRIDES_MAX_BYTES = 1000
 
@@ -240,7 +240,7 @@ def verify_cdk_canary_template(template_path: Path = DEFAULT_TEMPLATE) -> dict:
                 )
         if len(if_branches[1].get("Alarms", [])) != 2:
             raise AssertionError(
-                f"Nhánh có Alarm ngoài của {dg_id} phải gộp cả Alarm mặc định và Alarm từ MonitoringStack."
+                f"Nhánh có Alarm ngoài của {dg_id} phải gộp cả Alarm mặc định và Alarm bổ sung."
             )
 
         rollback = props.get("AutoRollbackConfiguration", {})

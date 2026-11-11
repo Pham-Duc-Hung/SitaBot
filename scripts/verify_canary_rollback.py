@@ -92,7 +92,7 @@ class CanaryAliasSimulator:
 
 def simulate_canary_and_rollback() -> dict:
     """Kiểm tra logic máy trạng thái ngoại tuyến (v1 -> v2 thành công; v2 -> v3 gặp lỗi tự rollback về v2)."""
-    sim = CanaryAliasSimulator(function_name="SatiBotBackendSprint2-chatbotFunction")
+    sim = CanaryAliasSimulator(function_name="SatiBotBackend-chatbotFunction")
     healthy = sim.deploy_canary("2", simulated_error_rate=0.0)
     if healthy["deployment_status"] != "SUCCEEDED" or healthy["active_version"] != "2":
         raise AssertionError("Mô phỏng Canary bình thường không chuyển sang version 2.")

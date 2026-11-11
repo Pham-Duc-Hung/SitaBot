@@ -10,7 +10,16 @@ import os
 from pathlib import Path
 
 
-def build_configuration(template, environment):
+RELEASE_REQUIRED = (
+    "ConnectionsTableName", "HistoryTableName", "SessionStateTableName",
+    "PendingActionTableName", "GeminiSecretArn",
+    "AppSyncGraphqlUrl", "AppSyncApiArn", "ApiGatewaySourceArn",
+    "ChatbotRoleArn", "DispatcherRoleArn", "FormatterRoleArn",
+    "ConnectorRoleArn", "HistoryRoleArn", "CodeDeployRoleArn",
+)
+
+
+def build_configuration(template, environment, *, require_integrations=False):
     params = {}
     definitions = template["Parameters"]
     for name, definition in definitions.items():
@@ -23,6 +32,12 @@ def build_configuration(template, environment):
         if value is None:
             raise ValueError(f"Missing deployment parameter: {name}")
         params[name] = str(value)
+    if require_integrations:
+        missing = [name for name in RELEASE_REQUIRED if not params.get(name, "").strip()]
+        if missing:
+            raise ValueError("Missing release parameters: " + ", ".join(missing))
+        if params.get("GrantIntegrationPermissions") != "true":
+            raise ValueError("GrantIntegrationPermissions must be true for release")
     release = environment.get("PARAM_ConfigurationReleaseId", "v1")
     digest = hashlib.sha256(
         json.dumps({"release": release, "parameters": params}, sort_keys=True).encode()
@@ -34,12 +49,14 @@ def build_configuration(template, environment):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--template", default="cdk.out/SatiBotBackendSprint2.template.json"
+        "--template", default="cdk.out/SatiBotBackend.template.json"
     )
     parser.add_argument("--output", default="deploy-config/template-configuration.json")
+    parser.add_argument("--require-integrations", action="store_true")
     args = parser.parse_args()
     config = build_configuration(
-        json.loads(Path(args.template).read_text()), os.environ
+        json.loads(Path(args.template).read_text()), os.environ,
+        require_integrations=args.require_integrations,
     )
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)

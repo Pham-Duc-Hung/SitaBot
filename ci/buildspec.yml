@@ -13,10 +13,11 @@ phases:
   build:
     commands:
       - python -m pytest -q
-      - python scripts/package_sprint2.py --with-dependencies
+      - python scripts/package_backend.py --with-dependencies
       - python scripts/verify_backend_artifacts.py
       - python scripts/build_frontend_ci.py
-      - cdk synth --app "python infrastructure/backend_sprint2_app.py" --output dist/cdk.out
+      - cdk synth --app "python infrastructure/app.py" --output dist/foundation.out
+      - cdk synth --app "python infrastructure/backend_app.py" --output dist/cdk.out
       - python scripts/verify_canary_rollback.py
       - mkdir -p dist/deployment
       - cp scripts/write_deploy_config.py ci/publish-buildspec.yml dist/deployment/

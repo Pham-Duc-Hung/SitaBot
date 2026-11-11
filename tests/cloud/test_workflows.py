@@ -23,7 +23,7 @@ from .helpers import api_event
 
 
 def test_gemini_error_modes_non_retryable_timeout_and_malformed_payload(
-    sprint4_cloud, monkeypatch
+    cloud_store, monkeypatch
 ):
     monkeypatch.setattr(gemini.time, "sleep", Mock())
 
@@ -61,9 +61,9 @@ def test_gemini_error_modes_non_retryable_timeout_and_malformed_payload(
 
 
 def test_formatter_rejects_unexpected_tool_calls_from_gemini_and_uses_fallback(
-    sprint4_cloud, monkeypatch
+    cloud_store, monkeypatch
 ):
-    action = sprint4_cloud.create_action(
+    action = cloud_store.create_action(
         "alice",
         "ses_inj",
         registry()["list_lambda_functions"],
@@ -97,7 +97,7 @@ def test_formatter_rejects_unexpected_tool_calls_from_gemini_and_uses_fallback(
     assert out["status"] == "SUCCESS"
 
 
-def test_connector_status_projection_onboarding_order_and_validation(sprint4_cloud):
+def test_connector_status_projection_onboarding_order_and_validation(cloud_store):
     # GET /connections chỉ trả trường công khai, tuyệt đối không trả external_id
     get_res = connector.lambda_handler(
         api_event("/api/connections", owner="alice", method="GET"), None
@@ -139,7 +139,7 @@ def test_connector_status_projection_onboarding_order_and_validation(sprint4_clo
     )
 
 
-def test_history_query_validation_filters_and_method_guard(sprint4_cloud):
+def test_history_query_validation_filters_and_method_guard(cloud_store):
     table("ACTION_HISTORY_TABLE").put_item(
         Item={
             "user_id": "alice",
@@ -194,9 +194,9 @@ def test_history_query_validation_filters_and_method_guard(sprint4_cloud):
 
 
 def test_duplicate_confirmations_idempotent_and_completed_short_circuit(
-    sprint4_cloud, monkeypatch
+    cloud_store, monkeypatch
 ):
-    action = sprint4_cloud.create_action(
+    action = cloud_store.create_action(
         "alice",
         "ses_dup",
         registry()["update_function_resources"],
@@ -229,9 +229,9 @@ def test_duplicate_confirmations_idempotent_and_completed_short_circuit(
     assert sfn_mock.start_execution.call_count == 2
 
     # Khi tác vụ đã COMPLETED, xác nhận lặp trả ngay kết quả đã lưu (200) mà không gọi Step Functions nữa
-    claimed = sprint4_cloud.get_action("alice", action["action_id"])
-    sprint4_cloud.claim(claimed)
-    sprint4_cloud.finish(
+    claimed = cloud_store.get_action("alice", action["action_id"])
+    cloud_store.claim(claimed)
+    cloud_store.finish(
         claimed,
         {
             "status": "SUCCESS",
@@ -250,16 +250,16 @@ def test_duplicate_confirmations_idempotent_and_completed_short_circuit(
 
 
 def test_stored_action_schema_drift_and_formatter_history_key_collision(
-    sprint4_cloud, monkeypatch
+    cloud_store, monkeypatch
 ):
-    action = sprint4_cloud.create_action(
+    action = cloud_store.create_action(
         "alice",
         "ses_drift",
         registry()["update_function_resources"],
         {"function_name": "demo", "memory_mb": 256},
         "ap-southeast-1",
     )
-    sprint4_cloud.approve("alice", action["action_id"])
+    cloud_store.approve("alice", action["action_id"])
     # Giả lập bản ghi trong DB bị lệch action so với schema hiện hành
     table("PENDING_ACTION_TABLE").update_item(
         Key={"action_id": action["action_id"]},

@@ -143,7 +143,7 @@ def test_runtime_cache_distinguishes_different_botocore_configs_on_default_tag()
 
 
 def test_dispatcher_sts_timeout_budget_and_platform_fault_scoping(
-    sprint4_cloud, monkeypatch
+    cloud_store, monkeypatch
 ):
     real_client = boto3.client
     # 1. Timeout STS phải nhỏ hơn nhiều so với ngưỡng 60s của Dispatcher
@@ -155,14 +155,14 @@ def test_dispatcher_sts_timeout_budget_and_platform_fault_scoping(
     assert chat.handle(api_event("/chat", {"message": ""}), None)["statusCode"] == 400
     assert platform_fault_counts() == {}
 
-    action = sprint4_cloud.create_action(
+    action = cloud_store.create_action(
         "alice",
         "ses_budget",
         registry()["update_function_resources"],
         {"function_name": "demo", "memory_mb": 256},
         "ap-southeast-1",
     )
-    sprint4_cloud.approve("alice", action["action_id"])
+    cloud_store.approve("alice", action["action_id"])
     sts_customer_denied = Mock()
     sts_customer_denied.assume_role.side_effect = deny_error(
         "sts:AssumeRole", code="AccessDenied"
@@ -179,14 +179,14 @@ def test_dispatcher_sts_timeout_budget_and_platform_fault_scoping(
     # 3. Khi thời gian còn lại của Lambda dưới 5 giây trước lúc gọi dịch vụ đích, dừng an toàn và ghi trạng thái COMPLETED
     monkeypatch.setattr(dispatch.boto3, "client", real_client)
     clear_runtime_caches()
-    action2 = sprint4_cloud.create_action(
+    action2 = cloud_store.create_action(
         "alice",
         "ses_budget_2",
         registry()["update_function_resources"],
         {"function_name": "demo", "memory_mb": 256},
         "ap-southeast-1",
     )
-    sprint4_cloud.approve("alice", action2["action_id"])
+    cloud_store.approve("alice", action2["action_id"])
     low_budget_ctx = Mock()
     low_budget_ctx.get_remaining_time_in_millis.return_value = 2500
     exec_spy = Mock()
@@ -196,6 +196,6 @@ def test_dispatcher_sts_timeout_budget_and_platform_fault_scoping(
     )
     assert res_budget["result"]["error_code"] == "DispatcherTimeoutBudgetExceeded"
     assert (
-        sprint4_cloud.get_action("alice", action2["action_id"])["status"] == "COMPLETED"
+        cloud_store.get_action("alice", action2["action_id"])["status"] == "COMPLETED"
     )
     exec_spy.assert_not_called()

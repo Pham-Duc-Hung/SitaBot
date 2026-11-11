@@ -51,13 +51,36 @@ def lambda_handler(event, context):
             except ClientError as exc:
                 if exc.response["Error"]["Code"] != "ConditionalCheckFailedException":
                     raise
-                external_id = table.get_item(Key={"user_id": owner}, ConsistentRead=True)["Item"]["external_id"]
+                existing = table.get_item(Key={"user_id": owner}, ConsistentRead=True).get("Item") or {}
+                if isinstance(existing.get("external_id"), str) and existing["external_id"]:
+                    external_id = existing["external_id"]
+                else:
+                    values = {":external": external_id, ":status": "PENDING"}
+                    condition = "attribute_not_exists(external_id)"
+                    if "external_id" in existing:
+                        condition = "external_id = :previous"
+                        values[":previous"] = existing["external_id"]
+                    try:
+                        table.update_item(
+                            Key={"user_id": owner},
+                            UpdateExpression="SET external_id = :external, #s = :status REMOVE verified_at",
+                            ConditionExpression=condition,
+                            ExpressionAttributeNames={"#s": "status"},
+                            ExpressionAttributeValues=values,
+                        )
+                    except ClientError as conflict:
+                        if conflict.response["Error"]["Code"] != "ConditionalCheckFailedException":
+                            raise
+                        winner = table.get_item(Key={"user_id": owner}, ConsistentRead=True).get("Item") or {}
+                        external_id = winner.get("external_id")
+                        if not isinstance(external_id, str) or not external_id:
+                            return response(409, {"error_code": "ConnectionChanged", "retryable": True})
             return response(200, {"external_id": external_id})
         role_arn = payload.get("role_arn", "")
         if not isinstance(role_arn, str) or not re.fullmatch(r"arn:aws:iam::\d{12}:role/[\w+=,.@/-]+", role_arn):
             raise ValueError("role_arn is invalid")
         connection = table.get_item(Key={"user_id": owner}, ConsistentRead=True).get("Item")
-        if not connection:
+        if not connection or not isinstance(connection.get("external_id"), str) or not connection["external_id"]:
             return response(409, {"error_code": "ExternalIdRequired"})
         # Never accept ExternalId or credentials supplied by the client.
         stage = "customer_sts"
