@@ -1259,3 +1259,44 @@ def test_audit_security_group_safe(mock_credentials, mock_boto_ec2):
     assert res["data"]["risk_level"] == "SAFE"
     assert res["data"]["risks_found"] == 0
     assert "AN TOÀN BẢO MẬT" in res["message"]
+
+
+def test_create_instance_vcpu_quota_exceeded(mock_credentials, mock_boto_ec2):
+    """Verify create_instance catches VcpuLimitExceeded and returns quota remedy with running instances."""
+    mock_client = mock_boto_ec2.return_value
+    mock_client.describe_instances.side_effect = [
+        # 1st call for idempotency check: no duplicate
+        {"Reservations": []},
+        # 2nd call to list running instances for quota remedy
+        {
+            "Reservations": [{
+                "Instances": [{
+                    "InstanceId": "i-running1",
+                    "InstanceType": "t3.micro",
+                    "Tags": [{"Key": "Name", "Value": "active-web"}]
+                }]
+            }]
+        }
+    ]
+
+    quota_err = ClientError(
+        {"Error": {"Code": "VcpuLimitExceeded", "Message": "You have exceeded your vCPU limit."}},
+        "RunInstances"
+    )
+    mock_client.run_instances.side_effect = quota_err
+
+    params = {
+        "action": "create_instance",
+        "instance_name": "quota-test-vm",
+        "instance_type": "t3.micro"
+    }
+
+    res = execute(mock_credentials, params)
+
+    assert res["success"] is False
+    assert res["error"] == "VcpuLimitExceeded"
+    assert res["data"]["error_code"] == "VcpuLimitExceeded"
+    assert "Cảnh báo vượt hạn mức tài nguyên AWS" in res["message"]
+    assert "active-web (i-running1)" in res["message"]
+    assert len(res["data"]["running_instances"]) == 1
+    assert res["data"]["remedy"] == "stop_unused_instances_or_request_quota_increase"

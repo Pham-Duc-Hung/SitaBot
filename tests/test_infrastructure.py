@@ -7,6 +7,9 @@ from aws_cdk.assertions import Template
 
 from infrastructure.stacks.data_stack import DataStack
 from infrastructure.stacks.iam_stack import IamStack
+from infrastructure.stacks.auth_stack import AuthStack
+from infrastructure.stacks.core_api_stack import CoreApiStack
+from infrastructure.stacks.dns_failover_stack import DnsFailoverStack
 
 
 TABLE_CONFIG = {
@@ -139,3 +142,116 @@ def test_llm_secret_read_permission_is_added_only_when_secret_arn_is_configured(
     configured = json.dumps(secret_template.to_json())
     assert "secretsmanager:GetSecretValue" in configured
     assert "satibot/llm-key-AbCdEf" in configured
+
+
+def test_auth_stack_defines_cognito_user_pool_client_and_groups():
+    """Verify AuthStack creates UserPool, SPA client without secret, and admin/user groups."""
+    app = App()
+    data_stack = DataStack(app, "DataStack")
+    iam_stack = IamStack(app, "IamStack", data_stack=data_stack)
+    auth_stack = AuthStack(app, "AuthStack", data_stack=data_stack, iam_stack=iam_stack)
+    template = Template.from_stack(auth_stack)
+
+    # 1. User Pool
+    user_pools = template.find_resources("AWS::Cognito::UserPool")
+    assert len(user_pools) == 1
+    up_props = list(user_pools.values())[0]["Properties"]
+    assert up_props["UserPoolName"] == "SatiBot-UserPool"
+    assert "email" in up_props.get("AutoVerifiedAttributes", [])
+
+    # 2. User Pool Client (SPA React)
+    clients = template.find_resources("AWS::Cognito::UserPoolClient")
+    assert len(clients) == 1
+    client_props = list(clients.values())[0]["Properties"]
+    assert client_props["ClientName"] == "SatiBot-WebClient"
+    assert client_props.get("GenerateSecret", False) is False
+
+    # 3. User Groups (admin & user)
+    groups = template.find_resources("AWS::Cognito::UserPoolGroup")
+    assert len(groups) == 2
+    group_names = {g["Properties"]["GroupName"] for g in groups.values()}
+    assert group_names == {"admin", "user"}
+
+    # 4. Post-Confirmation Lambda Trigger
+    lambdas = template.find_resources("AWS::Lambda::Function")
+    assert len(lambdas) >= 1
+    auth_lambda = [l for l in lambdas.values() if "AuthPostConfirmation" in l["Properties"].get("FunctionName", "")][0]
+    assert auth_lambda["Properties"]["Runtime"] == "python3.12"
+
+
+def test_core_api_stack_defines_rest_api_cognito_authorizer_and_routes():
+    """Verify CoreApiStack defines RestApi, Cognito Authorizer, 6 business routes and /health mock."""
+    app = App()
+    data_stack = DataStack(app, "DataStack")
+    iam_stack = IamStack(app, "IamStack", data_stack=data_stack)
+    auth_stack = AuthStack(app, "AuthStack", data_stack=data_stack, iam_stack=iam_stack)
+    core_api_stack = CoreApiStack(app, "CoreApiStack", auth_stack=auth_stack)
+    template = Template.from_stack(core_api_stack)
+
+    # 1. RestApi
+    apis = template.find_resources("AWS::ApiGateway::RestApi")
+    assert len(apis) == 1
+    assert list(apis.values())[0]["Properties"]["Name"] == "SatiBot-CoreApi"
+
+    # 2. Cognito Authorizer
+    authorizers = template.find_resources("AWS::ApiGateway::Authorizer")
+    assert len(authorizers) == 1
+    auth_props = list(authorizers.values())[0]["Properties"]
+    assert auth_props["Type"] == "COGNITO_USER_POOLS"
+
+    # 3. Resources & Methods (chat, confirm, connections, external-id, verify, history, health)
+    resources = template.find_resources("AWS::ApiGateway::Resource")
+    path_parts = {r["Properties"]["PathPart"] for r in resources.values()}
+    assert {"chat", "confirm", "connections", "external-id", "verify", "history", "health"}.issubset(path_parts)
+
+    methods = template.find_resources("AWS::ApiGateway::Method")
+    http_methods = {f"{m['Properties']['HttpMethod']}" for m in methods.values()}
+    assert "POST" in http_methods
+    assert "GET" in http_methods
+
+
+def test_dns_failover_stack_defines_hosted_zone_acm_and_failover_records():
+    """Verify DnsFailoverStack creates HostedZone, Wildcard ACM cert, /health HealthCheck, and Failover routing."""
+    app = App()
+    data_stack = DataStack(app, "DataStack")
+    iam_stack = IamStack(app, "IamStack", data_stack=data_stack)
+    auth_stack = AuthStack(app, "AuthStack", data_stack=data_stack, iam_stack=iam_stack)
+    core_api_stack = CoreApiStack(app, "CoreApiStack", auth_stack=auth_stack)
+    dns_stack = DnsFailoverStack(app, "DnsFailoverStack", core_api_stack=core_api_stack)
+    template = Template.from_stack(dns_stack)
+
+    # 1. Route 53 Public Hosted Zone
+    zones = template.find_resources("AWS::Route53::HostedZone")
+    assert len(zones) == 1
+    assert list(zones.values())[0]["Properties"]["Name"] == "satibot.id.vn."
+
+    # 2. ACM Wildcard Certificate
+    certs = template.find_resources("AWS::CertificateManager::Certificate")
+    assert len(certs) == 1
+    cert_props = list(certs.values())[0]["Properties"]
+    assert cert_props["DomainName"] == "satibot.id.vn"
+    assert "*.satibot.id.vn" in cert_props.get("SubjectAlternativeNames", [])
+
+    # 3. Route 53 Health Check (probes /health)
+    health_checks = template.find_resources("AWS::Route53::HealthCheck")
+    assert len(health_checks) == 1
+    hc_config = list(health_checks.values())[0]["Properties"]["HealthCheckConfig"]
+    assert hc_config["Type"] == "HTTPS"
+    assert hc_config["ResourcePath"] == "/health"
+    assert hc_config["Port"] == 443
+    assert hc_config["RequestInterval"] == 10
+    assert hc_config["FailureThreshold"] == 3
+
+    # 4. Custom Domain Name for API Gateway
+    domains = template.find_resources("AWS::ApiGateway::DomainName")
+    assert len(domains) == 1
+    assert list(domains.values())[0]["Properties"]["DomainName"] == "api.satibot.id.vn"
+
+    # 5. Failover Record Sets (Primary & Secondary)
+    record_sets = template.find_resources("AWS::Route53::RecordSet")
+    assert len(record_sets) >= 2
+    failover_types = {r["Properties"].get("Failover") for r in record_sets.values()}
+    assert "PRIMARY" in failover_types
+    assert "SECONDARY" in failover_types
+
+

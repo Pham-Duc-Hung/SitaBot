@@ -5,7 +5,13 @@ tính Idempotency (chống ghi đè) và đảm bảo luôn trả về event the
 Author: Nguyễn Đức Huy (Nhóm 10 - SatiBot)
 """
 
+import sys
+from pathlib import Path
 from unittest.mock import MagicMock, patch
+
+project_root = Path(__file__).resolve().parent.parent
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
 
 from backend.functions.auth_handler.index import (
     handle_post_confirmation,
