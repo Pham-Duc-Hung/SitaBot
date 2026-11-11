@@ -2,20 +2,12 @@
 Author: Trịnh Thiên Quang
 Kiểm thử các quy tắc an toàn cơ bản của LambdaService.
 """
-import os
-import sys
 import unittest
 from unittest.mock import Mock
 
 from botocore.exceptions import ClientError
 
-# Thêm path tới services của dispatcher trong backend
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-SERVICE_DIR = os.path.abspath(os.path.join(CURRENT_DIR, "..", "backend", "functions", "dispatcher", "services"))
-if SERVICE_DIR not in sys.path:
-    sys.path.insert(0, SERVICE_DIR)
-
-from lambda_service import LambdaService
+from backend.functions.dispatcher.services.lambda_service import LambdaService
 
 
 class LambdaServiceSafetyTests(unittest.TestCase):

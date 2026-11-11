@@ -1,0 +1,279 @@
+"""
+Author: Trịnh Thiên Quang
+Đóng gói, tổng hợp CDK, kiểm chứng canary/rollback và triển khai SatiBot theo thứ tự phụ thuộc.
+Chỉ chạy sau khi đã chọn đúng AWS profile/account và bootstrap CDK. Script không tự tạo Gemini secret.
+"""
+
+import argparse
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+import tempfile
+from urllib.parse import urlsplit
+
+import boto3
+from botocore.exceptions import ClientError
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from scripts.package_backend import FUNCTIONS
+from scripts.write_deploy_config import build_configuration
+
+
+def run(*args, env):
+    subprocess.run(args, cwd=ROOT, env=env, check=True)
+
+
+def outputs(path, stack):
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    values = data.get(stack)
+    if not isinstance(values, dict):
+        raise RuntimeError(f"Missing CDK outputs for {stack}")
+    return values
+
+
+def required(values, key):
+    value = values.get(key)
+    if not isinstance(value, str) or not value:
+        raise RuntimeError(f"Missing stack output {key}")
+    return value
+
+
+def validate_integration_outputs(values, account, region):
+    """Reject integration outputs for another account or region before deploying."""
+    prefixes = {
+        "ActionStateMachineArn": f"arn:aws:states:{region}:{account}:stateMachine:",
+        "AppSyncApiArn": f"arn:aws:appsync:{region}:{account}:apis/",
+        "ApiGatewaySourceArn": f"arn:aws:execute-api:{region}:{account}:",
+    }
+    for key, prefix in prefixes.items():
+        value = required(values, key)
+        if not value.startswith(prefix) or len(value) <= len(prefix):
+            raise ValueError(f"{key} must belong to the selected account and region")
+    endpoint = urlsplit(required(values, "AppSyncGraphqlUrl"))
+    if (endpoint.scheme != "https" or not endpoint.hostname
+            or not re.fullmatch(rf"[a-z0-9-]+\.appsync-api\.{re.escape(region)}\.amazonaws\.com", endpoint.hostname)
+            or endpoint.path != "/graphql" or endpoint.username or endpoint.password
+            or endpoint.port or endpoint.query or endpoint.fragment):
+        raise ValueError("AppSyncGraphqlUrl must be the regional AWS AppSync GraphQL endpoint")
+
+
+def deploy(app, stack, params, output_file, env, *, cdk_out=None):
+    cmd = [
+        "cdk",
+        "deploy",
+        "--app",
+        app,
+        stack,
+        "--require-approval",
+        "never",
+        "--outputs-file",
+        str(output_file),
+    ]
+    if cdk_out:
+        cmd.extend(["--output", str(cdk_out)])
+    for key, value in params.items():
+        if not isinstance(value, str) or not value:
+            raise ValueError(f"Missing deployment parameter: {key}")
+        cmd.extend(["--parameters", f"{key}={value}"])
+    run(*cmd, env=env)
+    return outputs(output_file, stack)
+
+
+def existing_backend(client):
+    """Reuse deployed aliases; never reset a functioning release to bootstrap."""
+    try:
+        stack = client.describe_stacks(StackName="SatiBotBackend")["Stacks"][0]
+    except ClientError as exc:
+        error = exc.response["Error"]
+        if error["Code"] == "ValidationError" and "does not exist" in error.get("Message", ""):
+            try:
+                client.describe_stacks(StackName="SatiBotBackendSprint2")
+            except ClientError as legacy_error:
+                detail = legacy_error.response["Error"]
+                if detail["Code"] == "ValidationError" and "does not exist" in detail.get("Message", ""):
+                    return None
+                raise
+            raise RuntimeError("Legacy SatiBotBackendSprint2 exists. Review stack migration before creating SatiBotBackend.")
+        raise
+    if stack["StackStatus"] not in {"CREATE_COMPLETE", "UPDATE_COMPLETE", "UPDATE_ROLLBACK_COMPLETE"}:
+        raise RuntimeError(f"Resolve backend stack status before deployment: {stack['StackStatus']}")
+    return stack
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--gemini-secret-arn", required=True)
+    parser.add_argument(
+        "--expected-account-id",
+        required=True,
+        help="12-digit AWS account that will receive resources",
+    )
+    parser.add_argument("--codedeploy-role-arn", required=True,
+                        help="Existing CodeDeploy service role ARN supplied by the IAM owner")
+    parser.add_argument(
+        "--canary-config",
+        default="CodeDeployDefault.LambdaCanary10Percent5Minutes",
+        help="CodeDeploy deployment configuration for SatiBotBackend",
+    )
+    parser.add_argument("--region", default="ap-southeast-1")
+    phase = parser.add_mutually_exclusive_group(required=True)
+    phase.add_argument("--bootstrap-only", action="store_true",
+                       help="Deploy backend aliases before the integration owner creates their stack")
+    phase.add_argument("--integration-outputs", type=Path,
+                       help="CDK outputs JSON from the integration stack managed by teammates")
+    parser.add_argument(
+        "--execute",
+        action="store_true",
+        help="Required to perform AWS deployments",
+    )
+    args = parser.parse_args()
+    if args.region != "ap-southeast-1":
+        parser.error("Deployment currently targets ap-southeast-1")
+    if not re.fullmatch(r"\d{12}", args.expected_account_id):
+        parser.error("--expected-account-id must contain exactly 12 digits")
+    if not args.execute:
+        parser.error("Add --execute after reviewing the target AWS profile/account")
+    integration = None
+    if args.integration_outputs:
+        integration = outputs(args.integration_outputs, "SatiBotIntegration")
+
+    bin_dir = str(Path(sys.executable).parent)
+    env = {
+        **os.environ,
+        "PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}",
+        "PRIMARY_REGION": args.region,
+        "AWS_DEFAULT_REGION": args.region,
+        "LLM_SECRET_ARN": args.gemini_secret_arn,
+    }
+    session = boto3.Session(region_name=args.region)
+    actual_account = session.client("sts").get_caller_identity()["Account"]
+    if actual_account != args.expected_account_id:
+        raise RuntimeError(
+            f"AWS account mismatch: expected {args.expected_account_id}, active {actual_account}"
+        )
+    if not re.fullmatch(rf"arn:aws:iam::{actual_account}:role/[\w+=,.@/-]+", args.codedeploy_role_arn):
+        parser.error("CodeDeploy role ARN must belong to the selected account")
+    if not re.fullmatch(
+        rf"arn:aws[a-zA-Z-]*:secretsmanager:{re.escape(args.region)}:{actual_account}:secret:.+",
+        args.gemini_secret_arn,
+    ):
+        parser.error("Gemini secret ARN must be in the selected account and region")
+    if integration is not None:
+        validate_integration_outputs(integration, actual_account, args.region)
+
+    foundation_app = f'"{sys.executable}" infrastructure/app.py'
+    backend_app = f'"{sys.executable}" infrastructure/backend_app.py'
+
+    run(sys.executable, "scripts/package_backend.py", "--with-dependencies", env=env)
+    run(sys.executable, "scripts/verify_backend_artifacts.py", env=env)
+    run("cdk", "synth", "--app", foundation_app, "--output", "dist/foundation.out", env=env)
+    run("cdk", "synth", "--app", backend_app, "--output", "dist/cdk.out", env=env)
+    run(sys.executable, "scripts/verify_canary_rollback.py", env=env)
+    run(sys.executable, "scripts/build_frontend_ci.py", env=env)
+
+    backend_template = json.loads(
+        (ROOT / "dist/cdk.out/SatiBotBackend.template.json").read_text(encoding="utf-8")
+    )
+
+    allowed = backend_template["Parameters"]["CanaryDeploymentConfig"]["AllowedValues"]
+    if args.canary_config not in allowed:
+        parser.error(f"Unsupported canary configuration: {args.canary_config}")
+    previous = existing_backend(session.client("cloudformation"))
+    if args.integration_outputs and previous is None:
+        raise RuntimeError("Bootstrap SatiBotBackend first, then deploy the integration stack and rerun with its outputs")
+    activated = previous is not None and any(
+        p["ParameterKey"] == "GrantIntegrationPermissions" and p.get("ParameterValue") == "true"
+        for p in previous.get("Parameters", [])
+    )
+
+    with tempfile.TemporaryDirectory(prefix="satibot-release-") as temporary:
+        output_file = Path(temporary) / "outputs.json"
+        run(
+            "cdk",
+            "deploy",
+            "--app",
+            foundation_app,
+            "--output",
+            "dist/foundation.out",
+            "DataStack",
+            "IamStack",
+            "--require-approval",
+            "never",
+            "--outputs-file",
+            str(output_file),
+            env=env,
+        )
+        data = outputs(output_file, "DataStack")
+        roles = outputs(output_file, "IamStack")
+        backend_params = {
+            "ConnectionsTableName": required(data, "AwsConnectionsTableName"),
+            "HistoryTableName": required(data, "ActionHistoryTableName"),
+            "SessionStateTableName": required(data, "SessionStateTableName"),
+            "PendingActionTableName": required(data, "PendingActionTableName"),
+            "GeminiSecretArn": args.gemini_secret_arn,
+            "CodeDeployRoleArn": args.codedeploy_role_arn,
+            "CanaryDeploymentConfig": args.canary_config,
+            **{
+                f"{name.title()}RoleArn": required(roles, f"{name.title()}RoleArn")
+                for name in FUNCTIONS
+            },
+        }
+        if previous is None:
+            bootstrap_cfg = build_configuration(
+                backend_template,
+                {
+                    **{f"PARAM_{k}": v for k, v in backend_params.items()},
+                    "PARAM_GrantIntegrationPermissions": "false",
+                },
+                require_integrations=False,
+            )["Parameters"]
+            deploy(
+                backend_app,
+                "SatiBotBackend",
+                {k: v for k, v in bootstrap_cfg.items() if v != ""},
+                output_file,
+                env,
+                cdk_out="dist/cdk.out",
+            )
+
+        if args.bootstrap_only:
+            return
+        release_input = {
+            **backend_params,
+            # Bootstrap has no functioning workflow; do not canary traffic back to it.
+            "CanaryDeploymentConfig": args.canary_config if activated else "CodeDeployDefault.LambdaAllAtOnce",
+            "ActionStateMachineArn": required(integration, "ActionStateMachineArn"),
+            "AppSyncGraphqlUrl": required(integration, "AppSyncGraphqlUrl"),
+            "AppSyncApiArn": required(integration, "AppSyncApiArn"),
+            "ApiGatewaySourceArn": required(integration, "ApiGatewaySourceArn"),
+            "GrantIntegrationPermissions": "true",
+        }
+        release_cfg = build_configuration(
+            backend_template,
+            {f"PARAM_{k}": v for k, v in release_input.items()},
+            require_integrations=True,
+        )["Parameters"]
+        deploy(
+            backend_app,
+            "SatiBotBackend",
+            {k: v for k, v in release_cfg.items() if v != ""},
+            output_file,
+            env,
+            cdk_out="dist/cdk.out",
+        )
+        print(
+            json.dumps(
+                {key: integration[key] for key in ("UserPoolId", "UserPoolClientId", "HttpApiUrl", "AppSyncGraphqlUrl") if key in integration},
+                indent=2,
+            )
+        )
+
+
+if __name__ == "__main__":
+    main()

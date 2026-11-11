@@ -23,8 +23,8 @@ from scripts.benchmark_cache import (
     benchmark_tool_registry,
     benchmark_cloud_lambdas,
 )
-from scripts.live_benchmark import benchmark_live_endpoint
-from scripts.package_sprint2 import FUNCTIONS
+from scripts.benchmark_live import benchmark_live_endpoint
+from scripts.package_backend import FUNCTIONS
 
 SUBPROCESS_PROBE = """
 import importlib, json, os, sys, time

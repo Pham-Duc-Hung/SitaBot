@@ -9,7 +9,7 @@ import os
 import subprocess
 import sys
 import pytest
-from scripts.package_sprint2 import FUNCTIONS, package
+from scripts.package_backend import FUNCTIONS, package
 from scripts.verify_canary_rollback import (
     CanaryAliasSimulator,
     simulate_canary_and_rollback,
@@ -26,7 +26,7 @@ def synthed_backend_template(tmp_path_factory):
         package(dist_backend, with_dependencies=False)
     cdk_out = tmp_path_factory.mktemp("cdk_synth")
     subprocess.run(
-        [sys.executable, str(ROOT / "infrastructure" / "backend_sprint2_app.py")],
+        [sys.executable, str(ROOT / "infrastructure" / "backend_app.py")],
         env={
             **dict(os.environ),
             "CDK_OUTDIR": str(cdk_out),
@@ -34,7 +34,7 @@ def synthed_backend_template(tmp_path_factory):
         },
         check=True,
     )
-    return cdk_out / "SatiBotBackendSprint2.template.json"
+    return cdk_out / "SatiBotBackend.template.json"
 
 
 def test_cdk_canary_stack_pipeline_and_alarm_rollback_simulation(
@@ -72,7 +72,7 @@ def test_cdk_canary_stack_pipeline_and_alarm_rollback_simulation(
     )
 
     # Kiểm tra chi tiết trọng số lưu lượng 90%/10% trong giai đoạn Canary trước khi rollback
-    sim = CanaryAliasSimulator(function_name="SatiBotBackendSprint2-dispatcherFunction")
+    sim = CanaryAliasSimulator(function_name="SatiBotBackend-dispatcherFunction")
     rollback_case = sim.deploy_canary(
         "2", simulated_error_rate=0.25, error_threshold=0.05
     )
@@ -173,3 +173,22 @@ def test_canary_alarm_allows_one_delayed_breaching_minute(synthed_backend_templa
         for alarm in alarms
     )
     assert not template["Parameters"]["GeminiSecretArn"].get("NoEcho", False)
+    lambdas = [
+        resource["Properties"]
+        for resource in template["Resources"].values()
+        if resource["Type"] == "AWS::Lambda::Function"
+    ]
+    assert all(
+        fn["Environment"]["Variables"].get("SATIBOT_CONFIG_VERSION")
+        == {"Ref": "ConfigurationVersion"}
+        for fn in lambdas
+    )
+    assert "GeminiSecretReadSupplementaryPolicy" in template["Resources"]
+
+
+def test_chatbot_can_read_connections_in_deployed_environment(synthed_backend_template):
+    template = json.loads(synthed_backend_template.read_text())
+    chatbot = next(r["Properties"] for r in template["Resources"].values()
+                   if r["Type"] == "AWS::Lambda::Function"
+                   and r["Properties"]["Handler"] == "backend.functions.chatbot.index.lambda_handler")
+    assert chatbot["Environment"]["Variables"]["AWS_CONNECTIONS_TABLE"] == {"Ref": "ConnectionsTableName"}

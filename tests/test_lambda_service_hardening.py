@@ -2,19 +2,12 @@
 Author: Trịnh Thiên Quang
 Kiểm thử ràng buộc kiểu dữ liệu, tham số và CORS cho LambdaService.
 """
-import os
-import sys
 import unittest
 import io
 from unittest.mock import MagicMock, Mock, patch
 from botocore.exceptions import ClientError
 
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-SERVICE_DIR = os.path.abspath(os.path.join(CURRENT_DIR, "..", "backend", "functions", "dispatcher", "services"))
-if SERVICE_DIR not in sys.path:
-    sys.path.insert(0, SERVICE_DIR)
-
-from lambda_service import LambdaService, LAMBDA_TOOL_SCHEMAS
+from backend.functions.dispatcher.services.lambda_service import LambdaService, LAMBDA_TOOL_SCHEMAS
 
 
 class LambdaServiceHardeningTests(unittest.TestCase):
@@ -117,7 +110,7 @@ class LambdaServiceHardeningTests(unittest.TestCase):
         self.assertEqual(result["error_code"], "InvalidParameters")
         self.service.client.create_function_url_config.assert_not_called()
 
-    @patch("lambda_service.urllib.request.urlopen")
+    @patch("backend.functions.dispatcher.services.lambda_service.urllib.request.urlopen")
     def test_existing_public_url_repairs_both_required_permissions_and_verifies(self, mock_urlopen):
         self.service.client.get_function_url_config.return_value = {
             "FunctionUrl": "https://example.lambda-url.us-east-1.on.aws/"

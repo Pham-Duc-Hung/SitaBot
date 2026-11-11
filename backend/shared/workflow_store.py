@@ -15,7 +15,7 @@ from decimal import Decimal
 import boto3
 from botocore.exceptions import ClientError
 from backend.shared.cloud_errors import BackendError
-from backend.shared.runtime import cached_dynamodb_table, redact_sensitive
+from backend.shared.runtime import cached_dynamodb_table
 
 
 def pack(value):

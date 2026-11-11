@@ -3,22 +3,14 @@ Author: Trịnh Thiên Quang
 Kiểm thử tối ưu hóa cold start và phân quyền an toàn cho Lambda Backend.
 """
 
-import os
-import sys
 import unittest
 from unittest.mock import Mock, patch
 from botocore.exceptions import ClientError
 
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-SERVICE_DIR = os.path.abspath(os.path.join(CURRENT_DIR, "..", "backend", "functions", "dispatcher", "services"))
-if SERVICE_DIR not in sys.path:
-    sys.path.insert(0, SERVICE_DIR)
-
-from lambda_service import (
+from backend.functions.dispatcher.services.lambda_service import (
     LambdaService,
     get_cached_lambda_service,
     clear_service_cache,
-    execute,
     _compute_cache_key,
 )
 
@@ -44,7 +36,7 @@ class TestOptimizationAndColdStart(unittest.TestCase):
         self.assertTrue(key_role.endswith(":us-east-1"))
         self.assertNotIn("ext1", key_role)
 
-    @patch("lambda_service.LambdaService")
+    @patch("backend.functions.dispatcher.services.lambda_service.LambdaService")
     def test_global_context_caching_reuses_instance(self, mock_service_cls):
         mock_instance = Mock()
         mock_service_cls.return_value = mock_instance
@@ -58,7 +50,7 @@ class TestOptimizationAndColdStart(unittest.TestCase):
         # Chỉ khởi tạo đúng 1 lần duy nhất
         mock_service_cls.assert_called_once_with(region_name="us-east-1")
 
-    @patch("lambda_service.LambdaService")
+    @patch("backend.functions.dispatcher.services.lambda_service.LambdaService")
     def test_different_regions_create_separate_instances(self, mock_service_cls):
         mock_instance_east = Mock()
         mock_instance_west = Mock()
@@ -70,18 +62,18 @@ class TestOptimizationAndColdStart(unittest.TestCase):
         self.assertIsNot(svc_east, svc_west)
         self.assertEqual(mock_service_cls.call_count, 2)
 
-    @patch("lambda_service.LambdaService")
+    @patch("backend.functions.dispatcher.services.lambda_service.LambdaService")
     def test_clear_service_cache_resets_instances(self, mock_service_cls):
-        svc1 = get_cached_lambda_service(region="us-east-1")
+        get_cached_lambda_service(region="us-east-1")
         clear_service_cache()
-        svc2 = get_cached_lambda_service(region="us-east-1")
+        get_cached_lambda_service(region="us-east-1")
 
         self.assertEqual(mock_service_cls.call_count, 2)
 
-    @patch("lambda_service.LambdaService")
+    @patch("backend.functions.dispatcher.services.lambda_service.LambdaService")
     def test_enable_cache_false_bypasses_cache(self, mock_service_cls):
-        svc1 = get_cached_lambda_service(region="us-east-1", enable_cache=False)
-        svc2 = get_cached_lambda_service(region="us-east-1", enable_cache=False)
+        get_cached_lambda_service(region="us-east-1", enable_cache=False)
+        get_cached_lambda_service(region="us-east-1", enable_cache=False)
 
         self.assertEqual(mock_service_cls.call_count, 2)
 

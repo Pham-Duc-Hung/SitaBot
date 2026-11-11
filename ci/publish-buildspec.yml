@@ -8,8 +8,8 @@ phases:
       nodejs: '22'
   build:
     commands:
-      - python deployment/write_deploy_config.py
-      - npx --yes cdk-assets@2 publish --path cdk.out/SatiBotBackendSprint2.assets.json -v
+      - python deployment/write_deploy_config.py --require-integrations
+      - npx --yes cdk-assets@2 publish --path cdk.out/SatiBotBackend.assets.json -v
 artifacts:
   base-directory: deploy-config
   files:

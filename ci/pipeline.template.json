@@ -31,7 +31,7 @@
     },
     "BackendStackName": {
       "Type": "String",
-      "Default": "SatiBotBackendSprint2"
+      "Default": "SatiBotBackend"
     },
     "BackendChangeSetName": {
       "Type": "String",
@@ -81,7 +81,7 @@
     },
     "GrantIntegrationPermissions": {
       "Type": "String",
-      "Default": "false",
+      "Default": "true",
       "AllowedValues": [
         "true",
         "false"
@@ -523,7 +523,7 @@
                   "RoleArn": {
                     "Ref": "CloudFormationExecutionRoleArn"
                   },
-                  "TemplatePath": "BuildOutput::cdk.out/SatiBotBackendSprint2.template.json",
+                  "TemplatePath": "BuildOutput::cdk.out/SatiBotBackend.template.json",
                   "TemplateConfiguration": "DeployConfig::template-configuration.json",
                   "Capabilities": "CAPABILITY_NAMED_IAM,CAPABILITY_AUTO_EXPAND"
                 }
