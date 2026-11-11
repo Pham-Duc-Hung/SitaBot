@@ -37,6 +37,8 @@
         </div>
       </div>
 
+      <button type="button" class="connection-nav-button" id="authButton" hidden>Đăng nhập SatiBot</button>
+      <p class="auth-message" id="authMessage" role="status" aria-live="polite"></p>
       <button type="button" class="connection-nav-button" id="awsConnectionOpen" aria-haspopup="dialog" aria-controls="awsConnectionDialog">
         <span aria-hidden="true">☁</span>
         <span class="btn-text">Kết nối tài khoản AWS</span>
@@ -49,7 +51,7 @@
         </div>
         <div class="user-info">
           <div class="user-name">AWS Workspace</div>
-          <div class="user-plan" id="statusBadge">ap-southeast-1 • 11 Tools Active</div>
+          <div class="user-plan" id="statusBadge">Đang kiểm tra kết nối…</div>
         </div>
       </div>
     </aside>
@@ -64,7 +66,7 @@
         <div class="header-right">
           <span class="pill-badge" id="awsStatusPill">☁️ ap-southeast-1</span>
           <button type="button" class="connection-badge" id="awsConnectionBadge" aria-haspopup="dialog" aria-controls="awsConnectionDialog">AWS: Chưa kiểm tra</button>
-          <span class="pill-badge green" id="toolsPill">⚡ 11 Tools</span>
+          <span class="pill-badge green" id="toolsPill" title="Số công cụ được định nghĩa; quyền thực thi phụ thuộc IAM Role đã kết nối">⚡ Công cụ</span>
         </div>
       </header>
 
@@ -103,26 +105,26 @@
             <div class="controls-right">
               <div class="model-picker-container" id="modelPickerContainer">
                 <button type="button" class="model-picker-btn" id="modelPickerBtn" aria-haspopup="listbox" aria-expanded="false" title="Chọn mô hình AI">
-                  <span class="model-picker-current" id="currentModelLabel">gemini-2.5-flash</span>
+                  <span class="model-picker-current" id="currentModelLabel">gemini-3.5-flash-lite</span>
                   <svg class="model-picker-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <polyline points="6 9 12 15 18 9"></polyline>
                   </svg>
                 </button>
                 <div class="model-dropdown-menu" id="modelDropdownMenu" role="listbox" tabindex="-1">
-                  <div class="model-option" data-value="gemini-2.5-flash" role="option" tabindex="0">
-                    <span class="model-option-name">gemini-2.5-flash</span>
-                    <svg class="model-check-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                      <polyline points="20 6 9 17 4 12"></polyline>
-                    </svg>
-                  </div>
-                  <div class="model-option" data-value="gemini-3.1-flash-lite" role="option" tabindex="0">
-                    <span class="model-option-name">gemini-3.1-flash-lite</span>
-                    <svg class="model-check-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                      <polyline points="20 6 9 17 4 12"></polyline>
-                    </svg>
-                  </div>
                   <div class="model-option" data-value="gemini-3.5-flash-lite" role="option" tabindex="0">
                     <span class="model-option-name">gemini-3.5-flash-lite</span>
+                    <svg class="model-check-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                      <polyline points="20 6 9 17 4 12"></polyline>
+                    </svg>
+                  </div>
+                  <div class="model-option" data-value="gemini-3.8-flash" role="option" tabindex="0">
+                    <span class="model-option-name">gemini-3.8-flash</span>
+                    <svg class="model-check-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                      <polyline points="20 6 9 17 4 12"></polyline>
+                    </svg>
+                  </div>
+                  <div class="model-option" data-value="gemini-3.7-flash" role="option" tabindex="0">
+                    <span class="model-option-name">gemini-3.7-flash</span>
                     <svg class="model-check-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                       <polyline points="20 6 9 17 4 12"></polyline>
                     </svg>
@@ -184,7 +186,8 @@
     </section>
   </dialog>
 
+  <script type="module" src="/auth.js"></script>
   <script src="/aws-connection.js" defer></script>
-  <script src="/app.js" defer></script>
+  <script type="module" src="/app.js"></script>
 </body>
 </html>

@@ -150,7 +150,12 @@ for name in FUNCTIONS:
     role = iam.Role.from_role_arn(
         stack, f"{name}Role", role_arns[name], mutable=False
     )
-    environment = {"SATIBOT_MODE": "cloud"}
+    # A changed configuration marker must alter Lambda configuration as well as
+    # the Version description; Lambda rejects a duplicate version otherwise.
+    environment = {
+        "SATIBOT_MODE": "cloud",
+        "SATIBOT_CONFIGURATION_VERSION": config_version.value_as_string,
+    }
     if name == "connector":
         environment["AWS_CONNECTIONS_TABLE"] = connections.value_as_string
         environment["SATIBOT_CONNECTOR_ROLE_ARN"] = role_arns["connector"]

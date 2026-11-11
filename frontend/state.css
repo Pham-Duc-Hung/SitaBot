@@ -8,6 +8,22 @@ textarea:disabled {
   color: #64748b;
 }
 
+.approval-phrase {
+  display: block;
+  margin: 12px 0;
+}
+
+.approval-phrase input {
+  display: block;
+  width: 100%;
+  margin-top: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-btn);
+  border-radius: 8px;
+  background: var(--bg-code);
+  color: inherit;
+}
+
 .composer.busy {
   border-color: rgba(56, 189, 248, 0.35);
   background: rgba(11, 16, 26, 0.95);
@@ -108,6 +124,20 @@ textarea:disabled {
   background: transparent;
   text-align: left;
   cursor: pointer;
+}
+
+.connection-nav-button[hidden] {
+  display: none;
+}
+
+.auth-message {
+  color: #fbbf24;
+  font-size: 0.8rem;
+  padding: 0 12px;
+}
+
+.auth-message:empty {
+  display: none;
 }
 
 .connection-nav-button:hover,

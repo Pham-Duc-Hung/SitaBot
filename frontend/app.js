@@ -2,21 +2,24 @@
  * Author: Trịnh Thiên Quang
  * Codex & ChatGPT-style Agent UI with interactive tool log steps & typewriter text stream.
  */
+import { chatRequest, confirmationPayload, resolveQueuedAction } from "./chat-api.js";
+
 "use strict";
 
 const $ = s => document.querySelector(s);
 const $$ = s => document.querySelectorAll(s);
 
-const VALID_MODELS = ["gemini-2.5-flash", "gemini-3.1-flash-lite", "gemini-3.5-flash-lite"];
+const VALID_MODELS = ["gemini-3.5-flash-lite", "gemini-3.8-flash", "gemini-3.7-flash"];
 const initialModel = localStorage.getItem("satibot.model");
 
 const state = {
   history: [],
   pending: null,
   isBusy: false,
+  apiAvailable: true,
   controller: null,
   autoApproval: true,
-  selectedModel: VALID_MODELS.includes(initialModel) ? initialModel : "gemini-2.5-flash",
+  selectedModel: VALID_MODELS.includes(initialModel) ? initialModel : "gemini-3.5-flash-lite",
   sessions: [],
   currentSessionId: null
 };
@@ -385,8 +388,8 @@ function renderRecentSessions() {
 
 function setBusy(val) {
   state.isBusy = val;
-  els.sendBtn.disabled = val;
-  els.promptInput.disabled = val;
+  els.sendBtn.disabled = val || !state.apiAvailable;
+  els.promptInput.disabled = val || !state.apiAvailable;
   if (els.modelPickerBtn) els.modelPickerBtn.disabled = val;
   if (val) {
     els.sendBtn.classList.remove("active");
@@ -398,8 +401,8 @@ function setBusy(val) {
 
 function updateSendBtnState() {
   const hasText = els.promptInput.value.trim().length > 0;
-  els.sendBtn.disabled = !hasText || state.isBusy;
-  els.sendBtn.classList.toggle("active", hasText && !state.isBusy);
+  els.sendBtn.disabled = !hasText || state.isBusy || !state.apiAvailable;
+  els.sendBtn.classList.toggle("active", hasText && !state.isBusy && state.apiAvailable);
 }
 
 async function fetchChat(payload) {
@@ -408,41 +411,29 @@ async function fetchChat(payload) {
   const timeout = setTimeout(() => state.controller.abort(), timeoutMs);
 
   try {
-    const response = await fetch("/api/chat", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...payload, workspace: currentSession()?.workspace || {} }),
-      signal: state.controller.signal
-    });
-    clearTimeout(timeout);
-
-    let data;
-    try {
-      data = await response.json();
-    } catch {
-      throw new Error(`Server trả HTTP ${response.status} không đúng chuẩn JSON.`);
-    }
+    const data = await chatRequest(
+      { ...payload, workspace: currentSession()?.workspace || {} },
+      { sessionId: currentSession()?.id, signal: state.controller.signal }
+    );
 
     if (data.workspace && currentSession()) {
       currentSession().workspace = data.workspace;
       saveSessions();
     }
-    if (!response.ok) {
-      throw new Error(data.message || `Lỗi máy chủ: HTTP ${response.status}`);
-    }
     return data;
   } catch (err) {
-    clearTimeout(timeout);
     if (err.name === "AbortError") {
       throw new Error("Quá thời gian chờ phản hồi (3.5 phút). Vui lòng thử lại.");
     }
     throw err;
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
 async function handleSendMessage() {
   const text = els.promptInput.value.trim();
-  if (!text || state.isBusy) return;
+  if (!text || state.isBusy || !state.apiAvailable) return;
 
   ensureSession(text);
   storeMessage("user", text);
@@ -508,7 +499,9 @@ async function handleSendMessage() {
   }, 1000);
 
   try {
-    const res = await fetchChat({ message: text, history: state.history, model: state.selectedModel });
+    const res = await resolveQueuedAction(await fetchChat({
+      message: text, history: state.history, model: state.selectedModel
+    }));
     clearInterval(progressTimer);
 
     const elapsedMs = Math.round(performance.now() - requestStartedAt);
@@ -546,10 +539,10 @@ async function handleSendMessage() {
 
     state.history.push({ role: "user", content: text }, { role: "assistant", content: res.message || "" });
     state.history = state.history.slice(-10);
-    storeMessage("assistant", res.message || "Đã hoàn thành nhiệm vụ.", res.data || null);
+    storeMessage("assistant", res.message || (res.status === "SUCCESS" ? "Đã hoàn thành nhiệm vụ." : "Chưa có kết quả cuối cùng."), res.data || null);
 
     // Stream the final response text (Typewriter animation)
-    streamText(textContainer, res.message || "Đã hoàn thành nhiệm vụ.", () => {
+    streamText(textContainer, res.message || (res.status === "SUCCESS" ? "Đã hoàn thành nhiệm vụ." : "Chưa có kết quả cuối cùng."), () => {
       appendS3DownloadLink(agentRow, res.data);
       // Check for public URL
       const publicUrl = extractPublicUrl(res.message, res.data);
@@ -587,10 +580,16 @@ function handleConfirmation(res, agentRow, originalPrompt) {
   // Async IAM results carry the new confirmation action inside data.
   const confirmation = res.data?.preview ? res.data : res;
   state.pending = {
-    action_id: confirmation.preview ? (confirmation.action_id || res.action_id) : undefined,
+    // The local demo also emits an action_id, but only the cloud API persists it.
+    action_id: (res.session_id || confirmation.session_id) ?
+      (confirmation.action_id || res.action_id) : undefined,
     service: confirmation.service || res.service || "lambda",
     tool_name: confirmation.tool_name || res.tool_name,
     parameters: confirmation.parameters || res.parameters || {},
+    confirmation_mode: confirmation.confirmation_mode || res.confirmation_mode ||
+      (confirmation.tool_name === "s3_delete_bucket_safe" ? "explicit_phrase" : "standard"),
+    required_confirmation: confirmation.required_confirmation || res.required_confirmation ||
+      (confirmation.tool_name === "s3_delete_bucket_safe" ? `DELETE ${confirmation.parameters?.bucket_name || ""}` : null),
     agent_state: res.agent_state,
     model: state.selectedModel,
     originalPrompt: originalPrompt
@@ -618,17 +617,42 @@ function handleConfirmation(res, agentRow, originalPrompt) {
     }, null, 2);
     card.querySelector(".approval-buttons").before(details);
   }
+  let phraseInput = null;
+  const approveButton = card.querySelector("#confirmApprove");
+  if (state.pending.confirmation_mode === "explicit_phrase") {
+    const label = document.createElement("label");
+    label.className = "approval-phrase";
+    label.textContent = `Nhập chính xác ${state.pending.required_confirmation} để xác nhận xóa: `;
+    phraseInput = document.createElement("input");
+    phraseInput.type = "text";
+    phraseInput.autocomplete = "off";
+    phraseInput.spellcheck = false;
+    phraseInput.setAttribute("aria-label", "Câu xác nhận xóa bucket");
+    phraseInput.addEventListener("input", () => {
+      approveButton.disabled = phraseInput.value !== state.pending?.required_confirmation;
+    });
+    approveButton.disabled = true;
+    label.append(phraseInput);
+    card.querySelector(".approval-buttons").before(label);
+  }
 
   agentRow.append(card);
   els.chatScroll.scrollTop = els.chatScroll.scrollHeight;
 
-  card.querySelector("#confirmApprove").onclick = async () => {
-    card.remove();
-    setBusy(true);
+  approveButton.onclick = async () => {
     const approvedAction = {
       ...state.pending,
       parameters: { ...(state.pending?.parameters || {}) }
     };
+    let payload;
+    try {
+      payload = confirmationPayload(approvedAction, phraseInput?.value || "");
+    } catch (error) {
+      card.querySelector(".approval-msg").textContent = error.message;
+      return;
+    }
+    card.remove();
+    setBusy(true);
 
     const logsBox = agentRow.querySelector(".agent-logs");
     const workingStep = document.createElement("div");
@@ -637,18 +661,7 @@ function handleConfirmation(res, agentRow, originalPrompt) {
     logsBox.append(workingStep);
 
     try {
-      const confirmationPayload = approvedAction.action_id ? {
-        confirmed: true,
-        action_id: approvedAction.action_id
-      } : {
-        confirmed: true,
-        service: approvedAction.service,
-        tool_name: approvedAction.tool_name,
-        parameters: approvedAction.parameters,
-        agent_state: approvedAction.agent_state,
-        model: approvedAction.model || state.selectedModel
-      };
-      const execRes = await fetchChat(confirmationPayload);
+      const execRes = await resolveQueuedAction(await fetchChat(payload));
 
       workingStep.remove();
 
@@ -677,10 +690,11 @@ function handleConfirmation(res, agentRow, originalPrompt) {
       state.pending = null;
 
       const textContainer = agentRow.querySelector(".agent-text");
-      storeMessage("assistant", execRes.message || "Đã thực thi thành công.", execRes.data || null);
-      state.history.push({ role: "assistant", content: execRes.message || "Đã thực thi thành công." });
+      const finalMessage = execRes.message || (execRes.status === "SUCCESS" ? "Đã thực thi thành công." : "Chưa có kết quả cuối cùng.");
+      storeMessage("assistant", finalMessage, execRes.data || null);
+      state.history.push({ role: "assistant", content: finalMessage });
       state.history = state.history.slice(-10);
-      streamText(textContainer, execRes.message || "Đã thực thi thành công.", () => {
+      streamText(textContainer, finalMessage, () => {
         appendS3DownloadLink(agentRow, execRes.data);
         const publicUrl = extractPublicUrl(execRes.message, execRes.data);
         if (publicUrl) {
@@ -858,12 +872,39 @@ function resetChat() {
 }
 
 async function loadHealth() {
+  let configuredToolCount = null;
+  try {
+    const configResponse = await fetch("/site-config.json", { cache: "no-store" });
+    if (configResponse.ok) {
+      const config = await configResponse.json();
+      if (Number.isSafeInteger(config.tools_loaded) && config.tools_loaded >= 0) {
+        configuredToolCount = config.tools_loaded;
+      }
+      if (config.api_enabled === false) {
+        state.apiAvailable = false;
+        els.statusBadge.textContent = "Bản thử giao diện • Chưa nối API";
+        els.toolsPill.textContent = "⚡ Preview";
+        els.promptInput.placeholder = "Bản thử giao diện: chờ kết nối API Gateway để sử dụng chat";
+        els.promptInput.title = "Website đã triển khai; API ChatOps chưa được kết nối.";
+        els.promptInput.disabled = true;
+        updateSendBtnState();
+        return;
+      }
+    }
+  } catch {
+    // Local demo does not publish site-config.json.
+  }
   try {
     const res = await fetch("/api/health");
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
-    els.statusBadge.textContent = `${data.region || "ap-southeast-1"} • ${data.tools_loaded || 11} Tools Active`;
+    const toolCount = Number.isSafeInteger(data.tools_loaded) && data.tools_loaded >= 0
+      ? data.tools_loaded : configuredToolCount;
+    els.statusBadge.textContent = data.status === "API_READY"
+      ? `${data.region || "ap-southeast-1"} • API Gateway online`
+      : `${data.region || "ap-southeast-1"} • ${toolCount ?? "—"} công cụ`;
     els.awsStatusPill.textContent = `☁️ ${data.region || "ap-southeast-1"}`;
-    els.toolsPill.textContent = `⚡ ${data.tools_loaded || 11} Tools`;
+    els.toolsPill.textContent = `⚡ ${toolCount ?? "—"} công cụ`;
     els.topModelText.textContent = "SatiBot";
     if (data.model && !localStorage.getItem("satibot.model") && VALID_MODELS.includes(data.model)) {
       setSelectedModel(data.model);

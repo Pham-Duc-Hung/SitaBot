@@ -46,6 +46,25 @@ S3_STORAGE_RATES_US_EAST_2 = {
     "DEEP_ARCHIVE": Decimal("0.00099"),
 }
 
+# Giá tham chiếu AWS Price List cho ap-southeast-1, công bố 2026-11-09.
+# https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonS3/current/ap-southeast-1/index.json
+# STANDARD và INTELLIGENT_TIERING dùng mức đầu tiên/Frequent Access;
+# S3 ListObjects không cho biết tier hiện tại của Intelligent-Tiering.
+# Không gán giá Deep Archive khi price list không có mức lưu trữ tương ứng.
+S3_STORAGE_RATES_AP_SOUTHEAST_1 = {
+    "STANDARD": Decimal("0.025"),
+    "STANDARD_IA": Decimal("0.0138"),
+    "ONEZONE_IA": Decimal("0.011"),
+    "INTELLIGENT_TIERING": Decimal("0.025"),
+    "GLACIER_IR": Decimal("0.005"),
+    "GLACIER": Decimal("0.0045"),
+}
+
+S3_STORAGE_RATES_BY_REGION = {
+    "us-east-2": S3_STORAGE_RATES_US_EAST_2,
+    "ap-southeast-1": S3_STORAGE_RATES_AP_SOUTHEAST_1,
+}
+
 BYTES_PER_GB = Decimal("1000000000")
 MAX_PRESIGNED_URL_EXPIRATION_SECONDS = 7 * 24 * 60 * 60
 
@@ -610,11 +629,7 @@ def _get_storage_analytics(client, bucket_name, prefix, region):
         for class_data in stored_analytics.values()
     )
 
-    rates = (
-        S3_STORAGE_RATES_US_EAST_2
-        if region == "us-east-2"
-        else {}
-    )
+    rates = S3_STORAGE_RATES_BY_REGION.get(region, {})
     storage_classes = []
     total_estimated_cost = Decimal("0")
     unpriced_storage_classes = []
@@ -665,16 +680,13 @@ def _get_storage_analytics(client, bucket_name, prefix, region):
                 9,
             ),
             "storage_classes": storage_classes,
-            "estimated_monthly_storage_cost_usd": round(
-                float(total_estimated_cost),
-                6,
+            "estimated_monthly_storage_cost_usd": (
+                None if unpriced_storage_classes else round(float(total_estimated_cost), 6)
             ),
             "cost_estimate_complete": not unpriced_storage_classes,
             "unpriced_storage_classes": unpriced_storage_classes,
             "pricing_basis": {
-                "rate_region": (
-                    "us-east-2" if region == "us-east-2" else None
-                ),
+                "rate_region": region if rates else None,
                 "currency": "USD",
                 "unit": "GB-month",
                 "scope": "storage-only first-tier reference estimate",

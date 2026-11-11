@@ -172,5 +172,6 @@
   elements.verifyForm.addEventListener("submit", verifyRole);
   elements.copyExternal.addEventListener("click", () => copyValue(elements.externalId.value));
   elements.copyTrust.addEventListener("click", () => copyValue(elements.trustPolicy.textContent));
+  window.addEventListener("satibot-auth-changed", loadConnection);
   loadConnection();
 })();

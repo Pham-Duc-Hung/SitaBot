@@ -104,6 +104,17 @@ class IamStack(Stack):
         for name, role in self.roles.items():
             CfnOutput(self, f"{self._role_label(name)}RoleArn", value=role.role_arn)
 
+        self.codedeploy_role = iam.Role(
+            self,
+            "CodeDeployLambdaRole",
+            role_name="SatiBot-CodeDeploy-LambdaRole",
+            assumed_by=iam.ServicePrincipal("codedeploy.amazonaws.com"),
+            managed_policies=[iam.ManagedPolicy.from_aws_managed_policy_name(
+                "service-role/AWSCodeDeployRoleForLambda"
+            )],
+        )
+        CfnOutput(self, "CodeDeployRoleArn", value=self.codedeploy_role.role_arn)
+
         if state_machine_arn:
             self.roles["chatbot"].add_to_policy(iam.PolicyStatement(
                 actions=["states:StartExecution"], resources=[state_machine_arn]))

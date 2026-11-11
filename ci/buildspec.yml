@@ -16,7 +16,10 @@ phases:
       - python scripts/package_sprint2.py --with-dependencies
       - python scripts/verify_backend_artifacts.py
       - python scripts/build_frontend_ci.py
+      - node --test tests/test_frontend_chat_contract.mjs tests/test_frontend_auth.mjs
       - cdk synth --app "python infrastructure/backend_sprint2_app.py" --output dist/cdk.out
+      - cdk synth --app "python -m infrastructure.frontend_app" --output dist/web-cdk.out
+      - cdk synth --app "python -m infrastructure.web_api_app" --output dist/web-api-cdk.out
       - python scripts/verify_canary_rollback.py
       - mkdir -p dist/deployment
       - cp scripts/write_deploy_config.py ci/publish-buildspec.yml dist/deployment/

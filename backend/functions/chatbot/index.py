@@ -28,6 +28,9 @@ logger.setLevel(logging.INFO)
 
 SUPPORTED_LLM_MODELS = (
     "gemini-3.5-flash-lite",
+    "gemini-3.8-flash",
+    "gemini-3.7-flash",
+    "gemini-3.6-flash",
     "gemini-3.1-flash-lite",
     "gemini-2.5-flash",
 )
@@ -278,7 +281,6 @@ def call_llm_api(
     payload: Dict[str, Any] = {
         "model": model,
         "messages": messages,
-        "temperature": 0.1,
     }
     if tools:
         payload["tools"] = tools

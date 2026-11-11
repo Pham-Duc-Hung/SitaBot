@@ -76,7 +76,23 @@ def test_chat_persists_intent_and_ignores_client_identity_history_credentials(cl
     assert 895 <= item["expires_at"] - time.time() <= 900
     assert "secret" not in json.dumps(model.call_args.args)
     assert "forged" not in json.dumps(model.call_args.args)
+    assert model.call_args.kwargs["model"] == "gemini-3.5-flash-lite"
+    offered_tools = model.call_args.kwargs["tools"]
+    system_prompt = model.call_args.args[0][0]["content"]
+    assert f"chính xác {len(offered_tools)} công cụ" in system_prompt
+    assert all(tool["function"]["name"] in system_prompt for tool in offered_tools)
     assert cloud.load_session("alice", "s1")["history"][-1]["role"] == "assistant"
+
+
+def test_cloud_chat_validates_and_passes_selected_model(cloud, monkeypatch):
+    model = Mock(return_value={"content": "Xin chào"})
+    monkeypatch.setattr(chat.gemini, "complete", model)
+    ok = chat.handle(request({"message": "hi", "model": "gemini-3.7-flash"}), None)
+    assert ok["statusCode"] == 200
+    assert model.call_args.kwargs["model"] == "gemini-3.7-flash"
+    rejected = chat.handle(request({"message": "hi", "model": "gemini-2.5-flash"}), None)
+    assert rejected["statusCode"] == 400
+    assert model.call_count == 1
 
 
 def test_unauthenticated_chat_does_not_call_model(monkeypatch):
@@ -269,6 +285,37 @@ def test_gemini_missing_secret_never_falls_back_to_mock(cloud, monkeypatch):
     with pytest.raises(BackendError) as exc:
         gemini.complete([{"role": "user", "content": "hello"}])
     assert exc.value.code == "GeminiNotConfigured"
+
+
+def test_gemini_uses_supported_default_without_deprecated_sampling(cloud, monkeypatch):
+    monkeypatch.setattr(gemini, "get_api_key", lambda: "test-only")
+    monkeypatch.delenv("GEMINI_MODEL", raising=False)
+    reply = Mock()
+    reply.__enter__ = Mock(return_value=reply)
+    reply.__exit__ = Mock(return_value=False)
+    reply.read.return_value = b'{"choices":[{"message":{"content":"OK"}}]}'
+    network = Mock(return_value=reply)
+    monkeypatch.setattr(gemini.urllib.request, "urlopen", network)
+    assert gemini.complete([{"role": "user", "content": "hi"}])["content"] == "OK"
+    payload = json.loads(network.call_args.args[0].data)
+    assert payload["model"] == "gemini-3.5-flash-lite"
+    assert "temperature" not in payload
+
+
+def test_gemini_network_timeout_retries_without_logging_credentials(cloud, monkeypatch, caplog):
+    monkeypatch.setattr(gemini, "get_api_key", lambda: "private-key")
+    network = Mock(side_effect=TimeoutError("private-key connection timed out"))
+    monkeypatch.setattr(gemini.urllib.request, "urlopen", network)
+    monkeypatch.setattr(gemini.time, "sleep", Mock())
+
+    with pytest.raises(BackendError) as exc:
+        gemini.complete([{"role": "user", "content": "hi"}])
+
+    assert exc.value.code == "GeminiUnavailable"
+    assert network.call_count == 3
+    assert all(call.kwargs["timeout"] == gemini.REQUEST_TIMEOUT_SECONDS for call in network.call_args_list)
+    assert "private-key" not in caplog.text
+    assert "attempt 3/3 failed (TimeoutError)" in caplog.text
 
 
 def test_tool_adapter_preserves_s3_action_and_validates_arguments():

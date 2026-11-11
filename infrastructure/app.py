@@ -29,7 +29,7 @@ iam_stack = IamStack(
     app,
     "IamStack",
     data_stack=data_stack,
-    llm_secret_arn=os.environ.get("LLM_SECRET_ARN"),
+    llm_secret_arn=os.environ.get("LLM_SECRET_ARN") or app.node.try_get_context("llmSecretArn"),
     env=target_env,
 )
 

@@ -13,7 +13,7 @@ from backend.functions.dispatcher.services.s3_service import execute
 
 
 REGION = "ap-southeast-1"
-BUCKET_PREFIX = "sitabot-hung-test-"
+BUCKET_PREFIX = "sitabot-s3-test-"
 OBJECT_KEY = "demo/hello.txt"
 OBJECT_CONTENT = b"Hello from SitaBot S3 integration test!"
 LIFECYCLE_VERIFY_TIMEOUT_SECONDS = 180
@@ -31,10 +31,34 @@ def require_safe_environment():
         )
 
     profile = os.getenv("AWS_PROFILE")
-
-    if profile != "sitabot-dev":
+    expected_account = os.getenv("AWS_EXPECTED_ACCOUNT_ID", "")
+    expected_arn = os.getenv("AWS_EXPECTED_PRINCIPAL_ARN", "")
+    bucket_prefix = os.getenv("AWS_TEST_BUCKET_PREFIX", BUCKET_PREFIX)
+    if not profile:
+        raise RuntimeError("Set AWS_PROFILE to the AWS CLI profile to test.")
+    if len(expected_account) != 12 or not expected_account.isascii() or not expected_account.isdigit():
+        raise RuntimeError("Set AWS_EXPECTED_ACCOUNT_ID to the 12-digit AWS account ID.")
+    if not expected_arn:
+        raise RuntimeError("Set AWS_EXPECTED_PRINCIPAL_ARN to your STS caller ARN.")
+    if (
+        not bucket_prefix.startswith("sitabot-")
+        or not bucket_prefix.endswith("-test-")
+        or len(bucket_prefix) > 51
+        or any(char not in "abcdefghijklmnopqrstuvwxyz0123456789-" for char in bucket_prefix)
+    ):
         raise RuntimeError(
-            "AWS_PROFILE phải là sitabot-dev."
+            "AWS_TEST_BUCKET_PREFIX must look like sitabot-yourname-test- "
+            "and leave room for a 12-character random suffix."
+        )
+    return profile, expected_account, expected_arn, bucket_prefix
+
+
+def require_expected_identity(identity, expected_account, expected_arn):
+    if identity.get("Account") != expected_account or identity.get("Arn") != expected_arn:
+        raise RuntimeError(
+            "Unexpected AWS identity. Expected "
+            f"{expected_arn}; got {identity.get('Arn')} "
+            f"in account {identity.get('Account')}. No S3 resource was created."
         )
 
 
@@ -117,32 +141,34 @@ def cleanup(s3_client, bucket_name):
 
 
 def main():
-    require_safe_environment()
+    profile, expected_account, expected_arn, bucket_prefix = require_safe_environment()
 
     # Tên ngẫu nhiên vì tên S3 bucket phải duy nhất trên toàn AWS.
     random_suffix = uuid.uuid4().hex[:12]
-    bucket_name = f"{BUCKET_PREFIX}{random_suffix}"
+    bucket_name = f"{bucket_prefix}{random_suffix}"
 
-    session = boto3.Session()
+    session = boto3.Session(profile_name=profile, region_name=REGION)
     sts_client = session.client("sts", region_name=REGION)
+    identity = sts_client.get_caller_identity()
+    require_expected_identity(identity, expected_account, expected_arn)
+    frozen_credentials = session.get_credentials().get_frozen_credentials()
+    if not frozen_credentials.token:
+        raise RuntimeError("The selected profile must provide temporary AWS credentials.")
+    credentials = {
+        "AccessKeyId": frozen_credentials.access_key,
+        "SecretAccessKey": frozen_credentials.secret_key,
+        "SessionToken": frozen_credentials.token,
+    }
     s3_client = session.client("s3", region_name=REGION)
 
-    identity = sts_client.get_caller_identity()
-    identity_name = identity["Arn"].rsplit("/", 1)[-1]
-
-    if identity_name != "PhamHung":
-        raise RuntimeError(
-            f"Unexpected AWS identity: {identity_name}"
-        )
-
-    print(f"AWS identity: {identity_name}")
+    print(f"AWS identity: {identity['Arn']} (account {expected_account})")
     print(f"Test bucket: {bucket_name}")
 
     try:
         print("1. Creating a safe bucket...")
 
         create_result = execute(
-            credentials=None,
+            credentials=credentials,
             params={
                 "action": "create_bucket",
                 "bucket_name": bucket_name,
@@ -178,7 +204,7 @@ def main():
         print("2.1. Scanning account buckets for public access risks...")
 
         scan_result = execute(
-            credentials=None,
+            credentials=credentials,
             params={
                 "action": "scan_public_access",
                 "region": REGION,
@@ -209,7 +235,7 @@ def main():
         print("3. Calling block_public_access again...")
 
         block_result = execute(
-            credentials=None,
+            credentials=credentials,
             params={
                 "action": "block_public_access",
                 "bucket_name": bucket_name,
@@ -244,7 +270,7 @@ def main():
         print("4.2. Rejecting a presigned URL for a missing object...")
 
         missing_object_result = execute(
-            credentials=None,
+            credentials=credentials,
             params={
                 "action": "create_presigned_download",
                 "bucket_name": bucket_name,
@@ -264,7 +290,7 @@ def main():
         print("5. Creating a presigned download URL...")
 
         presigned_result = execute(
-            credentials=None,
+            credentials=credentials,
             params={
                 "action": "create_presigned_download",
                 "bucket_name": bucket_name,
@@ -323,7 +349,7 @@ def main():
         print("7. Calculating S3 storage analytics...")
 
         analytics_result = execute(
-            credentials=None,
+            credentials=credentials,
             params={
                 "action": "get_storage_analytics",
                 "bucket_name": bucket_name,
@@ -360,7 +386,7 @@ def main():
 
         lifecycle_rule_id = "sitabot-test-standard-ia-transition"
         lifecycle_result = execute(
-            credentials=None,
+            credentials=credentials,
             params={
                 "action": "put_lifecycle_rule",
                 "bucket_name": bucket_name,
@@ -389,7 +415,7 @@ def main():
         print("9. Inspecting the bucket before safe deletion...")
 
         inspect_result = execute(
-            credentials=None,
+            credentials=credentials,
             params={
                 "action": "inspect_bucket_for_delete",
                 "bucket_name": bucket_name,
@@ -404,7 +430,7 @@ def main():
             )
 
         rejected_delete = execute(
-            credentials=None,
+            credentials=credentials,
             params={
                 "action": "delete_bucket_safe",
                 "bucket_name": bucket_name,
@@ -426,7 +452,7 @@ def main():
         print("10. Deleting the test bucket with explicit confirmation...")
 
         delete_result = execute(
-            credentials=None,
+            credentials=credentials,
             params={
                 "action": "delete_bucket_safe",
                 "bucket_name": bucket_name,
