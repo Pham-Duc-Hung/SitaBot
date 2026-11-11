@@ -1,0 +1,40 @@
+{
+  "scope": "Sprint 4 preview WAF and independent fallback-page acceptance",
+  "tested_at_utc": "2026-11-11T18:40:47.249854+00:00",
+  "primary": {
+    "url": "https://d2lcv634gip2rf.cloudfront.net/",
+    "region": "ap-southeast-1",
+    "waf_attached": true,
+    "http": {
+      "status": 200,
+      "x_cache": "RefreshHit from cloudfront",
+      "server": "AmazonS3"
+    }
+  },
+  "blocked_xss_probe": {
+    "target": "https://d2lcv634gip2rf.cloudfront.net/",
+    "probe": "XSS pattern in a query argument",
+    "http": {
+      "status": 403,
+      "x_cache": "Error from cloudfront",
+      "server": "CloudFront"
+    },
+    "waf_sample": {
+      "action": "BLOCK",
+      "rule": "AWS#AWSManagedRulesCommonRuleSet#CrossSiteScripting_QUERYARGUMENTS",
+      "time_utc": "2026-11-11T18:40:35.874000+00:00"
+    }
+  },
+  "fallback": {
+    "url": "https://dpi800qrde9a5.cloudfront.net/",
+    "region": "us-east-1",
+    "http": {
+      "status": 200,
+      "x_cache": "RefreshHit from cloudfront",
+      "server": "AmazonS3"
+    },
+    "notice_visible": true,
+    "screenshot": "sprint4-error-page.png"
+  },
+  "scope_note": "Fallback URL was tested independently. Route 53 DNS failover was not tested."
+}

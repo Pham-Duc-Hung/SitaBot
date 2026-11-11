@@ -1008,6 +1008,33 @@ qua website. Mức chi phí ở trên chỉ là dự toán lưu trữ theo đơn
 chiếu, không bao gồm request, truyền dữ liệu hoặc các khoản trên hóa đơn AWS.
 
 
+\subsubsection{Nghiệm thu WAF và trang thông báo lỗi dự phòng}
+
+Ngày 12/11/2026, nhóm kiểm thử website bản thử trên CloudFront. Khu vực
+triển khai chính là \texttt{ap-southeast-1}. Web ACL của AWS WAF được gắn với
+distribution chính:
+request truy cập trang chủ hợp lệ trả HTTP 200, còn request thử mẫu XSS trong
+tham số truy vấn trả HTTP 403. Dữ liệu sampled request của WAF ghi nhận hành
+động \texttt{BLOCK} do nhóm \texttt{AWSManagedRulesCommonRuleSet},
+quy tắc chống XSS trong tham số truy vấn.
+Bằng chứng gồm mã HTTP, trạng thái CloudFront và tên quy tắc được lưu tại
+\path{evidence/sprint4-web-acceptance.json}; dữ liệu không lưu địa chỉ IP.
+
+Trang thông báo lỗi độc lập được phân phối qua CloudFront với origin S3 tại
+\texttt{us-east-1}. Truy cập trực tiếp trang này trả HTTP 200 và hiển thị thông
+báo SatiBot tạm thời không khả dụng, không cung cấp chức năng quản trị AWS
+(Hình~\ref{fig:sprint4_error_page}). Phép thử này xác nhận trang dự phòng hoạt
+động độc lập; việc Route~53 tự chuyển DNS sang trang lỗi khi website chính gặp
+sự cố thuộc kịch bản failover riêng và chưa được kiểm thử trong phép nghiệm thu
+này.
+
+\begin{figure}[!htbp]
+\centering
+\includegraphics[width=0.9\linewidth,height=0.42\textheight,keepaspectratio]{evidence/sprint4-error-page.png}
+\caption{Trang thông báo lỗi dự phòng trên CloudFront tại \texttt{us-east-1}}
+\label{fig:sprint4_error_page}
+\end{figure}
+
 \section{KẾ HOẠCH TRIỂN KHAI DỰ ÁN}
 
 \subsection{Kế hoạch triển khai theo từng giai đoạn (05 tuần)}
