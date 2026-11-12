@@ -4,6 +4,7 @@ Kiểm thử đóng gói Lambda và benchmark.
 """
 
 import hashlib
+import sys
 import time
 from unittest.mock import Mock
 import zipfile
@@ -55,9 +56,10 @@ def test_deterministic_zip_hashes_and_subprocess_coldstart(tmp_path):
         h2 = hashlib.sha256((dir_2 / f"{name}.zip").read_bytes()).hexdigest()
         assert h1 == h2
 
-    # Đo subprocess cold-start trên các gói đã đóng kèm dependency ở dist/backend nếu có
+    # dist/backend is packaged for Lambda Linux / CPython 3.12. Its native
+    # wheels cannot be imported by the local subprocess on Windows or Python 3.13.
     target = ROOT / "dist" / "backend"
-    if all(
+    if sys.platform == "linux" and sys.version_info[:2] == (3, 12) and all(
         (target / f"{n}.zip").exists()
         for n in ("chatbot", "dispatcher", "formatter", "connector", "history")
     ):

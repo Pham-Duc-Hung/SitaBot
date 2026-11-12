@@ -5,6 +5,7 @@ Kiểm tra phản hồi và thử lại các lỗi kết nối tạm thời.
 """
 
 import json
+import logging
 import os
 import time
 import urllib.error
@@ -19,6 +20,9 @@ from backend.shared.http_api import reject_constant
 _SECRET_CACHE = {}
 _SM_CONFIG = Config(connect_timeout=2, read_timeout=2, retries={"total_max_attempts": 2})
 ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+SUPPORTED_MODELS = ("gemini-3.5-flash-lite", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash")
+REQUEST_TIMEOUT_SECONDS = 8
+_LOGGER = logging.getLogger(__name__)
 
 
 def get_api_key():
@@ -46,10 +50,13 @@ def get_api_key():
     return key
 
 
-def complete(messages, tools=None):
+def complete(messages, tools=None, model=None):
     key = get_api_key()
-    payload = {"model": os.environ.get("GEMINI_MODEL", "gemini-2.5-flash"),
-               "messages": redact_sensitive(messages), "temperature": 0.1,
+    selected_model = model or os.environ.get("GEMINI_MODEL", SUPPORTED_MODELS[0])
+    if selected_model not in SUPPORTED_MODELS:
+        raise BackendError("InvalidModel", "Model Gemini không được hỗ trợ.", 400)
+    payload = {"model": selected_model,
+               "messages": redact_sensitive(messages),
                "max_tokens": 2048}
     if tools:
         payload.update(tools=tools, tool_choice="auto", parallel_tool_calls=False)
@@ -57,7 +64,7 @@ def complete(messages, tools=None):
         request = urllib.request.Request(ENDPOINT, data=json.dumps(payload).encode(),
                     headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}"}, method="POST")
         try:
-            with urllib.request.urlopen(request, timeout=6) as reply:
+            with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as reply:
                 data = json.loads(reply.read(262145), parse_constant=reject_constant)
             message = data["choices"][0]["message"]
             if not isinstance(message, dict) or (message.get("content") is not None and not isinstance(message["content"], str)):
@@ -66,7 +73,9 @@ def complete(messages, tools=None):
         except urllib.error.HTTPError as exc:
             if exc.code not in {429, 500, 502, 503, 504} or attempt == 2:
                 raise BackendError("GeminiUnavailable", "Gemini tạm thời không khả dụng.", 502) from None
-        except (urllib.error.URLError, TimeoutError, OSError):
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            # Never log the request or exception text: either may contain the API key.
+            _LOGGER.warning("Gemini connection attempt %s/3 failed (%s)", attempt + 1, type(exc).__name__)
             if attempt == 2:
                 raise BackendError("GeminiUnavailable", "Kết nối Gemini bị gián đoạn.", 502) from None
         except (ValueError, KeyError, IndexError, TypeError):

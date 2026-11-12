@@ -37,6 +37,13 @@
         </div>
       </div>
 
+      <button type="button" class="connection-nav-button" id="authButton" hidden>Đăng nhập SatiBot</button>
+      <p class="auth-message" id="authMessage" role="status" aria-live="polite"></p>
+      <button type="button" class="connection-nav-button" id="awsConnectionOpen" aria-haspopup="dialog" aria-controls="awsConnectionDialog">
+        <span aria-hidden="true">☁</span>
+        <span class="btn-text">Kết nối tài khoản AWS</span>
+      </button>
+
       <!-- User Profile at Bottom -->
       <div class="sidebar-user" id="userProfileBtn" title="AWS Workspace (ap-southeast-1)">
         <div class="user-avatar-symbolic">
@@ -44,7 +51,7 @@
         </div>
         <div class="user-info">
           <div class="user-name">AWS Workspace</div>
-          <div class="user-plan" id="statusBadge">ap-southeast-1 • 11 Tools Active</div>
+          <div class="user-plan" id="statusBadge">Đang kiểm tra kết nối…</div>
         </div>
       </div>
     </aside>
@@ -57,8 +64,10 @@
           <span class="chat-title" id="topModelText">SatiBot</span>
         </div>
         <div class="header-right">
+          <span class="pill-badge" id="realtimeStatus" role="status" aria-live="polite" title="Kênh cập nhật kết quả tác vụ">Kết quả: lịch sử</span>
           <span class="pill-badge" id="awsStatusPill">☁️ ap-southeast-1</span>
-          <span class="pill-badge green" id="toolsPill">⚡ 11 Tools</span>
+          <button type="button" class="connection-badge" id="awsConnectionBadge" aria-haspopup="dialog" aria-controls="awsConnectionDialog">AWS: Chưa kiểm tra</button>
+          <span class="pill-badge green" id="toolsPill" title="Số công cụ được định nghĩa; quyền thực thi phụ thuộc IAM Role đã kết nối">⚡ Công cụ</span>
         </div>
       </header>
 
@@ -97,26 +106,26 @@
             <div class="controls-right">
               <div class="model-picker-container" id="modelPickerContainer">
                 <button type="button" class="model-picker-btn" id="modelPickerBtn" aria-haspopup="listbox" aria-expanded="false" title="Chọn mô hình AI">
-                  <span class="model-picker-current" id="currentModelLabel">gemini-2.5-flash</span>
+                  <span class="model-picker-current" id="currentModelLabel">gemini-3.5-flash-lite</span>
                   <svg class="model-picker-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <polyline points="6 9 12 15 18 9"></polyline>
                   </svg>
                 </button>
                 <div class="model-dropdown-menu" id="modelDropdownMenu" role="listbox" tabindex="-1">
-                  <div class="model-option" data-value="gemini-2.5-flash" role="option" tabindex="0">
-                    <span class="model-option-name">gemini-2.5-flash</span>
-                    <svg class="model-check-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                      <polyline points="20 6 9 17 4 12"></polyline>
-                    </svg>
-                  </div>
-                  <div class="model-option" data-value="gemini-3.1-flash-lite" role="option" tabindex="0">
-                    <span class="model-option-name">gemini-3.1-flash-lite</span>
-                    <svg class="model-check-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                      <polyline points="20 6 9 17 4 12"></polyline>
-                    </svg>
-                  </div>
                   <div class="model-option" data-value="gemini-3.5-flash-lite" role="option" tabindex="0">
                     <span class="model-option-name">gemini-3.5-flash-lite</span>
+                    <svg class="model-check-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                      <polyline points="20 6 9 17 4 12"></polyline>
+                    </svg>
+                  </div>
+                  <div class="model-option" data-value="gemini-3.8-flash" role="option" tabindex="0">
+                    <span class="model-option-name">gemini-3.8-flash</span>
+                    <svg class="model-check-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                      <polyline points="20 6 9 17 4 12"></polyline>
+                    </svg>
+                  </div>
+                  <div class="model-option" data-value="gemini-3.7-flash" role="option" tabindex="0">
+                    <span class="model-option-name">gemini-3.7-flash</span>
                     <svg class="model-check-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                       <polyline points="20 6 9 17 4 12"></polyline>
                     </svg>
@@ -133,6 +142,53 @@
     </main>
   </div>
 
-  <script src="/app.js" defer></script>
+  <dialog class="connection-dialog" id="awsConnectionDialog" aria-labelledby="awsConnectionTitle">
+    <div class="connection-dialog-header">
+      <div>
+        <p class="connection-eyebrow">AWS WORKSPACE</p>
+        <h2 id="awsConnectionTitle">Liên kết tài khoản AWS</h2>
+      </div>
+      <button type="button" class="connection-close" id="awsConnectionClose" aria-label="Đóng">×</button>
+    </div>
+    <p class="connection-intro">Tài khoản đăng nhập SatiBot và tài khoản AWS được quản lý là hai thứ khác nhau. SatiBot dùng IAM Role cùng ExternalId để xin quyền tạm thời; bạn không cần nhập AWS password hay access key.</p>
+    <p class="connection-message" id="awsConnectionMessage" role="status" aria-live="polite">Đang kiểm tra trạng thái kết nối…</p>
+
+    <section class="connection-current" id="awsConnectionCurrent" hidden aria-label="Tài khoản AWS đã kết nối">
+      <strong>Đã kết nối</strong>
+      <p>Account ID: <code id="awsConnectedAccount"></code></p>
+      <p>Role ARN: <code id="awsConnectedRole"></code></p>
+    </section>
+
+    <section class="connection-setup" aria-labelledby="awsConnectionSetupTitle">
+      <h3 id="awsConnectionSetupTitle">Thiết lập hoặc thay đổi kết nối</h3>
+      <p><strong>1.</strong> Lấy ExternalId riêng cho tài khoản SatiBot của bạn.</p>
+      <button type="button" class="connection-action" id="awsExternalIdButton">Lấy ExternalId</button>
+      <div class="connection-external" id="awsExternalSection" hidden>
+        <label for="awsExternalId">ExternalId</label>
+        <div class="connection-copy-row">
+          <input id="awsExternalId" readonly autocomplete="off" spellcheck="false">
+          <button type="button" id="awsCopyExternalId">Sao chép</button>
+        </div>
+        <p><strong>2.</strong> Trong tài khoản AWS cần liên kết, tạo IAM Role với path <code>/satibot/</code> và tên <code>SatiBotAccessRole</code>. Dùng trust policy dưới đây, rồi gắn chính sách quyền tối thiểu cho các thao tác S3/EC2/Lambda/IAM bạn cho phép.</p>
+        <div id="awsTrustSection" hidden>
+          <div class="connection-policy-heading">
+            <span>Trust policy</span>
+            <button type="button" id="awsCopyTrustPolicy">Sao chép JSON</button>
+          </div>
+          <pre id="awsTrustPolicy"></pre>
+        </div>
+        <p class="connection-message connection-warning" id="awsTrustUnavailable" hidden>Máy chủ chưa cấu hình ARN của Connector và Dispatcher. Cần cấu hình hai role này trước khi tạo trust policy.</p>
+        <form id="awsVerifyForm">
+          <label for="awsRoleArn"><strong>3.</strong> Dán Role ARN vừa tạo</label>
+          <input id="awsRoleArn" name="role_arn" type="text" required autocomplete="off" spellcheck="false" placeholder="arn:aws:iam::&lt;AWS_ACCOUNT_ID&gt;:role/satibot/SatiBotAccessRole">
+          <button type="submit" class="connection-action" id="awsVerifyButton">Kiểm tra và liên kết</button>
+        </form>
+      </div>
+    </section>
+  </dialog>
+
+  <script type="module" src="/auth.js"></script>
+  <script src="/aws-connection.js" defer></script>
+  <script type="module" src="/app.js"></script>
 </body>
 </html>

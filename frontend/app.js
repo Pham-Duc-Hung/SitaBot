@@ -2,23 +2,28 @@
  * Author: Trịnh Thiên Quang
  * Codex & ChatGPT-style Agent UI with interactive tool log steps & typewriter text stream.
  */
+import { chatRequest, confirmationPayload, findActionResult, listSessionResults, pollActionResult, resolveQueuedAction } from "./chat-api.js";
+import { createAppSyncSubscription, mergeActionResult } from "./appsync.js";
+
 "use strict";
 
 const $ = s => document.querySelector(s);
 const $$ = s => document.querySelectorAll(s);
 
-const VALID_MODELS = ["gemini-2.5-flash", "gemini-3.1-flash-lite", "gemini-3.5-flash-lite"];
+const VALID_MODELS = ["gemini-3.5-flash-lite", "gemini-3.8-flash", "gemini-3.7-flash"];
 const initialModel = localStorage.getItem("satibot.model");
 
 const state = {
   history: [],
   pending: null,
   isBusy: false,
+  apiAvailable: true,
   controller: null,
   autoApproval: true,
-  selectedModel: VALID_MODELS.includes(initialModel) ? initialModel : "gemini-2.5-flash",
+  selectedModel: VALID_MODELS.includes(initialModel) ? initialModel : "gemini-3.5-flash-lite",
   sessions: [],
-  currentSessionId: null
+  currentSessionId: null,
+  realtime: null
 };
 
 const SESSION_STORAGE_KEY = "satibot.chat.sessions.v1";
@@ -30,6 +35,7 @@ const els = {
   newChatBtn: $("#newChatBtn"),
   recentList: $("#recentList"),
   statusBadge: $("#statusBadge"),
+  realtimeStatus: $("#realtimeStatus"),
   awsStatusPill: $("#awsStatusPill"),
   toolsPill: $("#toolsPill"),
   chatScroll: $("#chatScroll"),
@@ -288,7 +294,10 @@ function currentSession() {
 
 function ensureSession(firstPrompt) {
   let session = currentSession();
-  if (session) return session;
+  if (session) {
+    state.realtime?.start(session.id);
+    return session;
+  }
   const id = globalThis.crypto && crypto.randomUUID ? crypto.randomUUID() : `chat_${Date.now()}_${Math.random().toString(16).slice(2)}`;
   session = {
     id,
@@ -300,15 +309,24 @@ function ensureSession(firstPrompt) {
   state.sessions.unshift(session);
   state.currentSessionId = id;
   saveSessions();
+  state.realtime?.start(id);
   return session;
 }
 
-function storeMessage(role, content, data = null) {
+function storeMessage(role, content, data = null, actionId = null, status = null) {
   const session = currentSession();
   if (!session || !content) return;
-  session.messages.push({ role, content: String(content), data, createdAt: Date.now() });
+  const existing = actionId && session.messages.find(message => message.actionId === actionId);
+  if (existing) {
+    if (!(existing.status !== "PENDING" && status === "PENDING")) {
+      Object.assign(existing, { content: String(content), data, status });
+    }
+  } else {
+    session.messages.push({ role, content: String(content), data, actionId, status, createdAt: Date.now() });
+  }
   session.updatedAt = Date.now();
   saveSessions();
+  return existing || session.messages.at(-1);
 }
 
 function appendStoredMessage(message) {
@@ -324,6 +342,7 @@ function appendStoredMessage(message) {
   }
   const row = document.createElement("div");
   row.className = "agent-row";
+  if (message.actionId) row.dataset.actionId = message.actionId;
   const header = document.createElement("div");
   header.className = "agent-header";
   header.innerHTML = '<div class="agent-avatar">S</div><span>SatiBot AWS Agent</span>';
@@ -350,6 +369,7 @@ function openSession(sessionId) {
   const session = state.sessions.find(s => s.id === sessionId);
   if (!session) return;
   state.currentSessionId = session.id;
+  state.realtime?.start(session.id);
   state.pending = null;
   state.history = session.messages
     .filter(m => m.role === "user" || m.role === "assistant")
@@ -360,7 +380,77 @@ function openSession(sessionId) {
   els.emptyView.classList.toggle("hidden", session.messages.length > 0);
   els.conversationFeed.classList.toggle("hidden", session.messages.length === 0);
   renderRecentSessions();
+  void syncSessionHistory(session.id);
   requestAnimationFrame(() => { els.chatScroll.scrollTop = els.chatScroll.scrollHeight; });
+}
+
+function updateActionResult(record, appendMissing = false) {
+  const session = state.sessions.find(item => item.id === record.session_id);
+  if (!session || !record.action_id || !record.message) return;
+  const message = mergeActionResult(session, record, appendMissing && !state.isBusy);
+  if (!message) return;
+  saveSessions();
+  if (state.currentSessionId !== session.id) return;
+  const row = [...els.conversationFeed.querySelectorAll(".agent-row")]
+    .find(item => item.dataset.actionId === record.action_id);
+  if (row) {
+    const body = row.querySelector(".agent-text");
+    if (body) body.innerHTML = formatBody(message.content);
+    row.querySelectorAll(".restored-url-link").forEach(link => link.remove());
+    appendS3DownloadLink(row, message.data);
+  } else {
+    appendStoredMessage(message);
+  }
+  els.chatScroll.scrollTop = els.chatScroll.scrollHeight;
+}
+
+async function syncSessionHistory(sessionId) {
+  try {
+    const records = await listSessionResults(sessionId);
+    if (state.currentSessionId !== sessionId) return;
+    for (const record of records.reverse()) {
+      const existing = currentSession()?.messages.find(message => message.actionId === record.action_id);
+      if (existing?.status === "PENDING") {
+        let detail = null;
+        try { detail = await findActionResult(record.action_id, sessionId); } catch { /* use summary */ }
+        updateActionResult(detail || record);
+      } else if (!existing) {
+        let detail = null;
+        try { detail = await findActionResult(record.action_id, sessionId); } catch { /* use summary */ }
+        updateActionResult(detail || record, true);
+      }
+    }
+  } catch {
+    // History is optional for the local demo and retried on the next connection.
+  }
+}
+
+async function waitForActionResult(actionId, sessionId) {
+  if (state.realtime?.status === "connected") {
+    const event = await state.realtime.waitForResult(actionId);
+    if (event) {
+      try { return await findActionResult(actionId, sessionId) || event; } catch { return event; }
+    }
+    // A lost event can still be recovered from the authoritative history.
+    return findActionResult(actionId, sessionId);
+  }
+  return pollActionResult(actionId, sessionId);
+}
+
+async function resolveAction(result) {
+  return resolveQueuedAction(result, { poll: waitForActionResult });
+}
+
+function setRealtimeState(phase) {
+  if (!els.realtimeStatus) return;
+  els.realtimeStatus.textContent = {
+    connected: "Kết quả: trực tiếp",
+    connecting: "Kết quả: đang kết nối",
+    reconnecting: "Kết quả: đang kết nối lại",
+    unauthenticated: "Kết quả: cần đăng nhập",
+    disconnected: "Kết quả: lịch sử"
+  }[phase] || "Kết quả: lịch sử";
+  if (phase === "connected" && state.currentSessionId) void syncSessionHistory(state.currentSessionId);
 }
 
 function renderRecentSessions() {
@@ -385,8 +475,8 @@ function renderRecentSessions() {
 
 function setBusy(val) {
   state.isBusy = val;
-  els.sendBtn.disabled = val;
-  els.promptInput.disabled = val;
+  els.sendBtn.disabled = val || !state.apiAvailable;
+  els.promptInput.disabled = val || !state.apiAvailable;
   if (els.modelPickerBtn) els.modelPickerBtn.disabled = val;
   if (val) {
     els.sendBtn.classList.remove("active");
@@ -398,8 +488,8 @@ function setBusy(val) {
 
 function updateSendBtnState() {
   const hasText = els.promptInput.value.trim().length > 0;
-  els.sendBtn.disabled = !hasText || state.isBusy;
-  els.sendBtn.classList.toggle("active", hasText && !state.isBusy);
+  els.sendBtn.disabled = !hasText || state.isBusy || !state.apiAvailable;
+  els.sendBtn.classList.toggle("active", hasText && !state.isBusy && state.apiAvailable);
 }
 
 async function fetchChat(payload) {
@@ -408,41 +498,29 @@ async function fetchChat(payload) {
   const timeout = setTimeout(() => state.controller.abort(), timeoutMs);
 
   try {
-    const response = await fetch("/api/chat", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...payload, workspace: currentSession()?.workspace || {} }),
-      signal: state.controller.signal
-    });
-    clearTimeout(timeout);
-
-    let data;
-    try {
-      data = await response.json();
-    } catch {
-      throw new Error(`Server trả HTTP ${response.status} không đúng chuẩn JSON.`);
-    }
+    const data = await chatRequest(
+      { ...payload, workspace: currentSession()?.workspace || {} },
+      { sessionId: currentSession()?.id, signal: state.controller.signal }
+    );
 
     if (data.workspace && currentSession()) {
       currentSession().workspace = data.workspace;
       saveSessions();
     }
-    if (!response.ok) {
-      throw new Error(data.message || `Lỗi máy chủ: HTTP ${response.status}`);
-    }
     return data;
   } catch (err) {
-    clearTimeout(timeout);
     if (err.name === "AbortError") {
       throw new Error("Quá thời gian chờ phản hồi (3.5 phút). Vui lòng thử lại.");
     }
     throw err;
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
 async function handleSendMessage() {
   const text = els.promptInput.value.trim();
-  if (!text || state.isBusy) return;
+  if (!text || state.isBusy || !state.apiAvailable) return;
 
   ensureSession(text);
   storeMessage("user", text);
@@ -508,7 +586,9 @@ async function handleSendMessage() {
   }, 1000);
 
   try {
-    const res = await fetchChat({ message: text, history: state.history, model: state.selectedModel });
+    const res = await resolveAction(await fetchChat({
+      message: text, history: state.history, model: state.selectedModel
+    }));
     clearInterval(progressTimer);
 
     const elapsedMs = Math.round(performance.now() - requestStartedAt);
@@ -546,11 +626,13 @@ async function handleSendMessage() {
 
     state.history.push({ role: "user", content: text }, { role: "assistant", content: res.message || "" });
     state.history = state.history.slice(-10);
-    storeMessage("assistant", res.message || "Đã hoàn thành nhiệm vụ.", res.data || null);
+    if (res.action_id) agentRow.dataset.actionId = res.action_id;
+    const saved = storeMessage("assistant", res.message || (res.status === "SUCCESS" ? "Đã hoàn thành nhiệm vụ." : "Chưa có kết quả cuối cùng."), res.data || null,
+      res.action_id || null, res.status === "PENDING" ? "PENDING" : res.status);
 
     // Stream the final response text (Typewriter animation)
-    streamText(textContainer, res.message || "Đã hoàn thành nhiệm vụ.", () => {
-      appendS3DownloadLink(agentRow, res.data);
+    streamText(textContainer, saved?.content || res.message || "Chưa có kết quả cuối cùng.", () => {
+      appendS3DownloadLink(agentRow, saved?.data || res.data);
       // Check for public URL
       const publicUrl = extractPublicUrl(res.message, res.data);
       if (publicUrl) {
@@ -587,10 +669,16 @@ function handleConfirmation(res, agentRow, originalPrompt) {
   // Async IAM results carry the new confirmation action inside data.
   const confirmation = res.data?.preview ? res.data : res;
   state.pending = {
-    action_id: confirmation.preview ? (confirmation.action_id || res.action_id) : undefined,
+    // The local demo also emits an action_id, but only the cloud API persists it.
+    action_id: (res.session_id || confirmation.session_id) ?
+      (confirmation.action_id || res.action_id) : undefined,
     service: confirmation.service || res.service || "lambda",
     tool_name: confirmation.tool_name || res.tool_name,
     parameters: confirmation.parameters || res.parameters || {},
+    confirmation_mode: confirmation.confirmation_mode || res.confirmation_mode ||
+      (confirmation.tool_name === "s3_delete_bucket_safe" ? "explicit_phrase" : "standard"),
+    required_confirmation: confirmation.required_confirmation || res.required_confirmation ||
+      (confirmation.tool_name === "s3_delete_bucket_safe" ? `DELETE ${confirmation.parameters?.bucket_name || ""}` : null),
     agent_state: res.agent_state,
     model: state.selectedModel,
     originalPrompt: originalPrompt
@@ -618,17 +706,42 @@ function handleConfirmation(res, agentRow, originalPrompt) {
     }, null, 2);
     card.querySelector(".approval-buttons").before(details);
   }
+  let phraseInput = null;
+  const approveButton = card.querySelector("#confirmApprove");
+  if (state.pending.confirmation_mode === "explicit_phrase") {
+    const label = document.createElement("label");
+    label.className = "approval-phrase";
+    label.textContent = `Nhập chính xác ${state.pending.required_confirmation} để xác nhận xóa: `;
+    phraseInput = document.createElement("input");
+    phraseInput.type = "text";
+    phraseInput.autocomplete = "off";
+    phraseInput.spellcheck = false;
+    phraseInput.setAttribute("aria-label", "Câu xác nhận xóa bucket");
+    phraseInput.addEventListener("input", () => {
+      approveButton.disabled = phraseInput.value !== state.pending?.required_confirmation;
+    });
+    approveButton.disabled = true;
+    label.append(phraseInput);
+    card.querySelector(".approval-buttons").before(label);
+  }
 
   agentRow.append(card);
   els.chatScroll.scrollTop = els.chatScroll.scrollHeight;
 
-  card.querySelector("#confirmApprove").onclick = async () => {
-    card.remove();
-    setBusy(true);
+  approveButton.onclick = async () => {
     const approvedAction = {
       ...state.pending,
       parameters: { ...(state.pending?.parameters || {}) }
     };
+    let payload;
+    try {
+      payload = confirmationPayload(approvedAction, phraseInput?.value || "");
+    } catch (error) {
+      card.querySelector(".approval-msg").textContent = error.message;
+      return;
+    }
+    card.remove();
+    setBusy(true);
 
     const logsBox = agentRow.querySelector(".agent-logs");
     const workingStep = document.createElement("div");
@@ -637,18 +750,7 @@ function handleConfirmation(res, agentRow, originalPrompt) {
     logsBox.append(workingStep);
 
     try {
-      const confirmationPayload = approvedAction.action_id ? {
-        confirmed: true,
-        action_id: approvedAction.action_id
-      } : {
-        confirmed: true,
-        service: approvedAction.service,
-        tool_name: approvedAction.tool_name,
-        parameters: approvedAction.parameters,
-        agent_state: approvedAction.agent_state,
-        model: approvedAction.model || state.selectedModel
-      };
-      const execRes = await fetchChat(confirmationPayload);
+      const execRes = await resolveAction(await fetchChat(payload));
 
       workingStep.remove();
 
@@ -677,11 +779,14 @@ function handleConfirmation(res, agentRow, originalPrompt) {
       state.pending = null;
 
       const textContainer = agentRow.querySelector(".agent-text");
-      storeMessage("assistant", execRes.message || "Đã thực thi thành công.", execRes.data || null);
-      state.history.push({ role: "assistant", content: execRes.message || "Đã thực thi thành công." });
+      const finalMessage = execRes.message || (execRes.status === "SUCCESS" ? "Đã thực thi thành công." : "Chưa có kết quả cuối cùng.");
+      if (execRes.action_id) agentRow.dataset.actionId = execRes.action_id;
+      const saved = storeMessage("assistant", finalMessage, execRes.data || null,
+        execRes.action_id || null, execRes.status === "PENDING" ? "PENDING" : execRes.status);
+      state.history.push({ role: "assistant", content: finalMessage });
       state.history = state.history.slice(-10);
-      streamText(textContainer, execRes.message || "Đã thực thi thành công.", () => {
-        appendS3DownloadLink(agentRow, execRes.data);
+      streamText(textContainer, saved?.content || finalMessage, () => {
+        appendS3DownloadLink(agentRow, saved?.data || execRes.data);
         const publicUrl = extractPublicUrl(execRes.message, execRes.data);
         if (publicUrl) {
           const urlCard = document.createElement("div");
@@ -784,14 +889,14 @@ function handleResolutionOptions(res, agentRow, originalPrompt, pendingAction) {
     logsBox.append(workingStep);
 
     try {
-      const result = await fetchChat({
+      const result = await resolveAction(await fetchChat({
         confirmed: true,
         service: "lambda",
         tool_name: toolName,
         parameters,
         agent_state: pendingAction.agent_state,
         model: pendingAction.model || state.selectedModel
-      });
+      }));
       workingStep.remove();
       card.remove();
 
@@ -810,10 +915,12 @@ function handleResolutionOptions(res, agentRow, originalPrompt, pendingAction) {
 
       state.pending = null;
       const message = result.message || "Đã xử lý lựa chọn thành công.";
-      storeMessage("assistant", message, result.data || null);
+      if (result.action_id) agentRow.dataset.actionId = result.action_id;
+      const saved = storeMessage("assistant", message, result.data || null,
+        result.action_id || null, result.status === "PENDING" ? "PENDING" : result.status);
       state.history.push({ role: "assistant", content: message });
       state.history = state.history.slice(-10);
-      streamText(textContainer, message);
+      streamText(textContainer, saved?.content || message);
       setBusy(false);
     } catch (err) {
       workingStep.remove();
@@ -844,6 +951,7 @@ function handleResolutionOptions(res, agentRow, originalPrompt, pendingAction) {
 }
 
 function resetChat() {
+  state.realtime?.stop();
   state.history = [];
   state.pending = null;
   state.currentSessionId = null;
@@ -858,12 +966,52 @@ function resetChat() {
 }
 
 async function loadHealth() {
+  let configuredToolCount = null;
+  try {
+    const configResponse = await fetch("/site-config.json", { cache: "no-store" });
+    if (configResponse.ok) {
+      const config = await configResponse.json();
+      if (Number.isSafeInteger(config.tools_loaded) && config.tools_loaded >= 0) {
+        configuredToolCount = config.tools_loaded;
+      }
+      if (config.api_enabled === false) {
+        state.apiAvailable = false;
+        els.statusBadge.textContent = "Bản thử giao diện • Chưa nối API";
+        els.toolsPill.textContent = "⚡ Preview";
+        els.promptInput.placeholder = "Bản thử giao diện: chờ kết nối API Gateway để sử dụng chat";
+        els.promptInput.title = "Website đã triển khai; API ChatOps chưa được kết nối.";
+        els.promptInput.disabled = true;
+        updateSendBtnState();
+        return;
+      }
+      if (typeof config.appsync?.graphql_url === "string") {
+        try {
+          state.realtime = createAppSyncSubscription({
+            graphqlUrl: config.appsync.graphql_url,
+            getIdToken: () => globalThis.SatiBotAuth?.getIdToken?.(),
+            onResult: record => updateActionResult(record, true),
+            onState: setRealtimeState
+          });
+          if (state.currentSessionId) state.realtime.start(state.currentSessionId);
+        } catch {
+          setRealtimeState("disconnected");
+        }
+      }
+    }
+  } catch {
+    // Local demo does not publish site-config.json.
+  }
   try {
     const res = await fetch("/api/health");
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
-    els.statusBadge.textContent = `${data.region || "ap-southeast-1"} • ${data.tools_loaded || 11} Tools Active`;
+    const toolCount = Number.isSafeInteger(data.tools_loaded) && data.tools_loaded >= 0
+      ? data.tools_loaded : configuredToolCount;
+    els.statusBadge.textContent = data.status === "API_READY"
+      ? `${data.region || "ap-southeast-1"} • API Gateway online`
+      : `${data.region || "ap-southeast-1"} • ${toolCount ?? "—"} công cụ`;
     els.awsStatusPill.textContent = `☁️ ${data.region || "ap-southeast-1"}`;
-    els.toolsPill.textContent = `⚡ ${data.tools_loaded || 11} Tools`;
+    els.toolsPill.textContent = `⚡ ${toolCount ?? "—"} công cụ`;
     els.topModelText.textContent = "SatiBot";
     if (data.model && !localStorage.getItem("satibot.model") && VALID_MODELS.includes(data.model)) {
       setSelectedModel(data.model);
@@ -996,5 +1144,15 @@ document.addEventListener("keydown", e => {
 
 loadStoredSessions();
 renderRecentSessions();
+window.addEventListener("satibot-auth-changed", () => {
+  if (state.realtime) {
+    state.realtime.stop();
+    if (state.currentSessionId) state.realtime.start(state.currentSessionId);
+  }
+});
+window.addEventListener("online", () => {
+  state.realtime?.networkOnline();
+});
+window.addEventListener("offline", () => state.realtime?.networkOffline());
 loadHealth();
 els.promptInput.focus();

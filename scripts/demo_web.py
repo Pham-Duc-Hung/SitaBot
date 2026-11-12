@@ -97,9 +97,9 @@ def run():
     if server is None:
         raise SystemExit(f"Các cổng {PORT}-{PORT + 9} đều đang bận.")
     if port != PORT:
-        print(f"⚠️ Lưu ý: Cổng {PORT} đã có tiến trình khác chạy. Đang mở cổng phụ: http://127.0.0.1:{port}")
+        print(f"Port {PORT} is busy. Using http://127.0.0.1:{port}")
     print(f"SatiBot Agent Console: http://127.0.0.1:{port}")
-    print("Nhấn Ctrl+C để dừng.")
+    print("Press Ctrl+C to stop.")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

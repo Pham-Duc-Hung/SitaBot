@@ -76,6 +76,10 @@ role_names = {
     )
     for name in ("chatbot", "formatter")
 }
+role_arns = {
+    name: cdk.CfnParameter(stack, f"{name.title()}RoleArn", type="String").value_as_string
+    for name in FUNCTIONS
+}
 cdk.CfnRule(
     stack,
     "IntegrationRoleNamesRequired",
@@ -156,7 +160,6 @@ cdk.CfnOutput(stack, "CodeDeployApplicationName", value=codedeploy_app.applicati
 live_aliases = {}
 for name in FUNCTIONS:
     title = name.title()
-    role_arn = cdk.CfnParameter(stack, f"{title}RoleArn", type="String")
     alarm_name = cdk.CfnParameter(stack, f"{title}AlarmName", type="String", default="")
     has_external_alarm = cdk.CfnCondition(
         stack,
@@ -167,14 +170,19 @@ for name in FUNCTIONS:
     )
 
     role = iam.Role.from_role_arn(
-        stack, f"{name}Role", role_arn.value_as_string, mutable=False
+        stack, f"{name}Role", role_arns[name], mutable=False
     )
+    # A changed configuration marker must alter Lambda configuration as well as
+    # the Version description; Lambda rejects a duplicate version otherwise.
     environment = {
         "SATIBOT_MODE": "cloud",
+        "SATIBOT_CONFIGURATION_VERSION": config_version.value_as_string,
         "SATIBOT_CONFIG_VERSION": config_version.value_as_string,
     }
     if name == "connector":
         environment["AWS_CONNECTIONS_TABLE"] = connections.value_as_string
+        environment["SATIBOT_CONNECTOR_ROLE_ARN"] = role_arns["connector"]
+        environment["SATIBOT_DISPATCHER_ROLE_ARN"] = role_arns["dispatcher"]
     if name == "chatbot":
         environment.update(
             AWS_CONNECTIONS_TABLE=connections.value_as_string,

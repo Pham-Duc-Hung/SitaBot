@@ -73,6 +73,9 @@ def handle(event, context):
         message = payload.get("message")
         if not isinstance(message, str) or not message.strip() or len(message) > 8000:
             raise BackendError("InvalidMessage", "Nội dung chat phải từ 1 đến 8000 ký tự.")
+        model = payload.get("model") or os.environ.get("GEMINI_MODEL", gemini.SUPPORTED_MODELS[0])
+        if not isinstance(model, str) or model not in gemini.SUPPORTED_MODELS:
+            raise BackendError("InvalidModel", "Model Gemini không được hỗ trợ.", 400)
         session = payload.get("session_id") or "ses_" + uuid.uuid4().hex
         if not isinstance(session, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", session):
             raise BackendError("InvalidSession", "session_id không hợp lệ.")
@@ -92,7 +95,17 @@ def handle(event, context):
                 history.append({"role": "assistant", "content": "Kết quả AWS đã ghi nhận: " + json.dumps(
                     {"tool_name": observed["tool_name"], "result": observed["result"]}, ensure_ascii=False)[:12000]})
         history.append({"role": "user", "content": message})
-        reply = gemini.complete([{"role": "system", "content": PROMPT}] + history, tools=llm_tools())
+        available_tools = llm_tools()
+        tool_names = [tool["function"]["name"] for tool in available_tools]
+        tool_context = (
+            f"Hệ thống hiện định nghĩa chính xác {len(tool_names)} công cụ: "
+            + ", ".join(tool_names)
+            + ". Nếu được hỏi về số lượng hoặc tên công cụ, chỉ dùng danh sách này; "
+              "không tự thêm tên, không ước lượng số lượng. Quyền thực thi thực tế "
+              "còn phụ thuộc IAM Role của tài khoản đã kết nối."
+        )
+        reply = gemini.complete([{"role": "system", "content": PROMPT + "\n" + tool_context}] + history,
+                                tools=available_tools, model=model)
         calls = reply.get("tool_calls")
         if not calls:
             answer = reply.get("content") or "Bạn muốn thực hiện thao tác nào?"

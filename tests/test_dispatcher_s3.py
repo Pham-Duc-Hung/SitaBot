@@ -1260,6 +1260,60 @@ def test_get_storage_analytics_groups_current_objects(
 
 
 @patch("backend.functions.dispatcher.services.s3_service.boto3.client")
+def test_get_storage_analytics_prices_primary_singapore_region(mock_boto3_client):
+    mock_s3_client = Mock()
+    mock_boto3_client.return_value = mock_s3_client
+    _configure_bucket_inventory(
+        mock_s3_client,
+        object_pages=[{"Contents": [
+            {"Key": "current.txt", "Size": 1_000_000_000},
+            {"Key": "older.txt", "Size": 2_000_000_000, "StorageClass": "STANDARD_IA"},
+        ]}],
+        version_pages=[{}],
+    )
+
+    result = execute(None, {
+        "action": "get_storage_analytics",
+        "bucket_name": "sitabot-analytics-test",
+        "region": "ap-southeast-1",
+    })
+
+    data = result["data"]
+    assert result["ok"] is True
+    assert data["pricing_basis"]["rate_region"] == "ap-southeast-1"
+    assert data["estimated_monthly_storage_cost_usd"] == 0.0526
+    assert data["cost_estimate_complete"] is True
+    assert [item["rate_usd_per_gb_month"] for item in data["storage_classes"]] == [0.025, 0.0138]
+
+
+@patch("backend.functions.dispatcher.services.s3_service.boto3.client")
+def test_get_storage_analytics_does_not_report_partial_cost_as_total(mock_boto3_client):
+    mock_s3_client = Mock()
+    mock_boto3_client.return_value = mock_s3_client
+    _configure_bucket_inventory(
+        mock_s3_client,
+        object_pages=[{"Contents": [
+            {"Key": "current.txt", "Size": 1_000_000_000},
+            {"Key": "archive.txt", "Size": 1_000_000_000, "StorageClass": "DEEP_ARCHIVE"},
+        ]}],
+        version_pages=[{}],
+    )
+
+    result = execute(None, {
+        "action": "get_storage_analytics",
+        "bucket_name": "sitabot-analytics-test",
+        "region": "ap-southeast-1",
+    })
+
+    data = result["data"]
+    assert data["current_object_count"] == 2
+    assert data["total_stored_size_bytes"] == 2_000_000_000
+    assert data["estimated_monthly_storage_cost_usd"] is None
+    assert data["cost_estimate_complete"] is False
+    assert data["unpriced_storage_classes"] == ["DEEP_ARCHIVE"]
+
+
+@patch("backend.functions.dispatcher.services.s3_service.boto3.client")
 def test_get_storage_analytics_includes_noncurrent_versions(
     mock_boto3_client,
 ):

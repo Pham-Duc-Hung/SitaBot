@@ -25,6 +25,8 @@ name = sys.argv[2]
 if name in {"chatbot", "dispatcher"}:
     import jsonschema
     assert Path(jsonschema.__file__).is_relative_to(root)
+    import typing_extensions
+    assert Path(typing_extensions.__file__).is_relative_to(root)
 module = importlib.import_module(f"backend.functions.{name}.index")
 event = {"triggerSource": "PostConfirmation_ConfirmForgotPassword"} if name == "auth_handler" else {}
 result = module.lambda_handler(event, None)
@@ -52,6 +54,8 @@ def verify():
                     raise RuntimeError(f"Duplicate files in {name}.zip")
                 if name in SCHEMA_FUNCTIONS and "jsonschema/__init__.py" not in paths:
                     raise RuntimeError("Build with --with-dependencies before verification")
+                if name in SCHEMA_FUNCTIONS and "typing_extensions.py" not in paths:
+                    raise RuntimeError("Python 3.12 needs vendored typing_extensions")
                 if name not in SCHEMA_FUNCTIONS and "jsonschema/__init__.py" in paths:
                     raise RuntimeError(f"Unused schema dependency bundled into slim package {name}.zip")
                 if any(p.startswith(("tests/", "moto/")) or "__pycache__" in p or ".env" in p for p in paths):

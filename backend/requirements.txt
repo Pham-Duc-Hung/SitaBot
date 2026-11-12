@@ -3,3 +3,5 @@
 
 # Lambda runtime dependency; boto3 is provided by the Python Lambda runtime.
 jsonschema>=4.23,<5
+# referencing (jsonschema dependency) needs TypeVar(default=...) on Python 3.12.
+typing-extensions>=4.13,<5

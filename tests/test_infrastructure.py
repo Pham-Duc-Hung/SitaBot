@@ -79,14 +79,25 @@ def test_iam_stack_creates_six_lambda_roles_with_lambda_trust():
     _, iam_template = _synth_stacks()
     roles = iam_template.find_resources("AWS::IAM::Role")
 
-    assert len(roles) == 6
-    for role in roles.values():
+    lambda_roles = [role for role in roles.values()
+                    if role["Properties"]["RoleName"].endswith("-ExecutionRole")]
+    assert len(lambda_roles) == 6
+    for role in lambda_roles:
         statements = role["Properties"]["AssumeRolePolicyDocument"]["Statement"]
         assert any(
             statement.get("Principal", {}).get("Service") == "lambda.amazonaws.com"
             and "sts:AssumeRole" in statement.get("Action", [])
             for statement in statements
         )
+
+
+def test_iam_stack_provides_codedeploy_lambda_service_role():
+    _, iam_template = _synth_stacks()
+    roles = iam_template.find_resources("AWS::IAM::Role")
+    codedeploy = next(role["Properties"] for role in roles.values()
+                      if role["Properties"]["RoleName"] == "SatiBot-CodeDeploy-LambdaRole")
+    assert ":iam::aws:policy/service-role/AWSCodeDeployRoleForLambda" in json.dumps(codedeploy)
+    assert "codedeploy.amazonaws.com" in json.dumps(codedeploy["AssumeRolePolicyDocument"])
 
 
 def test_iam_data_permissions_are_scoped_to_table_arns():

@@ -800,7 +800,7 @@ Mẫu JSON Request gửi từ Web Client khi người dùng gửi câu lệnh kh
       "content": "Xin chào! Tôi là SatiBot - Trợ lý ChatOps quản trị AWS."
     }
   ],
-  "region": "ap-southeast-2"
+  "region": "ap-southeast-1"
 }
 \end{verbatim}
 
@@ -838,7 +838,7 @@ Mẫu JSON Response trả về từ hệ thống. Do thao tác \texttt{create\_i
 \midrule
 \texttt{message} & String & Có & Nội dung câu lệnh bằng ngôn ngữ tự nhiên tiếng Việt của người dùng gửi từ giao diện. \\
 \texttt{history} & Array[Object] & Không & Lịch sử hội thoại nhiều lượt gồm các cặp \texttt{role} và \texttt{content}, đồng bộ từ bảng \texttt{SessionState} trong DynamoDB. \\
-\texttt{region} & String & Không & Khu vực AWS mục tiêu thực hiện tác vụ (mặc định: \texttt{ap-southeast-2}). \\
+\texttt{region} & String & Không & Khu vực AWS mục tiêu thực hiện tác vụ (mặc định: \texttt{ap-southeast-1}). \\
 \texttt{credentials} & Object & Không & Thông tin xác thực AWS cục bộ. \\
 \bottomrule
 \end{tabularx}
@@ -893,7 +893,7 @@ Mẫu JSON Request gửi từ Web Client khi người dùng nhấn nút ``Xác n
     "os_type": "ubuntu",
     "instance_type": "t3.micro"
   },
-  "region": "ap-southeast-2"
+  "region": "ap-southeast-1"
 }
 \end{verbatim}
 
@@ -935,7 +935,7 @@ Mẫu JSON Response trả về ngay lập tức sau khi Dispatcher Lambda và Mo
 \texttt{service} & String & Có & Dịch vụ AWS đích cần điều phối thực thi (\texttt{ec2}, \texttt{s3}, \texttt{lambda}, \texttt{iam}). \\
 \texttt{tool\_name} & String & Có & Tên hành động kỹ thuật cần thực thi (\texttt{create\_instance}, v.v.). \\
 \texttt{parameters} & Object & Có & Tập tham số kỹ thuật đã qua rà soát của người quản trị. \\
-\texttt{region} & String & Không & Khu vực thực thi lệnh trên đám mây AWS (mặc định: \texttt{ap-southeast-2}). \\
+\texttt{region} & String & Không & Khu vực thực thi lệnh trên đám mây AWS (mặc định: \texttt{ap-southeast-1}). \\
 \bottomrule
 \end{tabularx}
 \endgroup
@@ -963,6 +963,77 @@ Mẫu JSON Response trả về ngay lập tức sau khi Dispatcher Lambda và Mo
 \endgroup
 \end{table}
 
+
+\subsubsection{Kết quả nghiệm thu nhóm kịch bản Amazon S3}
+
+Ngày 11/11/2026, nhóm kiểm thử sáu kịch bản S3 qua website bản thử tại
+\texttt{ap-southeast-1}. Tài khoản AWS được kết nối bằng IAM Role có quyền đọc
+cấu hình bucket để quét an toàn; các quyền tạo, sửa và xóa chỉ áp dụng cho
+bucket có tiền tố \path{sitabot-hung-test-}. Kết quả trên giao diện được đối
+chiếu với bảng ActionHistory và trạng thái tài nguyên bằng AWS CLI. Bucket
+kiểm thử là \path{sitabot-hung-test-6ba42e904f6f}.
+
+\begingroup
+\setlength{\tabcolsep}{5pt}
+\renewcommand{\arraystretch}{1.12}
+\fontsize{11}{14.5}\selectfont
+\begin{longtable}{@{}>{\raggedright\arraybackslash}p{3.7cm}>{\raggedright\arraybackslash}p{\dimexpr\linewidth-3.7cm-2\tabcolsep\relax}@{}}
+\caption*{Kết quả nghiệm thu sáu kịch bản S3 qua website bản thử}\\
+\toprule
+\textbf{Kịch bản} & \textbf{Kết quả và bằng chứng} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{Kịch bản} & \textbf{Kết quả và bằng chứng} \\
+\midrule
+\endhead
+\midrule
+\endfoot
+\bottomrule
+\endlastfoot
+Tạo bucket an toàn & \textbf{Đạt.} Website tạo bucket tại Singapore; cả bốn cờ S3 Block Public Access đều ở trạng thái \texttt{true}. \\
+Quét và khóa public access & \textbf{Đạt.} Quét năm bucket, không có bucket rủi ro hay lỗi quét. Thao tác bật lại đầy đủ Block Public Access cho bucket thử thành công. \\
+Xóa bucket có xác nhận & \textbf{Đạt.} Bước kiểm tra ghi nhận hai object, hai version và hai mục cần xóa. Sau câu xác nhận \texttt{DELETE <bucket-name>}, website xóa hai mục và bucket; danh sách bucket AWS xác nhận không còn bucket thử. \\
+Lifecycle & \textbf{Đạt.} Rule \texttt{transition-demo-to-standard-ia} được bật, chỉ áp dụng cho tiền tố \texttt{demo/}, chuyển sang \texttt{STANDARD\_IA} sau 30 ngày; đọc lại cấu hình S3 khớp kết quả website. \\
+Presigned URL & \textbf{Đạt.} Website cấp URL tải \texttt{demo/hello.txt} có hiệu lực 900 giây. Truy cập URL trả HTTP 200 và đúng nội dung tệp mẫu; URL không được lưu trong báo cáo. \\
+Dung lượng và chi phí & \textbf{Đạt.} Hai object thuộc lớp \texttt{STANDARD}, tổng 1.000.038 byte (0,001000038 GB). Chi phí lưu trữ tham chiếu ở Singapore là 0,000025 USD/tháng. \\
+\end{longtable}
+\addtocounter{table}{-1}% Longtable increments the counter even with an unnumbered caption.
+\endgroup
+
+Ca phân quyền bổ sung: yêu cầu tạo bucket ngoài tiền tố được cấp quyền trả
+\texttt{AccessDenied}; ActionHistory ghi \texttt{ERROR} và AWS xác nhận
+bucket đó không được tạo. Sau kiểm thử, bucket thử và hai object đã được xóa
+qua website. Mức chi phí ở trên chỉ là dự toán lưu trữ theo đơn giá tham
+chiếu, không bao gồm request, truyền dữ liệu hoặc các khoản trên hóa đơn AWS.
+
+
+\subsubsection{Nghiệm thu WAF và trang thông báo lỗi dự phòng}
+
+Ngày 12/11/2026, nhóm kiểm thử website bản thử trên CloudFront. Khu vực
+triển khai chính là \texttt{ap-southeast-1}. Web ACL của AWS WAF được gắn với
+distribution chính:
+request truy cập trang chủ hợp lệ trả HTTP 200, còn request thử mẫu XSS trong
+tham số truy vấn trả HTTP 403. Dữ liệu sampled request của WAF ghi nhận hành
+động \texttt{BLOCK} do nhóm \texttt{AWSManagedRulesCommonRuleSet},
+quy tắc chống XSS trong tham số truy vấn.
+Bằng chứng gồm mã HTTP, trạng thái CloudFront và tên quy tắc được lưu tại
+\path{evidence/sprint4-web-acceptance.json}; dữ liệu không lưu địa chỉ IP.
+
+Trang thông báo lỗi độc lập được phân phối qua CloudFront với origin S3 tại
+\texttt{us-east-1}. Truy cập trực tiếp trang này trả HTTP 200 và hiển thị thông
+báo SatiBot tạm thời không khả dụng, không cung cấp chức năng quản trị AWS
+(Hình~\ref{fig:sprint4_error_page}). Phép thử này xác nhận trang dự phòng hoạt
+động độc lập; việc Route~53 tự chuyển DNS sang trang lỗi khi website chính gặp
+sự cố thuộc kịch bản failover riêng và chưa được kiểm thử trong phép nghiệm thu
+này.
+
+\begin{figure}[!htbp]
+\centering
+\includegraphics[width=0.9\linewidth,height=0.42\textheight,keepaspectratio]{evidence/sprint4-error-page.png}
+\caption{Trang thông báo lỗi dự phòng trên CloudFront tại \texttt{us-east-1}}
+\label{fig:sprint4_error_page}
+\end{figure}
 
 \section{KẾ HOẠCH TRIỂN KHAI DỰ ÁN}
 
