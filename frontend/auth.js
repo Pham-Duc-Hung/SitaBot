@@ -25,6 +25,12 @@ function jwtExpiry(token) {
   }
 }
 
+export function chatStorageKey(subject) {
+  return typeof subject === "string" && subject
+    ? "satibot.chat.sessions.v2." + subject
+    : null;
+}
+
 export function authorizeUrl(config, state, challenge) {
   const url = new URL("/oauth2/authorize", cognitoOrigin(config));
   url.search = new URLSearchParams({
@@ -154,6 +160,17 @@ export function createBrowserAuth({ win = window, fetchImpl = fetch } = {}) {
   initPromise = initialize();
   return {
     getIdToken: async () => { await initPromise; return getStoredToken(); },
+    getUserId: async () => {
+      await initPromise;
+      const token = getStoredToken();
+      if (!token) return null;
+      try {
+        const payload = token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/");
+        return JSON.parse(atob(payload)).sub || null;
+      } catch {
+        return null;
+      }
+    },
     signIn,
     signOut
   };

@@ -12,14 +12,14 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 # --- Configuration Constants ---
-DEFAULT_REGION = 'ap-southeast-2'
+DEFAULT_REGION = 'ap-southeast-1'
 
 ALLOWED_INSTANCE_TYPES = ['t2.micro', 't3.micro', 't3.small']
 
-# Default AMIs for supported operating systems in ap-southeast-2 (Sydney)
-DEFAULT_AMIS = {
-    'ubuntu': 'ami-0af9110f0ec0820e2',        # Ubuntu Server 22.04 LTS (HVM, SSD) in ap-southeast-2
-    'amazon-linux': 'ami-0da639e071ea706d8',  # Amazon Linux 2023 AMI (x86_64) in ap-southeast-2
+# Discover official images through the EC2 client in the target region.
+AMI_SOURCES = {
+    "ubuntu": ("099720109477", "ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*"),
+    "amazon-linux": ("amazon", "al2023-ami-2023.*-kernel-*-x86_64"),
 }
 
 SUPPORTED_ACTIONS = {
@@ -200,10 +200,25 @@ def _handle_create_instance(client, params: dict) -> dict:
     image_id = params.get("image_id")
     if not image_id or not isinstance(image_id, str) or not image_id.strip():
         os_type = str(params.get("os_type", "ubuntu")).lower().strip()
-        if "amazon" in os_type or "amzn" in os_type:
-            image_id = DEFAULT_AMIS["amazon-linux"]
-        else:
-            image_id = DEFAULT_AMIS["ubuntu"]
+        os_key = "amazon-linux" if "amazon" in os_type or "amzn" in os_type else "ubuntu"
+        owner, image_name = AMI_SOURCES[os_key]
+        images = client.describe_images(
+            Owners=[owner],
+            Filters=[
+                {"Name": "name", "Values": [image_name]},
+                {"Name": "architecture", "Values": ["x86_64"]},
+                {"Name": "state", "Values": ["available"]},
+                {"Name": "virtualization-type", "Values": ["hvm"]},
+                {"Name": "root-device-type", "Values": ["ebs"]},
+            ],
+        ).get("Images", [])
+        if not images:
+            return _build_response(
+                False, "create_instance",
+                message="Không tìm được AMI chính thức trong region đích. Hãy cung cấp image_id hợp lệ.",
+                error="ImageNotFound",
+            )
+        image_id = max(images, key=lambda image: image["CreationDate"])["ImageId"]
     else:
         image_id = image_id.strip()
 
@@ -969,6 +984,11 @@ EC2_TOOL_SCHEMAS = [
                     "type": "string",
                     "description": "Tên định danh của máy chủ ảo (gắn vào tag Name). Ví dụ: 'web-demo', 'staging-server'."
                 },
+                "image_id": {
+                    "type": "string",
+                    "pattern": "^ami-([0-9a-f]{8}|[0-9a-f]{17})$",
+                    "description": "AMI ID có sẵn trong region đích. Bỏ trống để tra cứu image chính thức theo hệ điều hành."
+                },
                 "os_type": {
                     "type": "string",
                     "enum": ["ubuntu", "amazon-linux"],
@@ -1155,7 +1175,10 @@ def execute(credentials: dict, params: dict) -> dict:
         if action in ('get_metrics', 'get_ec2_metrics'):
             return _handle_get_metrics(credentials, params)
 
-        client = get_ec2_client(credentials)
+        target_credentials = dict(credentials or {})
+        if params.get("region"):
+            target_credentials["Region"] = params["region"]
+        client = get_ec2_client(target_credentials)
         handler = ACTION_HANDLERS.get(action)
         return handler(client, params)
 

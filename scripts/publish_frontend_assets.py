@@ -4,6 +4,7 @@ import argparse
 import json
 import mimetypes
 import re
+import sys
 import uuid
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -11,10 +12,11 @@ from urllib.parse import urlsplit
 import boto3
 from botocore.exceptions import ClientError
 
-from backend.shared.tool_registry import registry
-
-
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from backend.shared.tool_registry import registry
 SITES = {
     "primary": ("ap-southeast-1", "SatiBotWebPrimary", "Primary"),
     "error": ("us-east-1", "SatiBotWebErrorPage", "ErrorPage"),
@@ -45,12 +47,7 @@ def site_files(site):
 
 
 def preview_auth_config(session, distribution_domain):
-    try:
-        outputs = stack_outputs(session, "ap-southeast-1", "SatiBotWebAuth")
-    except ClientError as exc:
-        if exc.response.get("Error", {}).get("Code") != "ValidationError":
-            raise
-        return None
+    outputs = stack_outputs(session, "ap-southeast-1", "AuthStack")
     if outputs.get("CallbackUrl") != f"https://{distribution_domain}/":
         raise RuntimeError("Cognito callback does not match the primary CloudFront distribution")
     if not all(outputs.get(key) for key in ("HostedDomain", "UserPoolClientId")):
@@ -63,18 +60,38 @@ def preview_auth_config(session, distribution_domain):
 
 
 def publish_site(session, site, appsync_graphql_url=""):
-    if appsync_graphql_url:
-        endpoint = urlsplit(appsync_graphql_url)
-        if (endpoint.scheme != "https" or endpoint.path != "/graphql" or
-                endpoint.query or endpoint.fragment or not re.fullmatch(
-                    r"[a-z0-9-]+\.appsync-api\.ap-southeast-1\.amazonaws\.com", endpoint.hostname or "")):
-            raise ValueError("AppSync URL must be the primary-region AWS GraphQL endpoint")
     region, stack_name, output_prefix = SITES[site]
     files = site_files(site)
     outputs = stack_outputs(session, region, stack_name)
     bucket = outputs[f"{output_prefix}BucketName"]
-    distribution_id = outputs[f"{output_prefix}DistributionId"]
+    primary = outputs if site == "primary" else stack_outputs(session, "ap-southeast-1", "SatiBotWebPrimary")
+    distribution_id = primary["PrimaryDistributionId"]
     s3_client = session.client("s3", region_name=region)
+
+    if site == "primary":
+        distribution = session.client("cloudfront", region_name="us-east-1").get_distribution_config(
+            Id=distribution_id
+        )["DistributionConfig"]
+        behaviors = distribution.get("CacheBehaviors", {}).get("Items", [])
+        api_enabled = any(item.get("PathPattern") == "api/*" for item in behaviors)
+        if not api_enabled:
+            raise RuntimeError("CloudFront api/* routing is required before publishing the demo")
+        if not appsync_graphql_url:
+            sync = stack_outputs(session, "ap-southeast-1", "SatiBotAppSync")
+            appsync_graphql_url = sync["AppSyncGraphqlUrl"]
+        if appsync_graphql_url:
+            endpoint = urlsplit(appsync_graphql_url)
+            if (endpoint.scheme != "https" or endpoint.path != "/graphql" or
+                    endpoint.query or endpoint.fragment or not re.fullmatch(
+                        r"[a-z0-9-]+\.appsync-api\.ap-southeast-1\.amazonaws\.com", endpoint.hostname or "")):
+                raise ValueError("AppSync URL must be the primary-region AWS GraphQL endpoint")
+        config = {"api_enabled": api_enabled, "tools_loaded": len(registry())}
+        if appsync_graphql_url:
+            config["appsync"] = {"graphql_url": appsync_graphql_url}
+        auth = preview_auth_config(session, outputs[f"{output_prefix}DistributionDomain"])
+        if not auth:
+            raise RuntimeError("Cognito configuration is required before publishing the demo")
+        config["auth"] = auth
 
     for source, key in files:
         content_type = mimetypes.guess_type(key)[0] or "application/octet-stream"
@@ -86,22 +103,11 @@ def publish_site(session, site, appsync_graphql_url=""):
             CacheControl=(
                 "public, max-age=31536000, immutable"
                 if key.startswith("assets/")
-                else "no-cache"
+                else "no-store"
             ),
         )
 
     if site == "primary":
-        distribution = session.client("cloudfront", region_name="us-east-1").get_distribution_config(
-            Id=distribution_id
-        )["DistributionConfig"]
-        behaviors = distribution.get("CacheBehaviors", {}).get("Items", [])
-        api_enabled = any(item.get("PathPattern") == "api/*" for item in behaviors)
-        config = {"api_enabled": api_enabled, "tools_loaded": len(registry())}
-        if appsync_graphql_url:
-            config["appsync"] = {"graphql_url": appsync_graphql_url}
-        auth = preview_auth_config(session, outputs[f"{output_prefix}DistributionDomain"])
-        if auth:
-            config["auth"] = auth
         s3_client.put_object(
             Bucket=bucket,
             Key="site-config.json",
@@ -122,7 +128,7 @@ def publish_site(session, site, appsync_graphql_url=""):
         f"{site}: uploaded {len(files)} files to {bucket}; "
         f"CloudFront invalidation {invalidation['Invalidation']['Id']}"
     )
-    print(f"{site} URL: https://{outputs[f'{output_prefix}DistributionDomain']}/")
+    print(f"{site} uses shared URL: https://{primary['PrimaryDistributionDomain']}/")
 
 
 def main():
@@ -143,7 +149,7 @@ def main():
             "No files were published."
         )
 
-    for site in SITES if args.site == "both" else (args.site,):
+    for site in ("error", "primary") if args.site == "both" else (args.site,):
         publish_site(session, site, args.appsync_graphql_url)
 
 

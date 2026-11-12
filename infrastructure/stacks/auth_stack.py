@@ -145,10 +145,20 @@ class AuthStack(Stack):
         )
 
         # 4. User Pool Client (for React SPA Frontend)
+        web_origin = cdk.CfnParameter(
+            self, "FrontendOrigin", type="String",
+            allowed_pattern=r"https://[A-Za-z0-9.-]+(:[0-9]+)?",
+        ).value_as_string
+        callback = cdk.Fn.join("", [web_origin, "/"])
         self.user_pool_client = self.user_pool.add_client(
             "WebUserPoolClient",
             user_pool_client_name="SatiBot-WebClient",
             generate_secret=False,
+            o_auth=cognito.OAuthSettings(
+                flows=cognito.OAuthFlows(authorization_code_grant=True),
+                scopes=[cognito.OAuthScope.OPENID, cognito.OAuthScope.EMAIL, cognito.OAuthScope.PROFILE],
+                callback_urls=[callback], logout_urls=[callback],
+            ),
             write_attributes=cognito.ClientAttributes().with_standard_attributes(
                 email=True, fullname=True,
             ),
@@ -161,6 +171,15 @@ class AuthStack(Stack):
                 cognito.UserPoolClientIdentityProvider.COGNITO
             ],
         )
+
+        domain_prefix = cdk.Fn.sub("satibot-${AWS::AccountId}-${AWS::Region}")
+        self.user_pool.add_domain(
+            "HostedDomain",
+            cognito_domain=cognito.CognitoDomainOptions(domain_prefix=domain_prefix),
+            managed_login_version=cognito.ManagedLoginVersion.CLASSIC_HOSTED_UI,
+        )
+        CfnOutput(self, "HostedDomain", value=cdk.Fn.join("", [domain_prefix, ".auth.", self.region, ".amazoncognito.com"]))
+        CfnOutput(self, "CallbackUrl", value=callback)
 
         # 5. User Groups: admin & user
         self.admin_group = cognito.CfnUserPoolGroup(

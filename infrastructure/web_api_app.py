@@ -6,5 +6,9 @@ from infrastructure.stacks.web_api_stack import WebApiStack
 
 
 app = cdk.App()
-WebApiStack(app, "SatiBotWebApi", env=cdk.Environment(region="ap-southeast-1"))
+WebApiStack(
+    app, "SatiBotWebApi",
+    grant_backend_invoke=app.node.try_get_context("backendOwnsInvoke") != "true",
+    env=cdk.Environment(region="ap-southeast-1"),
+)
 app.synth()

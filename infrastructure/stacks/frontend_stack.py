@@ -3,7 +3,8 @@
 from pathlib import Path
 import re
 
-from aws_cdk import CfnOutput, CfnParameter, RemovalPolicy, Stack
+from aws_cdk import CfnOutput, CfnParameter, Duration, RemovalPolicy, Stack
+from aws_cdk import aws_iam as iam
 from aws_cdk import aws_certificatemanager as acm
 from aws_cdk import aws_cloudfront as cloudfront
 from aws_cdk import aws_cloudfront_origins as origins
@@ -128,7 +129,27 @@ class PrimaryWebStack(Stack):
             raise ValueError("API origin must be a hostname without scheme or path")
         bucket = _private_site_bucket(self, "PrimarySiteBucket")
         certificate = _certificate(self, domain_name, certificate_arn)
-        api_behaviors = {}
+        error_bucket_name = CfnParameter(
+            self, "ErrorPageBucketName", type="String",
+            description="ErrorPageBucketName output from SatiBotWebErrorPage in us-east-1",
+        )
+        error_bucket = s3.Bucket.from_bucket_attributes(
+            self, "ImportedErrorPageBucket",
+            bucket_name=error_bucket_name.value_as_string, region="us-east-1",
+        )
+        primary_origin = origins.S3BucketOrigin.with_origin_access_control(bucket, connection_attempts=1)
+        error_origin = origins.S3BucketOrigin.with_origin_access_control(error_bucket, connection_attempts=1)
+        website_origin = origins.OriginGroup(
+            primary_origin=primary_origin, fallback_origin=error_origin,
+            fallback_status_codes=[504],
+        )
+        api_behaviors = {
+            "assets/*": cloudfront.BehaviorOptions(
+                origin=primary_origin,
+                viewer_protocol_policy=cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+                cache_policy=cloudfront.CachePolicy.CACHING_OPTIMIZED,
+            ),
+        }
         if api_origin_domain:
             api_behaviors["api/*"] = cloudfront.BehaviorOptions(
                 origin=origins.HttpOrigin(
@@ -145,10 +166,10 @@ class PrimaryWebStack(Stack):
             "PrimaryDistribution",
             default_root_object="index.html",
             default_behavior=cloudfront.BehaviorOptions(
-                origin=origins.S3BucketOrigin.with_origin_access_control(bucket),
+                origin=website_origin,
                 viewer_protocol_policy=cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
                 allowed_methods=cloudfront.AllowedMethods.ALLOW_GET_HEAD_OPTIONS,
-                cache_policy=cloudfront.CachePolicy.CACHING_OPTIMIZED,
+                cache_policy=cloudfront.CachePolicy.CACHING_DISABLED,
                 response_headers_policy=cloudfront.ResponseHeadersPolicy.SECURITY_HEADERS,
             ),
             additional_behaviors=api_behaviors,
@@ -157,44 +178,32 @@ class PrimaryWebStack(Stack):
             domain_names=[domain_name] if domain_name else None,
         )
         CfnOutput(self, "PrimaryBucketName", value=bucket.bucket_name)
+        CfnOutput(self, "PrimaryDistributionArn", value=distribution.distribution_arn)
         CfnOutput(self, "PrimaryDistributionId", value=distribution.distribution_id)
         CfnOutput(self, "PrimaryDistributionDomain", value=distribution.distribution_domain_name)
 
 
 class ErrorPageStack(Stack):
-    """Standalone static page in us-east-1; no backend or application data."""
+    """Private fallback origin in us-east-1, read by the primary distribution."""
 
     def __init__(
-        self,
-        scope: Construct,
-        construct_id: str,
-        *,
-        error_html: Path,
-        domain_name: str | None = None,
-        certificate_arn: str | None = None,
-        **kwargs,
+        self, scope: Construct, construct_id: str, *,
+        error_html: Path, **kwargs,
     ) -> None:
         super().__init__(scope, construct_id, **kwargs)
         if self.region != "us-east-1":
-            raise ValueError("The independent error page must be in us-east-1")
+            raise ValueError("The fallback bucket must be in us-east-1")
         if not error_html.is_file():
             raise FileNotFoundError(f"Missing fallback page: {error_html}")
         bucket = _private_site_bucket(self, "ErrorPageBucket")
-        certificate = _certificate(self, domain_name, certificate_arn)
-        distribution = cloudfront.Distribution(
-            self,
-            "ErrorPageDistribution",
-            default_root_object="index.html",
-            default_behavior=cloudfront.BehaviorOptions(
-                origin=origins.S3BucketOrigin.with_origin_access_control(bucket),
-                viewer_protocol_policy=cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
-                allowed_methods=cloudfront.AllowedMethods.ALLOW_GET_HEAD_OPTIONS,
-                cache_policy=cloudfront.CachePolicy.CACHING_OPTIMIZED,
-                response_headers_policy=cloudfront.ResponseHeadersPolicy.SECURITY_HEADERS,
-            ),
-            certificate=certificate,
-            domain_names=[domain_name] if domain_name else None,
+        distribution_arn = CfnParameter(
+            self, "PrimaryDistributionArn", type="String", default="",
+            allowed_pattern=r"^$|arn:aws:cloudfront::\d{12}:distribution/[A-Z0-9]+",
+            description="Set after SatiBotWebPrimary is deployed to authorize its OAC",
         )
+        bucket.add_to_resource_policy(iam.PolicyStatement(
+            principals=[iam.ServicePrincipal("cloudfront.amazonaws.com")],
+            actions=["s3:GetObject"], resources=[bucket.arn_for_objects("*")],
+            conditions={"StringEquals": {"AWS:SourceArn": distribution_arn.value_as_string}},
+        ))
         CfnOutput(self, "ErrorPageBucketName", value=bucket.bucket_name)
-        CfnOutput(self, "ErrorPageDistributionId", value=distribution.distribution_id)
-        CfnOutput(self, "ErrorPageDistributionDomain", value=distribution.distribution_domain_name)

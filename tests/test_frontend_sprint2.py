@@ -62,7 +62,7 @@ def test_preview_site_can_launch_before_api_gateway_exists(tmp_path):
     app = App()
     stack = PrimaryWebStack(app, "PreviewWebTest", site_dir=tmp_path, env=Environment(region="ap-southeast-1"))
     distribution = next(iter(Template.from_stack(stack).find_resources("AWS::CloudFront::Distribution").values()))["Properties"]["DistributionConfig"]
-    assert "CacheBehaviors" not in distribution
+    assert all(b["PathPattern"] != "api/*" for b in distribution["CacheBehaviors"])
     assert distribution["WebACLId"] == {"Ref": "WebAclArn"}
 
 
@@ -72,12 +72,33 @@ def test_error_page_is_independent_of_backend(tmp_path):
     app = App()
     stack = ErrorPageStack(app, "ErrorPageTest", error_html=page, env=Environment(region="us-east-1"))
     template = Template.from_stack(stack)
-    distribution = next(iter(template.find_resources("AWS::CloudFront::Distribution").values()))["Properties"]["DistributionConfig"]
-
-    assert distribution["DefaultRootObject"] == "index.html"
-    assert any(origin.get("OriginAccessControlId") for origin in distribution["Origins"])
-    assert "CacheBehaviors" not in distribution
+    assert not template.find_resources("AWS::CloudFront::Distribution")
+    policies = json.dumps(template.find_resources("AWS::S3::BucketPolicy"))
+    assert "cloudfront.amazonaws.com" in policies
+    assert "PrimaryDistributionArn" in policies
     assert not template.find_resources("AWS::DynamoDB::Table")
     assert not template.find_resources("AWS::ApiGatewayV2::Api")
     assert not template.find_resources("AWS::Lambda::Function")
     assert not template.find_resources("AWS::Lambda::LayerVersion")
+
+def test_one_distribution_uses_two_private_origins_and_no_html_cache(tmp_path):
+    (tmp_path / "index.html").write_text("<title>Primary</title>")
+    page = tmp_path / "error.html"
+    page.write_text("<title>Fallback</title>")
+    app = App()
+    primary = PrimaryWebStack(app, "PrimaryOne", site_dir=tmp_path,
+                             env=Environment(region="ap-southeast-1"))
+    error = ErrorPageStack(app, "ErrorOne", error_html=page,
+                          env=Environment(region="us-east-1"))
+    template = Template.from_stack(primary)
+    template.resource_count_is("AWS::CloudFront::Distribution", 1)
+    Template.from_stack(error).resource_count_is("AWS::CloudFront::Distribution", 0)
+    config = next(iter(template.find_resources("AWS::CloudFront::Distribution").values()))["Properties"]["DistributionConfig"]
+    group = config["OriginGroups"]["Items"][0]
+    assert group["FailoverCriteria"]["StatusCodes"]["Items"] == [504]
+    assert len(group["Members"]["Items"]) == 2
+    assert config["DefaultCacheBehavior"]["TargetOriginId"] == group["Id"]
+    # AWS managed CachingDisabled policy.
+    assert config["DefaultCacheBehavior"]["CachePolicyId"] == "4135ea2d-6df8-44a3-9df3-4b5a84be39ad"
+    assert all(origin["ConnectionAttempts"] == 1 for origin in config["Origins"])
+    assert "us-east-1" in json.dumps(config["Origins"])

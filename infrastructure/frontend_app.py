@@ -10,10 +10,6 @@ from infrastructure.stacks.frontend_stack import ErrorPageStack, PrimaryWebStack
 root = Path(__file__).resolve().parents[1]
 app = cdk.App()
 primary_domain = app.node.try_get_context("primaryDomain")
-error_domain = app.node.try_get_context("errorDomain")
-if primary_domain and primary_domain == error_domain:
-    raise ValueError("Primary and error CloudFront distributions need different hostnames")
-
 WebWafStack(
     app,
     "SatiBotWebWaf",
@@ -32,8 +28,6 @@ ErrorPageStack(
     app,
     "SatiBotWebErrorPage",
     error_html=root / "frontend" / "error.html",
-    domain_name=error_domain,
-    certificate_arn=app.node.try_get_context("errorCertificateArn"),
     env=cdk.Environment(region="us-east-1"),
 )
 

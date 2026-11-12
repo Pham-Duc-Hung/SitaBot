@@ -52,3 +52,13 @@ test("Cognito callback verifies state, clears URL code and stores ID token for A
   assert.equal(button.textContent, "Đăng xuất SatiBot");
   assert.equal(values.has("satibot.auth.flow"), false);
 });
+
+
+test("chat cache is isolated by Cognito subject and unavailable after logout", async () => {
+  const { chatStorageKey } = await import("../frontend/auth.js");
+  const cache = new Map([[chatStorageKey("alice"), "private conversation"]]);
+  assert.equal(cache.get(chatStorageKey("bob")), undefined);
+  assert.equal(chatStorageKey(null), null);
+  assert.equal(chatStorageKey(""), null);
+  assert.notEqual(chatStorageKey("alice"), "satibot.chat.sessions.v1");
+});

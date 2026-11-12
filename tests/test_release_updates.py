@@ -179,10 +179,10 @@ def test_release_deploys_integrations_using_real_stack_outputs(monkeypatch, tmp_
                      for name in release.FUNCTIONS},
         "SatiBotBackend": aliases,
         "AuthStack": {"UserPoolId": "ap-southeast-1_demo", "UserPoolClientId": "client"},
-        "CoreApiStack": {"ApiEndpointUrl": "https://api123.execute-api.ap-southeast-1.amazonaws.com/prod/",
+        "SatiBotWebApi": {"ApiEndpointUrl": "https://api123.execute-api.ap-southeast-1.amazonaws.com/prod/",
                          "ApiGatewaySourceArn": f"arn:aws:execute-api:ap-southeast-1:{account}:api123/prod/*/*",
                          "FrontendOrigin": "https://satibot.id.vn"},
-        "AppSyncStack": {"AppSyncApiArn": f"arn:aws:appsync:ap-southeast-1:{account}:apis/abc123",
+        "SatiBotAppSync": {"AppSyncApiArn": f"arn:aws:appsync:ap-southeast-1:{account}:apis/abc123",
                          "AppSyncGraphqlUrl": "https://abc123.appsync-api.ap-southeast-1.amazonaws.com/graphql"},
     }
     prior = {"StackStatus": "UPDATE_COMPLETE", "Outputs": [
@@ -212,17 +212,19 @@ def test_release_deploys_integrations_using_real_stack_outputs(monkeypatch, tmp_
     deploys = [cmd for cmd in commands if cmd[:2] == ("cdk", "deploy")]
     names = [next(stack for stack in fixture if stack in cmd) for cmd in deploys]
     expected = ["DataStack"] + ([] if already_active else ["SatiBotBackend"])
-    assert names == expected + ["AuthStack", "CoreApiStack", "AppSyncStack", "SatiBotBackend"]
-    core = next(cmd for cmd in deploys if "CoreApiStack" in cmd)
+    assert names == expected + ["AuthStack", "SatiBotWebApi", "SatiBotAppSync", "SatiBotBackend", "SatiBotWebApi"]
+    core = next(cmd for cmd in deploys if "SatiBotWebApi" in cmd)
     for name in ("Chatbot", "Connector", "History"):
         assert f"{name}LiveAliasArn={aliases[name + 'LiveAliasArn']}" in core
-    assert "GrantIntegrationPermissions=true" in deploys[-1]
-    assert "FrontendOrigin=https://satibot.id.vn" in deploys[-1]
+    activation = next(cmd for cmd in reversed(deploys) if "SatiBotBackend" in cmd)
+    assert "backendOwnsInvoke=true" in deploys[-1]
+    assert "GrantIntegrationPermissions=true" in activation
+    assert "FrontendOrigin=https://satibot.id.vn" in activation
     assert ("CanaryDeploymentConfig=CodeDeployDefault.LambdaCanary10Percent5Minutes"
-            if already_active else "CanaryDeploymentConfig=CodeDeployDefault.LambdaAllAtOnce") in deploys[-1]
+            if already_active else "CanaryDeploymentConfig=CodeDeployDefault.LambdaAllAtOnce") in activation
     saved = json.loads((tmp_path / "dist/release-outputs.json").read_text())
-    assert saved["CoreApiStack"] == fixture["CoreApiStack"]
-    assert saved["AppSyncStack"] == fixture["AppSyncStack"]
+    assert saved["SatiBotWebApi"] == fixture["SatiBotWebApi"]
+    assert saved["SatiBotAppSync"] == fixture["SatiBotAppSync"]
 
 
 def test_missing_real_stack_output_names_the_stack(tmp_path):
@@ -230,6 +232,6 @@ def test_missing_real_stack_output_names_the_stack(tmp_path):
     from scripts.deploy_release import integration_outputs
     path = tmp_path / "outputs.json"
     path.write_text(json.dumps({"AuthStack": {"UserPoolId": "pool", "UserPoolClientId": "client"},
-                               "CoreApiStack": {"ApiEndpointUrl": "url"}}))
-    with pytest.raises(RuntimeError, match="CoreApiStack.*ApiGatewaySourceArn"):
+                               "SatiBotWebApi": {"ApiEndpointUrl": "url"}}))
+    with pytest.raises(RuntimeError, match="SatiBotWebApi.*ApiGatewaySourceArn"):
         integration_outputs(path)

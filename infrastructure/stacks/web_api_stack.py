@@ -19,7 +19,7 @@ class WebApiStack(Stack):
         ),
     }
 
-    def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
+    def __init__(self, scope: Construct, construct_id: str, grant_backend_invoke: bool = True, **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
         if self.region != "ap-southeast-1":
             raise ValueError("The website API must run in ap-southeast-1")
@@ -95,14 +95,12 @@ class WebApiStack(Stack):
                                                ":lambda:path/2015-03-31/functions/", alias_arn, "/invocations"]),
                 payload_format_version="2.0",
             )
-            lambda_.CfnPermission(
-                self,
-                f"{name.title()}ApiInvokePermission",
-                action="lambda:InvokeFunction",
-                function_name=alias_arn,
-                principal="apigateway.amazonaws.com",
-                source_arn=source_arn,
-            )
+            if grant_backend_invoke:
+                lambda_.CfnPermission(
+                    self, f"{name.title()}ApiInvokePermission",
+                    action="lambda:InvokeFunction", function_name=alias_arn,
+                    principal="apigateway.amazonaws.com", source_arn=source_arn,
+                )
             for method, path in routes:
                 apigwv2.CfnRoute(
                     self,
@@ -114,5 +112,7 @@ class WebApiStack(Stack):
                     target=Fn.join("", ["integrations/", integration.ref]),
                 )
 
+        CfnOutput(self, "ApiEndpointUrl", value=api.attr_api_endpoint)
+        CfnOutput(self, "ApiGatewaySourceArn", value=source_arn)
         CfnOutput(self, "ApiId", value=api.ref)
         CfnOutput(self, "ApiOriginDomain", value=Fn.join("", [api.ref, ".execute-api.", Aws.REGION, ".amazonaws.com"]))

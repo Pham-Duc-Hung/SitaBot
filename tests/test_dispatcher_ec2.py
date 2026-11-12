@@ -21,7 +21,7 @@ for path in [str(dispatcher_path), str(project_root)]:
 
 from services.ec2_service import (
     ALLOWED_INSTANCE_TYPES,
-    DEFAULT_AMIS,
+    AMI_SOURCES,
     DEFAULT_REGION,
     SUPPORTED_ACTIONS,
     EC2_TOOL_SCHEMAS,
@@ -52,6 +52,9 @@ def mock_boto_ec2():
     """Mock boto3.client for ec2 service."""
     with patch("services.ec2_service.boto3.client") as mock:
         mock_client = MagicMock()
+        mock_client.describe_images.return_value = {"Images": [
+            {"ImageId": "ami-00000000000000001", "CreationDate": "2026-01-01T00:00:00Z"}
+        ]}
         mock.return_value = mock_client
         yield mock
 
@@ -107,15 +110,14 @@ def sample_ec2_instances_raw():
 
 def test_constants_configuration():
     """Verify fundamental configuration constants are correctly defined."""
-    assert DEFAULT_REGION == "ap-southeast-2"
+    assert DEFAULT_REGION == "ap-southeast-1"
     assert "t2.micro" in ALLOWED_INSTANCE_TYPES
     assert "t3.micro" in ALLOWED_INSTANCE_TYPES
     assert "t3.small" in ALLOWED_INSTANCE_TYPES
 
-    assert "ubuntu" in DEFAULT_AMIS
-    assert DEFAULT_AMIS["ubuntu"].startswith("ami-")
-    assert "amazon-linux" in DEFAULT_AMIS
-    assert DEFAULT_AMIS["amazon-linux"].startswith("ami-")
+    assert AMI_SOURCES["ubuntu"][0] == "099720109477"
+    assert AMI_SOURCES["amazon-linux"][0] == "amazon"
+
 
 
 def test_build_response_structure():
@@ -187,7 +189,7 @@ def test_get_ec2_client_fallback_to_default_region(mock_boto_ec2):
         aws_access_key_id="ASIA_KEY",
         aws_secret_access_key="SECRET_KEY",
         aws_session_token="TOKEN",
-        region_name="ap-southeast-2",
+        region_name=DEFAULT_REGION,
     )
 
 
@@ -199,7 +201,7 @@ def test_get_ec2_client_with_empty_or_none_credentials(mock_boto_ec2):
         aws_access_key_id=None,
         aws_secret_access_key=None,
         aws_session_token=None,
-        region_name="ap-southeast-2",
+        region_name=DEFAULT_REGION,
     )
 
 
@@ -477,7 +479,7 @@ def test_create_instance_default_success(mock_credentials, mock_boto_ec2):
     # Verify run_instances arguments
     mock_client.run_instances.assert_called_once()
     run_args = mock_client.run_instances.call_args[1]
-    assert run_args["ImageId"] == DEFAULT_AMIS["ubuntu"]
+    assert run_args["ImageId"] == "ami-00000000000000001"
     assert run_args["InstanceType"] == "t3.micro"
     assert run_args["MinCount"] == 1
     assert run_args["MaxCount"] == 1
@@ -495,7 +497,7 @@ def test_create_instance_default_success(mock_credentials, mock_boto_ec2):
     assert res["data"]["instance_name"] == "MyWebServer"
     assert res["data"]["state"] == "pending"
     assert res["data"]["instance_type"] == "t3.micro"
-    assert res["data"]["image_id"] == DEFAULT_AMIS["ubuntu"]
+    assert res["data"]["image_id"] == "ami-00000000000000001"
     assert "i-0123456789created" in res["message"]
 
 
@@ -520,7 +522,7 @@ def test_create_instance_with_amazon_linux_and_custom_options(mock_credentials, 
 
     assert res["success"] is True
     run_args = mock_client.run_instances.call_args[1]
-    assert run_args["ImageId"] == DEFAULT_AMIS["amazon-linux"]
+    assert run_args["ImageId"] == "ami-00000000000000001"
     assert run_args["InstanceType"] == "t2.micro"
     assert run_args["KeyName"] == "satibot-keypair"
     assert run_args["SecurityGroupIds"] == ["sg-01234"]
@@ -1300,3 +1302,31 @@ def test_create_instance_vcpu_quota_exceeded(mock_credentials, mock_boto_ec2):
     assert "active-web (i-running1)" in res["message"]
     assert len(res["data"]["running_instances"]) == 1
     assert res["data"]["remedy"] == "stop_unused_instances_or_request_quota_increase"
+
+def test_create_uses_newest_regional_official_image(mock_credentials, mock_boto_ec2):
+    from backend.shared.tool_registry import validate_call
+    validate_call("create_ec2_instance", {"instance_name": "demo", "image_id": "ami-00000000000000002"})
+    client = mock_boto_ec2.return_value
+    client.describe_instances.return_value = {"Reservations": []}
+    client.describe_images.return_value = {"Images": [
+        {"ImageId": "ami-00000000000000001", "CreationDate": "2025-01-01T00:00:00Z"},
+        {"ImageId": "ami-00000000000000002", "CreationDate": "2026-01-01T00:00:00Z"},
+    ]}
+    client.run_instances.return_value = {"Instances": [{"InstanceId": "i-demo", "State": {"Name": "pending"}}]}
+    result = execute({**mock_credentials, "Region": "ap-southeast-1"}, {"action": "create_ec2_instance", "instance_name": "demo"})
+    assert result["success"]
+    assert client.run_instances.call_args.kwargs["ImageId"] == "ami-00000000000000002"
+    assert mock_boto_ec2.call_args.kwargs["region_name"] == "ap-southeast-1"
+    assert client.describe_images.call_args.kwargs["Owners"] == ["099720109477"]
+    client.describe_images.reset_mock()
+    execute(mock_credentials, {"action": "create_ec2_instance", "instance_name": "explicit", "image_id": "ami-00000000000000001"})
+    client.describe_images.assert_not_called()
+
+
+def test_missing_image_does_not_launch_instance(mock_credentials, mock_boto_ec2):
+    client = mock_boto_ec2.return_value
+    client.describe_instances.return_value = {"Reservations": []}
+    client.describe_images.return_value = {"Images": []}
+    result = execute(mock_credentials, {"action": "create_ec2_instance", "instance_name": "demo"})
+    assert result["error"] == "ImageNotFound"
+    client.run_instances.assert_not_called()

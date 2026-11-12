@@ -161,6 +161,7 @@ class IamStack(Stack):
             actions=["logs:CreateLogStream", "logs:PutLogEvents"],
             resources=[
                 f"arn:{Aws.PARTITION}:logs:{self.region}:{self.account}:"
-                "log-group:/aws/lambda/SatiBotBackendSprint2-*:*"
+                "log-group:/aws/lambda/SatiBotBackend-*:*",
+                f"arn:{Aws.PARTITION}:logs:{self.region}:{self.account}:log-group:/aws/lambda/SatiBot-AuthPostConfirmation:*"
             ],
         ))

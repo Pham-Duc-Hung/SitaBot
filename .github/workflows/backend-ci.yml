@@ -31,9 +31,12 @@ jobs:
       - run: python scripts/verify_backend_artifacts.py
       - run: python scripts/build_frontend_ci.py
       - run: node --test tests/test_frontend_chat_contract.mjs tests/test_frontend_auth.mjs tests/test_frontend_appsync.mjs
+      - run: cdk synth --app "python -m infrastructure.frontend_app" --output dist/web-cdk.out
       - run: cdk synth --app "python -m infrastructure.web_api_app" --output dist/web-api-cdk.out
+      - run: cdk synth --app "python -m infrastructure.appsync_app" --output dist/appsync-cdk.out
       - run: cdk synth --app "python infrastructure/app.py" --output dist/foundation.out
       - run: cdk synth --app "python infrastructure/backend_app.py" --output dist/cdk.out
+      - run: npx --yes cdk-assets@4.8.0 ls --path dist/cdk.out/SatiBotBackend.assets.json
       - run: python scripts/verify_canary_rollback.py
       - run: |
           mkdir -p dist/deployment

@@ -19,8 +19,10 @@ phases:
       - node --test tests/test_frontend_chat_contract.mjs tests/test_frontend_auth.mjs tests/test_frontend_appsync.mjs
       - cdk synth --app "python -m infrastructure.frontend_app" --output dist/web-cdk.out
       - cdk synth --app "python -m infrastructure.web_api_app" --output dist/web-api-cdk.out
+      - cdk synth --app "python -m infrastructure.appsync_app" --output dist/appsync-cdk.out
       - cdk synth --app "python infrastructure/app.py" --output dist/foundation.out
       - cdk synth --app "python infrastructure/backend_app.py" --output dist/cdk.out
+      - npx --yes cdk-assets@4.8.0 ls --path dist/cdk.out/SatiBotBackend.assets.json
       - python scripts/verify_canary_rollback.py
       - mkdir -p dist/deployment
       - cp scripts/write_deploy_config.py ci/publish-buildspec.yml dist/deployment/

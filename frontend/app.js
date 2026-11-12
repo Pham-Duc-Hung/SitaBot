@@ -2,6 +2,7 @@
  * Author: Trịnh Thiên Quang
  * Codex & ChatGPT-style Agent UI with interactive tool log steps & typewriter text stream.
  */
+import { chatStorageKey } from "./auth.js";
 import { chatRequest, confirmationPayload, findActionResult, listSessionResults, pollActionResult, resolveQueuedAction } from "./chat-api.js";
 import { createAppSyncSubscription, mergeActionResult } from "./appsync.js";
 
@@ -26,7 +27,8 @@ const state = {
   realtime: null
 };
 
-const SESSION_STORAGE_KEY = "satibot.chat.sessions.v1";
+let sessionStorageKey = null;
+let sessionOwner = null;
 
 const els = {
   sidebar: $("#sidebar"),
@@ -266,8 +268,9 @@ function createLogItem(actionTitle, detailData, prefix = "Ran ") {
 }
 
 function loadStoredSessions() {
+  if (!sessionStorageKey) { state.sessions = []; return; }
   try {
-    const parsed = JSON.parse(localStorage.getItem(SESSION_STORAGE_KEY) || "[]");
+    const parsed = JSON.parse(localStorage.getItem(sessionStorageKey) || "[]");
     state.sessions = Array.isArray(parsed) ? parsed.filter(s => s && s.id && Array.isArray(s.messages)) : [];
   } catch {
     state.sessions = [];
@@ -275,15 +278,16 @@ function loadStoredSessions() {
 }
 
 function saveSessions() {
+  if (!sessionStorageKey) return;
   state.sessions.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
   state.sessions = state.sessions.slice(0, 30);
   try {
-    localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(state.sessions));
+    localStorage.setItem(sessionStorageKey, JSON.stringify(state.sessions));
   } catch {
     // Browser storage is usually ~5 MB. Prefer retaining recent conversations
     // instead of letting a very large model response break the chat UI.
     state.sessions = state.sessions.slice(0, Math.max(1, Math.floor(state.sessions.length / 2)));
-    try { localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(state.sessions)); } catch { /* keep UI usable */ }
+    try { localStorage.setItem(sessionStorageKey, JSON.stringify(state.sessions)); } catch { /* keep UI usable */ }
   }
   renderRecentSessions();
 }
@@ -405,18 +409,21 @@ function updateActionResult(record, appendMissing = false) {
 }
 
 async function syncSessionHistory(sessionId) {
+  const owner = sessionOwner;
   try {
     const records = await listSessionResults(sessionId);
-    if (state.currentSessionId !== sessionId) return;
+    if (sessionOwner !== owner || state.currentSessionId !== sessionId) return;
     for (const record of records.reverse()) {
       const existing = currentSession()?.messages.find(message => message.actionId === record.action_id);
       if (existing?.status === "PENDING") {
         let detail = null;
         try { detail = await findActionResult(record.action_id, sessionId); } catch { /* use summary */ }
+        if (sessionOwner !== owner || state.currentSessionId !== sessionId) return;
         updateActionResult(detail || record);
       } else if (!existing) {
         let detail = null;
         try { detail = await findActionResult(record.action_id, sessionId); } catch { /* use summary */ }
+        if (sessionOwner !== owner || state.currentSessionId !== sessionId) return;
         updateActionResult(detail || record, true);
       }
     }
@@ -586,10 +593,12 @@ async function handleSendMessage() {
   }, 1000);
 
   try {
+    const owner = sessionOwner;
     const res = await resolveAction(await fetchChat({
       message: text, history: state.history, model: state.selectedModel
     }));
     clearInterval(progressTimer);
+    if (sessionOwner !== owner) return;
 
     const elapsedMs = Math.round(performance.now() - requestStartedAt);
     const requestTitle = requestLog.querySelector(".log-title");
@@ -750,7 +759,9 @@ function handleConfirmation(res, agentRow, originalPrompt) {
     logsBox.append(workingStep);
 
     try {
+      const owner = sessionOwner;
       const execRes = await resolveAction(await fetchChat(payload));
+      if (sessionOwner !== owner) return;
 
       workingStep.remove();
 
@@ -889,6 +900,7 @@ function handleResolutionOptions(res, agentRow, originalPrompt, pendingAction) {
     logsBox.append(workingStep);
 
     try {
+      const owner = sessionOwner;
       const result = await resolveAction(await fetchChat({
         confirmed: true,
         service: "lambda",
@@ -897,6 +909,7 @@ function handleResolutionOptions(res, agentRow, originalPrompt, pendingAction) {
         agent_state: pendingAction.agent_state,
         model: pendingAction.model || state.selectedModel
       }));
+      if (sessionOwner !== owner) return;
       workingStep.remove();
       card.remove();
 
@@ -1142,14 +1155,19 @@ document.addEventListener("keydown", e => {
   }
 });
 
-loadStoredSessions();
-renderRecentSessions();
-window.addEventListener("satibot-auth-changed", () => {
-  if (state.realtime) {
-    state.realtime.stop();
-    if (state.currentSessionId) state.realtime.start(state.currentSessionId);
-  }
-});
+async function syncSessionOwner() {
+  const owner = await window.SatiBotAuth?.getUserId();
+  if ((owner || null) === sessionOwner) return;
+  state.controller?.abort();
+  state.realtime?.stop();
+  sessionOwner = owner || null;
+  sessionStorageKey = chatStorageKey(sessionOwner);
+  resetChat();
+  loadStoredSessions();
+  renderRecentSessions();
+}
+void syncSessionOwner();
+window.addEventListener("satibot-auth-changed", syncSessionOwner);
 window.addEventListener("online", () => {
   state.realtime?.networkOnline();
 });

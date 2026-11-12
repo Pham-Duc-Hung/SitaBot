@@ -47,3 +47,14 @@ def test_web_api_routes_are_authenticated_and_target_live_aliases(monkeypatch):
     assert result["statusCode"] == 200
     assert result["headers"]["Cache-Control"] == "no-store"
     assert json.loads(result["body"]) == {"status": "API_READY", "region": "ap-southeast-1"}
+
+
+def test_backend_owned_alias_permissions_leave_only_health_permission():
+    stack = WebApiStack(App(), "WebApiBackendOwned",
+                        grant_backend_invoke=False,
+                        env=Environment(region="ap-southeast-1"))
+    template = Template.from_stack(stack)
+    permissions = template.find_resources("AWS::Lambda::Permission")
+    assert len(permissions) == 1
+    template.has_output("ApiGatewaySourceArn", {})
+    template.has_output("ApiEndpointUrl", {})

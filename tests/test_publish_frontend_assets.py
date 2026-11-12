@@ -20,7 +20,7 @@ def test_primary_site_config_uses_deployed_cloudfront_behavior(monkeypatch, tmp_
             "PrimaryDistributionId": "preview-distribution",
             "PrimaryDistributionDomain": "example.cloudfront.net",
         },
-        "SatiBotWebAuth": {
+        "AuthStack": {
             "CallbackUrl": "https://example.cloudfront.net/",
             "HostedDomain": "example.auth.ap-southeast-1.amazoncognito.com",
             "UserPoolClientId": "example-client",
@@ -40,13 +40,19 @@ def test_primary_site_config_uses_deployed_cloudfront_behavior(monkeypatch, tmp_
         "s3": s3_client, "cloudfront": cloudfront_client
     }[service]
 
-    publisher.publish_site(session, "primary")
+    if not api_enabled:
+        with pytest.raises(RuntimeError, match="routing"):
+            publisher.publish_site(session, "primary")
+        s3_client.put_object.assert_not_called()
+        return
+    publisher.publish_site(session, "primary", "https://abc123.appsync-api.ap-southeast-1.amazonaws.com/graphql")
 
     config = next(call.kwargs for call in s3_client.put_object.call_args_list
                   if call.kwargs["Key"] == "site-config.json")
     assert json.loads(config["Body"]) == {
         "api_enabled": api_enabled,
         "tools_loaded": 2,
+        "appsync": {"graphql_url": "https://abc123.appsync-api.ap-southeast-1.amazonaws.com/graphql"},
         "auth": {
             "domain": "example.auth.ap-southeast-1.amazoncognito.com",
             "client_id": "example-client",
@@ -66,10 +72,10 @@ def test_primary_site_config_publishes_only_valid_appsync_endpoint(monkeypatch, 
         "PrimaryDistributionId": "preview-distribution",
         "PrimaryDistributionDomain": "example.cloudfront.net",
     })
-    monkeypatch.setattr(publisher, "preview_auth_config", lambda *_: None)
+    monkeypatch.setattr(publisher, "preview_auth_config", lambda *_: {"client_id": "client"})
     s3_client = Mock()
     cloudfront_client = Mock()
-    cloudfront_client.get_distribution_config.return_value = {"DistributionConfig": {}}
+    cloudfront_client.get_distribution_config.return_value = {"DistributionConfig": {"CacheBehaviors": {"Items": [{"PathPattern": "api/*"}]}}}
     cloudfront_client.create_invalidation.return_value = {"Invalidation": {"Id": "one"}}
     session = Mock()
     session.client.side_effect = lambda service, **_: {"s3": s3_client, "cloudfront": cloudfront_client}[service]
@@ -81,3 +87,23 @@ def test_primary_site_config_publishes_only_valid_appsync_endpoint(monkeypatch, 
     assert json.loads(config["Body"])["appsync"] == {"graphql_url": endpoint}
     with pytest.raises(ValueError, match="AppSync URL"):
         publisher.publish_site(session, "primary", "https://other.example/graphql")
+
+def test_fallback_upload_invalidates_the_single_primary_distribution(monkeypatch, tmp_path):
+    page = tmp_path / "error.html"
+    page.write_text("<h1>Unavailable</h1>")
+    monkeypatch.setattr(publisher, "site_files", lambda site: [(page, "index.html")])
+    def outputs(session, region, stack):
+        if stack == "SatiBotWebErrorPage":
+            assert region == "us-east-1"
+            return {"ErrorPageBucketName": "error-bucket"}
+        assert stack == "SatiBotWebPrimary"
+        return {"PrimaryDistributionId": "shared", "PrimaryDistributionDomain": "shared.cloudfront.net"}
+    monkeypatch.setattr(publisher, "stack_outputs", outputs)
+    storage, cdn = Mock(), Mock()
+    cdn.create_invalidation.return_value = {"Invalidation": {"Id": "one"}}
+    session = Mock()
+    session.client.side_effect = lambda service, **kwargs: storage if service == "s3" else cdn
+    publisher.publish_site(session, "error")
+    assert storage.put_object.call_args.kwargs["Bucket"] == "error-bucket"
+    assert storage.put_object.call_args.kwargs["CacheControl"] == "no-store"
+    assert cdn.create_invalidation.call_args.kwargs["DistributionId"] == "shared"

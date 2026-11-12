@@ -448,3 +448,21 @@ def test_real_auth_appsync_and_api_contract(auth_code):
     assert not Template.from_stack(api).find_resources("AWS::Lambda::Permission")
     for response in Template.from_stack(api).find_resources("AWS::ApiGateway::GatewayResponse").values():
         assert "FrontendOrigin" in json.dumps(response["Properties"]["ResponseParameters"])
+
+
+def test_demo_auth_has_hosted_login_and_restricted_browser_attributes(tmp_path):
+    from aws_cdk import App, Environment, aws_lambda as lambda_
+    from aws_cdk.assertions import Template
+    from infrastructure.stacks.auth_stack import AuthStack
+    app = App(outdir=str(tmp_path / "auth"))
+    stack = AuthStack(app, "DemoAuth", env=Environment(region="ap-southeast-1"),
+                      post_confirmation_code=lambda_.Code.from_inline("def handler(event, context): return event"))
+    template = Template.from_stack(stack)
+    client = next(iter(template.find_resources("AWS::Cognito::UserPoolClient").values()))["Properties"]
+    assert client["AllowedOAuthFlows"] == ["code"]
+    assert client["GenerateSecret"] is False
+    assert "custom:role" not in client["WriteAttributes"]
+    assert client["CallbackURLs"] == client["LogoutURLs"]
+    template.resource_count_is("AWS::Cognito::UserPoolDomain", 1)
+    for name in ("HostedDomain", "CallbackUrl", "UserPoolId", "UserPoolClientId"):
+        template.has_output(name, {})

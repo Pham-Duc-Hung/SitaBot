@@ -223,7 +223,7 @@ Dịch vụ máy chủ ảo (Amazon Elastic Compute Cloud - EC2) là hạ tầng
     \begin{itemize}
       \item Nhắn yêu cầu tạo máy kèm mục đích sử dụng (ví dụ: "Tạo cho tôi một máy chủ Ubuntu để chạy web demo, mở cổng SSH và HTTP").
       \item Nếu tên máy đã tồn tại, hệ thống đưa ra 3 lựa chọn: tiếp tục sử dụng máy cũ, đổi tên máy mới hoặc xóa máy cũ để tạo lại.
-      \item Nhận kết quả thành công gồm: Địa chỉ IP máy chủ, link tải file khóa SSH (.pem) và câu lệnh kết nối mẫu.
+      \item Nhận mã máy chủ và trạng thái khởi tạo (pending); tra cứu chi tiết sau khi máy chạy để xem địa chỉ IP. Khi cần SSH, sử dụng Key Pair đã có trong region đích và giữ file khóa riêng tại máy người dùng.
     \end{itemize}
   \end{itemize}
 
@@ -559,21 +559,12 @@ Luồng hoạt động và giao tiếp giữa các thành phần gồm bốn bư
     \end{itemize}
      
     
-    \item \textbf{Chính sách định tuyến:} Failover Routing.
-    
-    \item \textbf{Cấu hình bản ghi Primary:} Trỏ đến CloudFront Distribution (Region: \code{ap-southeast-1}).
-    
-    \item \textbf{Cấu hình bản ghi Secondary:} Trỏ đến CloudFront Distribution (Region: \code{us-east-1}; Origin: S3 Bucket chứa tệp \code{error.html}).
-    
-    \item \textbf{Cấu hình Health Check (áp dụng cho bản ghi Primary):}
-    \begin{itemize}[label=--]
-        \item Protocol: HTTPS.
-        \item Path: \code{/health}.
-        \item Request Interval: 10 giây.
-        \item Failure Threshold: 3 lần.
-    \end{itemize}
-    
-    \item \textbf{TTL:} 60 giây.
+    \item \textbf{Chính sách định tuyến:} Route 53 Alias trỏ tới một CloudFront Distribution.
+    \item \textbf{Origin chính:} S3 bucket website tại \code{ap-southeast-1}.
+    \item \textbf{Origin dự phòng:} S3 bucket riêng tư chứa trang lỗi tại \code{us-east-1}.
+    \item \textbf{Origin failover:} Default behavior dùng origin group. Chuyển sang origin dự phòng khi origin chính timeout/HTTP 504, với một lần thử kết nối. Chưa áp dụng các mã lỗi khác làm điều kiện chuyển.
+    \item \textbf{Cache:} Tắt cache HTML ở CloudFront, upload HTML với \code{Cache-Control: no-store}. Các asset có hash tiếp tục được cache. TTL không được dùng làm bộ đếm phát hiện lỗi.
+    \item \textbf{API:} Behavior \code{/api/*} tiếp tục trỏ đến API Gateway; kịch bản origin failover này kiểm tra phân phối trang web.
 \end{itemize}
 
 \vspace{0.5cm}
@@ -1020,13 +1011,11 @@ quy tắc chống XSS trong tham số truy vấn.
 Bằng chứng gồm mã HTTP, trạng thái CloudFront và tên quy tắc được lưu tại
 \path{evidence/sprint4-web-acceptance.json}; dữ liệu không lưu địa chỉ IP.
 
-Trang thông báo lỗi độc lập được phân phối qua CloudFront với origin S3 tại
-\texttt{us-east-1}. Truy cập trực tiếp trang này trả HTTP 200 và hiển thị thông
-báo SatiBot tạm thời không khả dụng, không cung cấp chức năng quản trị AWS
-(Hình~\ref{fig:sprint4_error_page}). Phép thử này xác nhận trang dự phòng hoạt
-động độc lập; việc Route~53 tự chuyển DNS sang trang lỗi khi website chính gặp
-sự cố thuộc kịch bản failover riêng và chưa được kiểm thử trong phép nghiệm thu
-này.
+Bằng chứng ở phiên nghiệm thu trước được thu trên cấu hình hai distribution độc lập.
+Kiến trúc demo hiện tại đã thống nhất một CloudFront với hai S3 origin.
+Bài nghiệm thu mới phải làm origin chính timeout và kiểm tra thông báo lỗi trên cùng URL chính.
+Lệnh \code{accept_frontend_sprint4.py --expect-failover} chỉ quan sát sau khi đã chủ động gây timeout;
+kết quả cũ bên dưới chưa chứng minh chuyển origin trên kiến trúc mới.
 
 \begin{figure}[!htbp]
 \centering

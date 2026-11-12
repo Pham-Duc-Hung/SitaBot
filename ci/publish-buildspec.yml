@@ -9,7 +9,7 @@ phases:
   build:
     commands:
       - python deployment/write_deploy_config.py --require-integrations
-      - npx --yes cdk-assets@2 publish --path cdk.out/SatiBotBackend.assets.json -v
+      - npx --yes cdk-assets@4.8.0 publish --path cdk.out/SatiBotBackend.assets.json -v
 artifacts:
   base-directory: deploy-config
   files:

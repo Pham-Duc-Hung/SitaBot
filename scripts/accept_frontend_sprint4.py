@@ -69,6 +69,8 @@ def main():
     parser.add_argument("--profile", required=True)
     parser.add_argument("--expected-account", required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--expect-failover", action="store_true",
+                        help="Observe fallback at the primary URL after an externally triggered origin timeout")
     args = parser.parse_args()
 
     session = boto3.Session(profile_name=args.profile, region_name="ap-southeast-1")
@@ -80,20 +82,43 @@ def main():
     fallback = stack_outputs(session, "SatiBotWebErrorPage", "us-east-1")
     waf = stack_outputs(session, "SatiBotWebWaf", "us-east-1")
     primary_domain = primary["PrimaryDistributionDomain"]
-    fallback_domain = fallback["ErrorPageDistributionDomain"]
     distribution = session.client("cloudfront", region_name="us-east-1").get_distribution_config(
         Id=primary["PrimaryDistributionId"]
     )["DistributionConfig"]
     if distribution.get("WebACLId") != waf["WebAclArn"]:
         raise RuntimeError("Primary CloudFront distribution is not attached to the expected WAF")
 
+    groups = distribution.get("OriginGroups", {}).get("Items", [])
+    target = distribution["DefaultCacheBehavior"]["TargetOriginId"]
+    group = next((item for item in groups if item["Id"] == target), None)
+    if not group or group["FailoverCriteria"]["StatusCodes"]["Items"] != [504]:
+        raise RuntimeError("The default behavior must use the timeout fallback origin group")
+    if args.expect_failover:
+        status, body = fetch(f"https://{primary_domain}/")
+        if status["status"] != 200 or "SatiBot tạm thời không khả dụng" not in body.decode("utf-8", errors="replace"):
+            raise RuntimeError("The primary URL did not return the fallback page")
+        evidence = {
+            "scope": "Same-URL timeout failover observation after an externally triggered fault",
+            "tested_at_utc": datetime.now(timezone.utc).isoformat(),
+            "url": f"https://{primary_domain}/", "http": status,
+            "origin_group": group, "notice_visible": True,
+        }
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(json.dumps(evidence, ensure_ascii=False, indent=2), encoding="utf-8")
+        print("Fallback page observed at the primary CloudFront URL")
+        return
+
     started = datetime.now(timezone.utc)
     allowed, _ = fetch(f"https://{primary_domain}/")
     probe = urlencode({"sprint4_waf_probe": '<script>alert("hello")</script>'})
     blocked, _ = fetch(f"https://{primary_domain}/?{probe}")
-    error_page, body = fetch(f"https://{fallback_domain}/")
-    if (allowed["status"], blocked["status"], error_page["status"]) != (200, 403, 200):
-        raise RuntimeError(f"Unexpected HTTP results: {allowed}, {blocked}, {error_page}")
+    stored = session.client("s3", region_name="us-east-1").get_object(
+        Bucket=fallback["ErrorPageBucketName"], Key="index.html",
+    )
+    body = stored["Body"].read(65536)
+    stored["Body"].close()
+    if (allowed["status"], blocked["status"]) != (200, 403):
+        raise RuntimeError(f"Unexpected HTTP results: {allowed}, {blocked}")
     if "SatiBot tạm thời không khả dụng" not in body.decode("utf-8", errors="replace"):
         raise RuntimeError("Fallback page is missing its unavailable notice")
     sampled = blocked_sample(session, waf["WebAclArn"], started)
@@ -101,7 +126,7 @@ def main():
         raise RuntimeError("The expected AWS managed XSS rule did not block the probe")
 
     evidence = {
-        "scope": "Sprint 4 preview WAF and independent fallback-page acceptance",
+        "scope": "WAF and fallback origin readiness; timeout failover requires --expect-failover",
         "tested_at_utc": datetime.now(timezone.utc).isoformat(),
         "primary": {
             "url": f"https://{primary_domain}/",
@@ -116,18 +141,18 @@ def main():
             "waf_sample": sampled,
         },
         "fallback": {
-            "url": f"https://{fallback_domain}/",
+            "bucket": fallback["ErrorPageBucketName"],
             "region": "us-east-1",
-            "http": error_page,
+            "object": "index.html",
             "notice_visible": True,
             "screenshot": "sprint4-error-page.png",
         },
-        "scope_note": "Fallback URL was tested independently. Route 53 DNS failover was not tested.",
+        "scope_note": "Fallback content was read from private S3. Same-URL timeout failover was not exercised.",
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(evidence, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(f"Allowed {allowed['status']}; blocked {blocked['status']} by {sampled['rule']}; "
-          f"fallback {error_page['status']}; evidence {args.output}")
+          f"fallback origin content verified; evidence {args.output}")
 
 
 if __name__ == "__main__":
