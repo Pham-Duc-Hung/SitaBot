@@ -83,6 +83,12 @@ class CoreApiStack(Stack):
             or self._import_fallback_fn("history")
         )
 
+        frontend_origin = cdk.CfnParameter(
+            self, "FrontendOrigin", type="String",
+            allowed_pattern=r"https?://[A-Za-z0-9.-]+(:[0-9]+)?",
+            description="Exact frontend origin, including scheme and optional port.",
+        ).value_as_string
+
         # 3. Create API Gateway REST API with full CORS support
         self.api = apigateway.RestApi(
             self,
@@ -98,7 +104,7 @@ class CoreApiStack(Stack):
                 data_trace_enabled=False,
             ),
             default_cors_preflight_options=apigateway.CorsOptions(
-                allow_origins=apigateway.Cors.ALL_ORIGINS,
+                allow_origins=[frontend_origin],
                 allow_methods=apigateway.Cors.ALL_METHODS,
                 allow_headers=[
                     "Content-Type",
@@ -110,7 +116,7 @@ class CoreApiStack(Stack):
                     "x-session-id",
                     "x-action-id",
                 ],
-                allow_credentials=True,
+                allow_credentials=False,
                 max_age=Duration.hours(1),
             ),
             endpoint_types=[apigateway.EndpointType.REGIONAL],
@@ -127,21 +133,9 @@ class CoreApiStack(Stack):
         )
 
         # Lambda Integrations (Proxy Mode)
-        chatbot_integration = apigateway.LambdaIntegration(
-            chatbot_fn,
-            proxy=True,
-            allow_test_invoke=True,
-        )
-        connector_integration = apigateway.LambdaIntegration(
-            connector_fn,
-            proxy=True,
-            allow_test_invoke=True,
-        )
-        history_integration = apigateway.LambdaIntegration(
-            history_fn,
-            proxy=True,
-            allow_test_invoke=True,
-        )
+        chatbot_integration = self._proxy_integration(chatbot_fn)
+        connector_integration = self._proxy_integration(connector_fn)
+        history_integration = self._proxy_integration(history_fn)
 
         # 5. Define 6 Business Routes to :live aliases
         # Từng method sử dụng Cognito User Pool Authorizer để bảo vệ endpoint
@@ -215,7 +209,7 @@ class CoreApiStack(Stack):
                         )
                     },
                     response_parameters={
-                        "method.response.header.Access-Control-Allow-Origin": "'*'",
+                        "method.response.header.Access-Control-Allow-Origin": cdk.Fn.join("", ["'", frontend_origin, "'"]),
                     },
                 )
             ],
@@ -235,6 +229,20 @@ class CoreApiStack(Stack):
                 )
             ],
         )
+
+        for name, response_type in (
+            ("ClientErrors", apigateway.ResponseType.DEFAULT_4_XX),
+            ("ServerErrors", apigateway.ResponseType.DEFAULT_5_XX),
+        ):
+            self.api.add_gateway_response(
+                name, type=response_type,
+                response_headers={
+                    "Access-Control-Allow-Origin": cdk.Fn.join("", ["'", frontend_origin, "'"]),
+                },
+            )
+        origin_output = CfnOutput(self, "FrontendOriginOutput", value=frontend_origin)
+        origin_output.override_logical_id("FrontendOrigin")
+        CfnOutput(self, "ApiGatewaySourceArn", value=self.api.arn_for_execute_api(stage="prod"))
 
         # 7. CloudFormation Outputs
         self.api_url = self.api.url
@@ -260,6 +268,18 @@ class CoreApiStack(Stack):
             export_name="SatiBot-HealthCheckUrl",
         )
 
+    @staticmethod
+    def _proxy_integration(function: lambda_.IFunction) -> apigateway.Integration:
+        # SatiBotBackend owns the alias invoke permissions after API output handoff.
+        return apigateway.Integration(
+            type=apigateway.IntegrationType.AWS_PROXY,
+            integration_http_method="POST",
+            uri=cdk.Fn.sub(
+                "arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${FunctionArn}/invocations",
+                {"FunctionArn": function.function_arn},
+            ),
+        )
+
     def _import_fallback_fn(self, name: str) -> lambda_.IFunction:
         """
         Nhập tham chiếu Lambda Function theo ARN chuẩn để hỗ trợ standalone synthesis
@@ -268,6 +288,10 @@ class CoreApiStack(Stack):
         return lambda_.Function.from_function_attributes(
             self,
             f"Imported{name.title()}LiveAlias",
-            function_arn=f"arn:aws:lambda:{self.region}:{self.account}:function:SatiBot-{name.title()}:live",
+            function_arn=cdk.CfnParameter(
+                self, f"{name.title()}LiveAliasArn", type="String",
+                allowed_pattern=r"arn:aws:lambda:ap-southeast-1:\d{12}:function:[A-Za-z0-9_-]+:live",
+            ).value_as_string,
             same_environment=True,
+            skip_permissions=True,
         )

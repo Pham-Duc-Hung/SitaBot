@@ -56,22 +56,14 @@ def test_deterministic_zip_hashes_and_subprocess_coldstart(tmp_path):
         h2 = hashlib.sha256((dir_2 / f"{name}.zip").read_bytes()).hexdigest()
         assert h1 == h2
 
-    # dist/backend is packaged for Lambda Linux / CPython 3.12. Its native
-    # wheels cannot be imported by the local subprocess on Windows or Python 3.13.
-    target = ROOT / "dist" / "backend"
-    if sys.platform == "linux" and sys.version_info[:2] == (3, 12) and all(
-        (target / f"{n}.zip").exists()
-        for n in ("chatbot", "dispatcher", "formatter", "connector", "history")
-    ):
-        cold_report = benchmark_subprocess_coldstart(target, warm_runs=2)
-        assert set(cold_report) == {
-            "chatbot",
-            "dispatcher",
-            "formatter",
-            "connector",
-            "history",
-        }
-        assert all(item["import_init_ms"] > 0 for item in cold_report.values())
+    # Use this test's source packages with the current interpreter's dependencies.
+    # Linux deployment wheels in dist/backend cannot run on a Windows interpreter.
+    # The CI artifact smoke check separately verifies the vendored Linux packages.
+    cold_report = benchmark_subprocess_coldstart(dir_1, warm_runs=2)
+    assert set(cold_report) == {
+        "chatbot", "dispatcher", "formatter", "connector", "history",
+    }
+    assert all(item["import_init_ms"] > 0 for item in cold_report.values())
 
 
 def test_live_benchmark_enforces_jwt_and_tracks_async_workflow_completion(monkeypatch):

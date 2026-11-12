@@ -138,7 +138,7 @@ def test_verify_token_valid_jwt_admin():
 
 
 def test_verify_token_valid_jwt_admin_custom_role():
-    """Kiểm tra JWT Cognito phân quyền admin thông qua custom:role."""
+    """Custom role does not grant administrator privileges."""
     payload = {
         "sub": "dev-sub-8888",
         "email": "dev@example.com",
@@ -149,7 +149,7 @@ def test_verify_token_valid_jwt_admin_custom_role():
     res = verify_token(jwt_token)
 
     assert res["is_valid"] is True
-    assert res["role"] == "admin"
+    assert res["role"] == "user"
 
 
 def test_verify_token_expired_jwt():

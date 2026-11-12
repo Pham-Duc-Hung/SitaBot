@@ -593,3 +593,40 @@ def test_iam_preview_read_can_recover_worker_failure_before_completion(cloud, mo
     replay = dispatch.handle({"user_id": "alice", "action_id": source["action_id"]}, None)
     assert replay["result"]["data"]["action_id"] == result["data"]["action_id"]
     assert table("PENDING_ACTION_TABLE").scan()["Count"] == 2
+
+def test_model_input_hides_signed_links_but_keeps_public_result(cloud, monkeypatch):
+    from backend.shared.runtime import sanitize_model_data
+    signed = "https://demo.s3.amazonaws.com/file?X-Amz-Credential=example&X-Amz-Signature=dummy"
+    result = {"status": "SUCCESS", "message": "Download " + signed, "data": {"url": signed}}
+    item = proposed(cloud)
+    model = Mock(return_value={"content": "Tác vụ hoàn tất."})
+    monkeypatch.setattr(formatter.gemini, "complete", model)
+    monkeypatch.setattr(formatter.appsync, "publish", Mock())
+    envelope = {key: item[key] for key in
+                ("user_id", "session_id", "action_id", "created_at", "service", "tool_name")}
+    response = formatter.handle({**envelope, "result": result}, None)
+    assert "X-Amz-Signature" not in json.dumps(model.call_args.args)
+    assert response["data"]["url"] == signed
+    assert result["data"]["url"] == signed
+    assert "X-Amz-Signature" not in sanitize_model_data(json.dumps(result))
+
+    cloud.save_session("alice", item["session_id"], {}, [], action_id=item["action_id"])
+    table("PENDING_ACTION_TABLE").update_item(
+        Key={"action_id": item["action_id"]},
+        UpdateExpression="SET #s = :status, #r = :result",
+        ExpressionAttributeNames={"#s": "status", "#r": "result"},
+        ExpressionAttributeValues={":status": "COMPLETED", ":result": result})
+    reply = chat.handle(request({"message": "Kết quả vừa rồi?", "session_id": item["session_id"]}), None)
+    assert reply["statusCode"] == 200
+    assert "X-Amz-Signature" not in json.dumps(model.call_args.args)
+
+
+def test_cloud_http_requires_authorizer_and_returns_configured_cors(monkeypatch):
+    from backend.functions.connector.index import lambda_handler as connector
+    from backend.functions.history.index import lambda_handler as history
+    monkeypatch.setenv("FRONTEND_ORIGIN", "https://satibot.id.vn")
+    for handler in (chat.handle, connector, history):
+        response = handler({"headers": {"Authorization": "mock-admin"},
+                            "user_id": "alice", "body": "{}"}, None)
+        assert response["statusCode"] == 401
+        assert response["headers"]["Access-Control-Allow-Origin"] == "https://satibot.id.vn"

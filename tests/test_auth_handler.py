@@ -101,8 +101,8 @@ def test_post_confirmation_admin_assignment_via_admin_emails(mock_get_db, mock_p
 
 @patch("backend.functions.auth_handler.index.put_db_item")
 @patch("backend.functions.auth_handler.index.get_db_item")
-def test_post_confirmation_admin_assignment_via_custom_role(mock_get_db, mock_put_db):
-    """Kiểm tra gán role 'admin' khi Cognito user có custom:role='admin'."""
+def test_post_confirmation_custom_role_cannot_assign_admin(mock_get_db, mock_put_db):
+    """A self-supplied custom role cannot elevate a registered user."""
     mock_get_db.return_value = None
     mock_put_db.return_value = True
 
@@ -111,7 +111,7 @@ def test_post_confirmation_admin_assignment_via_custom_role(mock_get_db, mock_pu
 
     assert res == event
     saved_item = mock_put_db.call_args[1]["item"]
-    assert saved_item["role"] == "admin"
+    assert saved_item["role"] == "user"
 
 
 # ==============================================================================
@@ -175,3 +175,19 @@ def test_lambda_handler_catches_all_exceptions(mock_handle):
 
     # Vẫn trả về event an toàn
     assert res == event
+
+@patch("backend.functions.auth_handler.index.ADMIN_EMAILS", ["admin@example.com"])
+@patch("backend.functions.auth_handler.index.put_db_item", return_value=True)
+@patch("backend.functions.auth_handler.index.get_db_item", return_value=None)
+def test_unverified_allowlisted_email_cannot_provision_admin(get_item, put_item):
+    event = _make_cognito_event(email="admin@example.com")
+    event["request"]["userAttributes"]["email_verified"] = "false"
+    lambda_handler(event, None)
+    assert put_item.call_args.kwargs["item"]["role"] == "user"
+
+
+@patch("backend.functions.auth_handler.index.put_db_item", return_value=False)
+@patch("backend.functions.auth_handler.index.get_db_item", return_value=None)
+def test_profile_write_failure_is_visible(get_item, put_item, caplog):
+    lambda_handler(_make_cognito_event(email="user@example.com"), None)
+    assert "UserProfileProvisioningFailed" in caplog.text

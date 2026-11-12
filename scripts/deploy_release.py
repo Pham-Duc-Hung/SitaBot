@@ -37,6 +37,33 @@ def outputs(path, stack):
     return values
 
 
+def integration_outputs(path):
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    if "SatiBotIntegration" in data:
+        return outputs(path, "SatiBotIntegration")
+    result = {}
+    for stack, keys in {
+        "AuthStack": ("UserPoolId", "UserPoolClientId"),
+        "CoreApiStack": ("ApiEndpointUrl", "ApiGatewaySourceArn", "FrontendOrigin"),
+        "AppSyncStack": ("AppSyncApiArn", "AppSyncGraphqlUrl"),
+    }.items():
+        values = outputs(path, stack)
+        for key in keys:
+            try:
+                result[key] = required(values, key)
+            except RuntimeError as exc:
+                raise RuntimeError(f"{stack}: {exc}") from None
+    return result
+
+
+def record_outputs(stack, values):
+    path = ROOT / "dist" / "release-outputs.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    existing = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    existing[stack] = values
+    path.write_text(json.dumps(existing, indent=2), encoding="utf-8")
+
+
 def required(values, key):
     value = values.get(key)
     if not isinstance(value, str) or not value:
@@ -71,6 +98,7 @@ def deploy(app, stack, params, output_file, env, *, cdk_out=None):
         stack,
         "--require-approval",
         "never",
+        "--exclusively",
         "--outputs-file",
         str(output_file),
     ]
@@ -81,7 +109,9 @@ def deploy(app, stack, params, output_file, env, *, cdk_out=None):
             raise ValueError(f"Missing deployment parameter: {key}")
         cmd.extend(["--parameters", f"{key}={value}"])
     run(*cmd, env=env)
-    return outputs(output_file, stack)
+    values = outputs(output_file, stack)
+    record_outputs(stack, values)
+    return values
 
 
 def existing_backend(client):
@@ -126,6 +156,10 @@ def main():
                        help="Deploy backend aliases before the integration owner creates their stack")
     phase.add_argument("--integration-outputs", type=Path,
                        help="CDK outputs JSON from the integration stack managed by teammates")
+    phase.add_argument("--deploy-integrations", action="store_true",
+                       help="Deploy Auth/API/AppSync using backend aliases and activate the release")
+    parser.add_argument("--frontend-origin",
+                        help="Exact frontend origin for Gateway and Lambda CORS")
     parser.add_argument(
         "--execute",
         action="store_true",
@@ -140,7 +174,12 @@ def main():
         parser.error("Add --execute after reviewing the target AWS profile/account")
     integration = None
     if args.integration_outputs:
-        integration = outputs(args.integration_outputs, "SatiBotIntegration")
+        integration = integration_outputs(args.integration_outputs)
+
+    if (args.deploy_integrations or args.integration_outputs) and not args.frontend_origin:
+        parser.error("Activation requires --frontend-origin")
+    if args.frontend_origin and not re.fullmatch(r"https?://[A-Za-z0-9.-]+(:[0-9]+)?", args.frontend_origin):
+        parser.error("--frontend-origin must be an exact HTTP(S) origin")
 
     bin_dir = str(Path(sys.executable).parent)
     env = {
@@ -165,6 +204,8 @@ def main():
         parser.error("Gemini secret ARN must be in the selected account and region")
     if integration is not None:
         validate_integration_outputs(integration, actual_account, args.region)
+        if integration.get("FrontendOrigin", args.frontend_origin) != args.frontend_origin:
+            raise ValueError("FrontendOrigin must match CoreApiStack")
 
     foundation_app = f'"{sys.executable}" infrastructure/app.py'
     backend_app = f'"{sys.executable}" infrastructure/backend_app.py'
@@ -209,7 +250,13 @@ def main():
             env=env,
         )
         data = outputs(output_file, "DataStack")
+        record_outputs("DataStack", data)
         roles = outputs(output_file, "IamStack")
+        record_outputs("IamStack", roles)
+        aliases = {
+            item["OutputKey"]: item["OutputValue"]
+            for item in (previous or {}).get("Outputs", [])
+        }
         backend_params = {
             "ConnectionsTableName": required(data, "AwsConnectionsTableName"),
             "HistoryTableName": required(data, "ActionHistoryTableName"),
@@ -232,7 +279,7 @@ def main():
                 },
                 require_integrations=False,
             )["Parameters"]
-            deploy(
+            aliases = deploy(
                 backend_app,
                 "SatiBotBackend",
                 {k: v for k, v in bootstrap_cfg.items() if v != ""},
@@ -242,7 +289,21 @@ def main():
             )
 
         if args.bootstrap_only:
+            record_outputs("SatiBotBackend", aliases)
+            print(json.dumps({"SatiBotBackend": aliases}, indent=2))
             return
+        if args.deploy_integrations:
+            deploy(foundation_app, "AuthStack", {}, output_file, env,
+                   cdk_out="dist/foundation.out")
+            deploy(foundation_app, "CoreApiStack", {
+                **{f"{name.title()}LiveAliasArn": required(aliases, f"{name.title()}LiveAliasArn")
+                   for name in ("chatbot", "connector", "history")},
+                "FrontendOrigin": args.frontend_origin,
+            }, output_file, env, cdk_out="dist/foundation.out")
+            deploy(foundation_app, "AppSyncStack", {}, output_file, env,
+                   cdk_out="dist/foundation.out")
+            integration = integration_outputs(ROOT / "dist" / "release-outputs.json")
+            validate_integration_outputs(integration, actual_account, args.region)
         release_input = {
             **backend_params,
             # Bootstrap has no functioning workflow; do not canary traffic back to it.
@@ -251,6 +312,7 @@ def main():
             "AppSyncApiArn": required(integration, "AppSyncApiArn"),
             "ApiGatewaySourceArn": required(integration, "ApiGatewaySourceArn"),
             "GrantIntegrationPermissions": "true",
+            "FrontendOrigin": args.frontend_origin,
         }
         release_cfg = build_configuration(
             backend_template,
@@ -267,7 +329,7 @@ def main():
         )
         print(
             json.dumps(
-                {key: integration[key] for key in ("UserPoolId", "UserPoolClientId", "HttpApiUrl", "AppSyncGraphqlUrl") if key in integration},
+                {key: integration[key] for key in ("UserPoolId", "UserPoolClientId", "ApiEndpointUrl", "AppSyncGraphqlUrl") if key in integration},
                 indent=2,
             )
         )

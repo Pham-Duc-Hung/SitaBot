@@ -77,7 +77,7 @@ def test_release_bootstraps_only_new_stack(monkeypatch, tmp_path, already_active
     integration_file = tmp_path / "integration.json"
     integration_file.write_text(json.dumps({"SatiBotIntegration": integration}))
     phase = ["--integration-outputs", str(integration_file)] if already_active else ["--bootstrap-only"]
-    monkeypatch.setattr(sys, "argv", ["deploy_release", "--expected-account-id", "123456789012", "--gemini-secret-arn", "arn:aws:secretsmanager:ap-southeast-1:123456789012:secret:gemini", "--codedeploy-role-arn", "arn:aws:iam::123456789012:role/CodeDeploy", *phase, "--execute"])
+    monkeypatch.setattr(sys, "argv", ["deploy_release", "--expected-account-id", "123456789012", "--gemini-secret-arn", "arn:aws:secretsmanager:ap-southeast-1:123456789012:secret:gemini", "--codedeploy-role-arn", "arn:aws:iam::123456789012:role/CodeDeploy", *phase, "--frontend-origin", "https://satibot.id.vn", "--execute"])
     release.main()
     calls = deploy.call_args_list
     assert [c.args[1] for c in calls] == ["SatiBotBackend"]
@@ -128,7 +128,8 @@ def test_release_checks_external_outputs_before_any_aws_change(monkeypatch, tmp_
         "deploy_release", "--expected-account-id", "123456789012",
         "--gemini-secret-arn", "arn:aws:secretsmanager:ap-southeast-1:123456789012:secret:gemini",
         "--codedeploy-role-arn", "arn:aws:iam::123456789012:role/CodeDeploy",
-        "--integration-outputs", str(integration_file), "--execute",
+        "--integration-outputs", str(integration_file),
+        "--frontend-origin", "https://satibot.id.vn", "--execute",
     ])
     with pytest.raises(RuntimeError, match="AppSyncApiArn"):
         release.main()
@@ -148,3 +149,87 @@ def test_release_rejects_integration_outputs_from_another_account_or_region():
         wrong[key] = wrong[key].replace("123456789012", "999999999999").replace("ap-southeast-1", "us-east-1")
         with pytest.raises(ValueError, match=key):
             validate_integration_outputs(wrong, "123456789012", "ap-southeast-1")
+
+@pytest.mark.parametrize("already_active", [False, True])
+def test_release_deploys_integrations_using_real_stack_outputs(monkeypatch, tmp_path, already_active):
+    import json
+    import sys
+    from scripts import deploy_release as release
+
+    account = "123456789012"
+    root = tmp_path / "dist/cdk.out"
+    root.mkdir(parents=True)
+    definitions = {key: {} for key in RELEASE_REQUIRED}
+    definitions.update(
+        FrontendOrigin={"Default": ""},
+        AppSyncGraphqlUrl={"Default": ""}, AppSyncApiArn={"Default": ""},
+        ApiGatewaySourceArn={"Default": ""},
+        CanaryDeploymentConfig={"AllowedValues": ["CodeDeployDefault.LambdaCanary10Percent5Minutes"]},
+        ChatbotRoleName={"Default": ""}, FormatterRoleName={"Default": ""},
+        GrantIntegrationPermissions={"Default": "false"},
+    )
+    (root / "SatiBotBackend.template.json").write_text(json.dumps({"Parameters": definitions}))
+    aliases = {f"{name.title()}LiveAliasArn":
+               f"arn:aws:lambda:ap-southeast-1:{account}:function:physical-{name}:live"
+               for name in release.FUNCTIONS}
+    fixture = {
+        "DataStack": {key: key for key in ("AwsConnectionsTableName", "ActionHistoryTableName",
+                                           "SessionStateTableName", "PendingActionTableName")},
+        "IamStack": {f"{name.title()}RoleArn": f"arn:aws:iam::{account}:role/{name}"
+                     for name in release.FUNCTIONS},
+        "SatiBotBackend": aliases,
+        "AuthStack": {"UserPoolId": "ap-southeast-1_demo", "UserPoolClientId": "client"},
+        "CoreApiStack": {"ApiEndpointUrl": "https://api123.execute-api.ap-southeast-1.amazonaws.com/prod/",
+                         "ApiGatewaySourceArn": f"arn:aws:execute-api:ap-southeast-1:{account}:api123/prod/*/*",
+                         "FrontendOrigin": "https://satibot.id.vn"},
+        "AppSyncStack": {"AppSyncApiArn": f"arn:aws:appsync:ap-southeast-1:{account}:apis/abc123",
+                         "AppSyncGraphqlUrl": "https://abc123.appsync-api.ap-southeast-1.amazonaws.com/graphql"},
+    }
+    prior = {"StackStatus": "UPDATE_COMPLETE", "Outputs": [
+        {"OutputKey": key, "OutputValue": value} for key, value in aliases.items()],
+        "Parameters": [{"ParameterKey": "GrantIntegrationPermissions", "ParameterValue": "true"}]}
+    monkeypatch.setattr(release, "ROOT", tmp_path)
+    monkeypatch.setattr(release, "existing_backend", lambda client: prior if already_active else None)
+    session = Mock()
+    session.client.return_value.get_caller_identity.return_value = {"Account": account}
+    monkeypatch.setattr(release.boto3, "Session", Mock(return_value=session))
+    commands = []
+
+    def run(*args, env):
+        commands.append(args)
+        if args[:2] == ("cdk", "deploy"):
+            path = args[args.index("--outputs-file") + 1]
+            stacks = [stack for stack in fixture if stack in args]
+            Path(path).write_text(json.dumps({stack: fixture[stack] for stack in stacks}))
+    from pathlib import Path
+    monkeypatch.setattr(release, "run", run)
+    monkeypatch.setattr(sys, "argv", [
+        "deploy_release", "--expected-account-id", account,
+        "--gemini-secret-arn", f"arn:aws:secretsmanager:ap-southeast-1:{account}:secret:gemini",
+        "--codedeploy-role-arn", f"arn:aws:iam::{account}:role/CodeDeploy",
+        "--deploy-integrations", "--frontend-origin", "https://satibot.id.vn", "--execute"])
+    release.main()
+    deploys = [cmd for cmd in commands if cmd[:2] == ("cdk", "deploy")]
+    names = [next(stack for stack in fixture if stack in cmd) for cmd in deploys]
+    expected = ["DataStack"] + ([] if already_active else ["SatiBotBackend"])
+    assert names == expected + ["AuthStack", "CoreApiStack", "AppSyncStack", "SatiBotBackend"]
+    core = next(cmd for cmd in deploys if "CoreApiStack" in cmd)
+    for name in ("Chatbot", "Connector", "History"):
+        assert f"{name}LiveAliasArn={aliases[name + 'LiveAliasArn']}" in core
+    assert "GrantIntegrationPermissions=true" in deploys[-1]
+    assert "FrontendOrigin=https://satibot.id.vn" in deploys[-1]
+    assert ("CanaryDeploymentConfig=CodeDeployDefault.LambdaCanary10Percent5Minutes"
+            if already_active else "CanaryDeploymentConfig=CodeDeployDefault.LambdaAllAtOnce") in deploys[-1]
+    saved = json.loads((tmp_path / "dist/release-outputs.json").read_text())
+    assert saved["CoreApiStack"] == fixture["CoreApiStack"]
+    assert saved["AppSyncStack"] == fixture["AppSyncStack"]
+
+
+def test_missing_real_stack_output_names_the_stack(tmp_path):
+    import json
+    from scripts.deploy_release import integration_outputs
+    path = tmp_path / "outputs.json"
+    path.write_text(json.dumps({"AuthStack": {"UserPoolId": "pool", "UserPoolClientId": "client"},
+                               "CoreApiStack": {"ApiEndpointUrl": "url"}}))
+    with pytest.raises(RuntimeError, match="CoreApiStack.*ApiGatewaySourceArn"):
+        integration_outputs(path)

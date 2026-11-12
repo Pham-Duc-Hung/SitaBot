@@ -12,6 +12,7 @@ from stacks.data_stack import DataStack
 from stacks.dns_failover_stack import DnsFailoverStack
 from stacks.iam_stack import IamStack
 from stacks.monitoring_stack import MonitoringStack
+from stacks.appsync_stack import AppSyncStack
 
 app = cdk.App()
 region = os.environ.get("PRIMARY_REGION", "ap-southeast-1")
@@ -61,5 +62,12 @@ dns_failover_stack = DnsFailoverStack(
 # 6. Các Stack bổ trợ
 AiStack(app, "AiStack", env=target_env)
 MonitoringStack(app, "MonitoringStack", env=target_env)
+
+AppSyncStack(
+    app,
+    "AppSyncStack",
+    user_pool=auth_stack.user_pool,
+    env=target_env,
+)
 
 app.synth()

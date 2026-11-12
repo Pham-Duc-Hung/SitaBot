@@ -1,10 +1,16 @@
 """Template-level tests for the Sprint 2 infrastructure stacks."""
 
 import json
+import zipfile
+import pytest
+import subprocess
+from pathlib import Path
 
-from aws_cdk import App
+from aws_cdk import App, Environment, Stack, aws_lambda as lambda_
 from aws_cdk.assertions import Template
+from aws_cdk import aws_cognito as cognito
 
+from infrastructure.stacks.appsync_stack import AppSyncStack
 from infrastructure.stacks.data_stack import DataStack
 from infrastructure.stacks.iam_stack import IamStack
 from infrastructure.stacks.auth_stack import AuthStack
@@ -19,6 +25,121 @@ TABLE_CONFIG = {
     "SatiBot-PendingAction": ("action_id", None, True, False),
     "SatiBot-ActionHistory": ("user_id", "created_at", False, True),
 }
+
+
+def _synth_appsync():
+    stack = AppSyncStack(
+        App(), "AppSyncStack", env=Environment(region="ap-southeast-1")
+    )
+    return Template.from_stack(stack)
+
+
+def test_appsync_auth_modes():
+    template = _synth_appsync()
+    template.resource_count_is("AWS::AppSync::ApiKey", 0)
+    template.has_resource_properties("AWS::AppSync::GraphQLApi", {
+        "AuthenticationType": "AMAZON_COGNITO_USER_POOLS",
+        "UserPoolConfig": {
+            "UserPoolId": {"Ref": "UserPoolId"},
+            "AwsRegion": "ap-southeast-1",
+            "DefaultAction": "ALLOW",
+        },
+        "AdditionalAuthenticationProviders": [{"AuthenticationType": "AWS_IAM"}],
+    })
+    parameter = template.to_json()["Parameters"]["UserPoolId"]
+    assert "Default" not in parameter
+    assert parameter["Type"] == "String"
+
+
+def test_appsync_resolver_bindings():
+    template = _synth_appsync()
+    graphql = Path(__file__).resolve().parents[1] / "backend" / "graphql"
+    template.resource_count_is("AWS::AppSync::Resolver", 2)
+    sources = template.find_resources("AWS::AppSync::DataSource")
+    assert len(sources) == 1
+    source_id, source = next(iter(sources.items()))
+    assert source["Properties"]["Type"] == "NONE"
+    api_id = source["Properties"]["ApiId"]
+    for type_name, field, filename in (
+        ("Mutation", "publishActionResult", "publish.js"),
+        ("Subscription", "onActionResult", "subscribe.js"),
+    ):
+        template.has_resource_properties("AWS::AppSync::Resolver", {
+            "ApiId": api_id,
+            "TypeName": type_name,
+            "FieldName": field,
+            "DataSourceName": source["Properties"]["Name"],
+            "Runtime": {"Name": "APPSYNC_JS", "RuntimeVersion": "1.0.0"},
+            "Code": (graphql / filename).read_text(encoding="utf-8"),
+        })
+    template.has_resource_properties("AWS::AppSync::GraphQLSchema", {
+        "ApiId": api_id,
+        "Definition": (graphql / "schema.graphql").read_bytes().decode("utf-8"),
+    })
+    schema_id = next(iter(template.find_resources("AWS::AppSync::GraphQLSchema")))
+    for resolver in template.find_resources("AWS::AppSync::Resolver").values():
+        assert {source_id, schema_id} <= set(resolver["DependsOn"])
+
+
+def test_appsync_backend_outputs():
+    template = _synth_appsync()
+    api_id = next(iter(template.find_resources("AWS::AppSync::GraphQLApi")))
+    outputs = template.to_json()["Outputs"]
+    assert outputs["AppSyncApiArn"]["Value"] == {"Fn::GetAtt": [api_id, "Arn"]}
+    assert outputs["AppSyncGraphqlUrl"]["Value"] == {
+        "Fn::GetAtt": [api_id, "GraphQLUrl"]
+    }
+
+
+def test_appsync_accepts_cognito_construct_without_pool_id_parameter():
+    app = App()
+    auth = Stack(app, "Auth", env=Environment(region="ap-southeast-1"))
+    pool = cognito.UserPool(auth, "Users")
+    stack = AppSyncStack(
+        app, "AppSync", user_pool=pool,
+        env=Environment(region="ap-southeast-1"),
+    )
+    template = Template.from_stack(stack).to_json()
+    assert "UserPoolId" not in template.get("Parameters", {})
+    api = next(
+        resource for resource in template["Resources"].values()
+        if resource["Type"] == "AWS::AppSync::GraphQLApi"
+    )
+    assert "Fn::ImportValue" in api["Properties"]["UserPoolConfig"]["UserPoolId"]
+
+
+def test_appsync_subscription_filter_isolates_users_and_sessions():
+    """Run the existing JS resolver with mocked AppSync utilities, without AWS."""
+    script = r"""
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const vm = require('node:vm');
+const source = fs.readFileSync(process.argv[1], 'utf8')
+  .replace(/^import .* from '@aws-appsync\/utils';\r?\n/m, '')
+  .replace(/export function /g, 'function ');
+let filter;
+const context = vm.createContext({
+  extensions: { setSubscriptionFilter(value) { filter = JSON.parse(JSON.stringify(value)); } },
+  util: {
+    unauthorized() { throw new Error('Unauthorized'); },
+    transform: { toSubscriptionFilter(value) { return value; } }
+  }
+});
+vm.runInContext(source, context);
+for (const [user, session] of [['alice', 'shared'], ['bob', 'shared'], ['alice', 'other']]) {
+  const event = { identity: { sub: user }, args: { session_id: session } };
+  context.request(event);
+  context.response(event);
+  assert.deepEqual(filter, { user_id: { eq: user }, session_id: { eq: session } });
+}
+assert.throws(() => context.request({ args: { session_id: 'shared' } }), /Unauthorized/);
+assert.throws(() => context.request({ identity: {}, args: {} }), /Unauthorized/);
+"""
+    resolver = Path(__file__).resolve().parents[1] / "backend/graphql/subscribe.js"
+    subprocess.run(
+        ["node", "-e", script, str(resolver)],
+        check=True, capture_output=True, text=True,
+    )
 
 
 def _synth_stacks(*, secret_arn=None):
@@ -155,12 +276,12 @@ def test_llm_secret_read_permission_is_added_only_when_secret_arn_is_configured(
     assert "satibot/llm-key-AbCdEf" in configured
 
 
-def test_auth_stack_defines_cognito_user_pool_client_and_groups():
+def test_auth_stack_defines_cognito_user_pool_client_and_groups(auth_code):
     """Verify AuthStack creates UserPool, SPA client without secret, and admin/user groups."""
     app = App()
     data_stack = DataStack(app, "DataStack")
     iam_stack = IamStack(app, "IamStack", data_stack=data_stack)
-    auth_stack = AuthStack(app, "AuthStack", data_stack=data_stack, iam_stack=iam_stack)
+    auth_stack = AuthStack(app, "AuthStack", data_stack=data_stack, iam_stack=iam_stack, post_confirmation_code=auth_code)
     template = Template.from_stack(auth_stack)
 
     # 1. User Pool
@@ -190,12 +311,12 @@ def test_auth_stack_defines_cognito_user_pool_client_and_groups():
     assert auth_lambda["Properties"]["Runtime"] == "python3.12"
 
 
-def test_core_api_stack_defines_rest_api_cognito_authorizer_and_routes():
+def test_core_api_stack_defines_rest_api_cognito_authorizer_and_routes(auth_code):
     """Verify CoreApiStack defines RestApi, Cognito Authorizer, 6 business routes and /health mock."""
     app = App()
     data_stack = DataStack(app, "DataStack")
     iam_stack = IamStack(app, "IamStack", data_stack=data_stack)
-    auth_stack = AuthStack(app, "AuthStack", data_stack=data_stack, iam_stack=iam_stack)
+    auth_stack = AuthStack(app, "AuthStack", data_stack=data_stack, iam_stack=iam_stack, post_confirmation_code=auth_code)
     core_api_stack = CoreApiStack(app, "CoreApiStack", auth_stack=auth_stack)
     template = Template.from_stack(core_api_stack)
 
@@ -221,12 +342,12 @@ def test_core_api_stack_defines_rest_api_cognito_authorizer_and_routes():
     assert "GET" in http_methods
 
 
-def test_dns_failover_stack_defines_hosted_zone_acm_and_failover_records():
+def test_dns_failover_stack_defines_hosted_zone_acm_and_failover_records(auth_code):
     """Verify DnsFailoverStack creates HostedZone, Wildcard ACM cert, /health HealthCheck, and Failover routing."""
     app = App()
     data_stack = DataStack(app, "DataStack")
     iam_stack = IamStack(app, "IamStack", data_stack=data_stack)
-    auth_stack = AuthStack(app, "AuthStack", data_stack=data_stack, iam_stack=iam_stack)
+    auth_stack = AuthStack(app, "AuthStack", data_stack=data_stack, iam_stack=iam_stack, post_confirmation_code=auth_code)
     core_api_stack = CoreApiStack(app, "CoreApiStack", auth_stack=auth_stack)
     dns_stack = DnsFailoverStack(app, "DnsFailoverStack", core_api_stack=core_api_stack)
     template = Template.from_stack(dns_stack)
@@ -264,3 +385,66 @@ def test_dns_failover_stack_defines_hosted_zone_acm_and_failover_records():
     failover_types = {r["Properties"].get("Failover") for r in record_sets.values()}
     assert "PRIMARY" in failover_types
     assert "SECONDARY" in failover_types
+
+
+@pytest.fixture
+def auth_code(tmp_path_factory):
+    from scripts.package_backend import source_entries, _write_deterministic_entry
+    artifact = tmp_path_factory.mktemp("auth-code") / "auth_handler.zip"
+    with zipfile.ZipFile(artifact, "w") as archive:
+        for name, (payload, mode) in sorted(source_entries("auth_handler").items()):
+            _write_deterministic_entry(archive, name, payload, mode)
+    return lambda_.Code.from_asset(str(artifact))
+
+
+def test_real_auth_appsync_and_api_contract(auth_code):
+    app = App()
+    env = Environment(region="ap-southeast-1")
+    data = DataStack(app, "Data", env=env)
+    roles = IamStack(app, "Roles", data_stack=data, env=env)
+    auth = AuthStack(app, "Auth", data_stack=data, iam_stack=roles,
+                     post_confirmation_code=auth_code, env=env)
+    sync = AppSyncStack(app, "Sync", user_pool=auth.user_pool, env=env)
+    api = CoreApiStack(app, "Api", auth_stack=auth, env=env)
+    assembly = app.synth()
+    auth_template = assembly.get_stack_by_name(auth.stack_name).template
+    clients = [r["Properties"] for r in auth_template["Resources"].values()
+               if r["Type"] == "AWS::Cognito::UserPoolClient"]
+    assert set(clients[0]["WriteAttributes"]) == {"email", "name"}
+    sync_template = assembly.get_stack_by_name(sync.stack_name).template
+    assert "UserPoolId" not in sync_template.get("Parameters", {})
+    api_template = assembly.get_stack_by_name(api.stack_name).template
+    resources = api_template["Resources"]
+    paths = {}
+    def path_for(resource_id):
+        resource = resources[resource_id]["Properties"]
+        parent = resource["ParentId"]
+        prefix = path_for(parent["Ref"]) if "Ref" in parent else ""
+        return prefix + "/" + resource["PathPart"]
+    for key, resource in resources.items():
+        if resource["Type"] == "AWS::ApiGateway::Resource":
+            paths[key] = path_for(key)
+    expected = {("POST", "/chat"): "ChatbotLiveAliasArn",
+                ("POST", "/confirm"): "ChatbotLiveAliasArn",
+                ("GET", "/connections"): "ConnectorLiveAliasArn",
+                ("POST", "/connections/external-id"): "ConnectorLiveAliasArn",
+                ("POST", "/connections/verify"): "ConnectorLiveAliasArn",
+                ("GET", "/history"): "HistoryLiveAliasArn"}
+    found = {}
+    for resource in resources.values():
+        if resource["Type"] != "AWS::ApiGateway::Method":
+            continue
+        props = resource["Properties"]
+        resource_id = props["ResourceId"].get("Ref")
+        if resource_id not in paths:
+            continue
+        route = (props["HttpMethod"], paths[resource_id])
+        if route in expected:
+            assert props["AuthorizationType"] == "COGNITO_USER_POOLS"
+            assert expected[route] in json.dumps(props["Integration"]["Uri"])
+            found[route] = expected[route]
+    assert found == expected
+    assert "/prod/" in json.dumps(api_template["Outputs"]["ApiGatewaySourceArn"])
+    assert not Template.from_stack(api).find_resources("AWS::Lambda::Permission")
+    for response in Template.from_stack(api).find_resources("AWS::ApiGateway::GatewayResponse").values():
+        assert "FrontendOrigin" in json.dumps(response["Properties"]["ResponseParameters"])

@@ -61,9 +61,8 @@ def handle_post_confirmation(event: Dict[str, Any]) -> Dict[str, Any]:
         logger.warning("Không tìm thấy user_id hoặc sub trong sự kiện Cognito, hủy tạo bản ghi.")
         return event
 
-    # Xác định vai trò (Role): Nếu nằm trong whitelist ADMIN_EMAILS hoặc có custom:role='admin'
-    custom_role = user_attributes.get("custom:role", "").strip().lower()
-    if email in ADMIN_EMAILS or custom_role == "admin":
+    # Admin profile provisioning requires a verified, backend-allowlisted email.
+    if email_verified and email in ADMIN_EMAILS:
         assigned_role = "admin"
     else:
         assigned_role = "user"
@@ -98,7 +97,9 @@ def handle_post_confirmation(event: Dict[str, Any]) -> Dict[str, Any]:
     if success:
         logger.info(f"Đã tạo thành công bản ghi User profile: {user_id} - Role: {assigned_role} - Email: {email}")
     else:
-        logger.warning(f"Không thể ghi bản ghi User profile cho user {user_id} vào bảng {USERS_TABLE_NAME}")
+        # A concurrent confirmation may already have created this profile.
+        if not get_db_item(USERS_TABLE_NAME, {"user_id": user_id}):
+            logger.error("UserProfileProvisioningFailed user_id=%s table=%s", user_id, USERS_TABLE_NAME)
 
     return event
 

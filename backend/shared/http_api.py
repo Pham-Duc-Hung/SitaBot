@@ -5,11 +5,16 @@ Author: Trịnh Thiên Quang
 
 import base64
 import json
+import os
 from decimal import Decimal
 
 
 def response(code, data):
-    return {"statusCode": code, "headers": {"Content-Type": "application/json"},
+    headers = {"Content-Type": "application/json"}
+    origin = os.environ.get("FRONTEND_ORIGIN", "")
+    if origin:
+        headers["Access-Control-Allow-Origin"] = origin
+    return {"statusCode": code, "headers": headers,
             "body": json.dumps(data, ensure_ascii=False, default=lambda x: float(x) if isinstance(x, Decimal) else str(x))}
 
 

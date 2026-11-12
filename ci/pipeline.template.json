@@ -75,6 +75,11 @@
       "Type": "String",
       "Default": ""
     },
+    "FrontendOrigin": {
+      "Type": "String",
+      "AllowedPattern": "https?://[A-Za-z0-9.-]+(:[0-9]+)?",
+      "Description": "Exact frontend origin matching CoreApiStack"
+    },
     "GrantIntegrationPermissions": {
       "Type": "String",
       "Default": "true",
@@ -252,6 +257,12 @@
               "Name": "PARAM_ApiGatewaySourceArn",
               "Value": {
                 "Ref": "ApiGatewaySourceArn"
+              }
+            },
+            {
+              "Name": "PARAM_FrontendOrigin",
+              "Value": {
+                "Ref": "FrontendOrigin"
               }
             },
             {

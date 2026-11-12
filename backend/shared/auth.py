@@ -125,8 +125,7 @@ def verify_token(token: str) -> Dict[str, Any]:
     if isinstance(groups, str):
         groups = [groups]
 
-    custom_role = payload.get("custom:role")
-    if "admin" in groups or custom_role == "admin":
+    if "admin" in groups:
         role = "admin"
     else:
         role = "user"
@@ -221,8 +220,7 @@ def extract_user_from_event(event: Dict[str, Any]) -> Dict[str, Any]:
         if isinstance(groups, str):
             groups = [groups]
 
-        custom_role = claims.get("custom:role")
-        role = "admin" if ("admin" in groups or custom_role == "admin") else "user"
+        role = "admin" if "admin" in groups else "user"
 
         return {
             "is_authenticated": True,

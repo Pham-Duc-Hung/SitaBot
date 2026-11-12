@@ -14,7 +14,7 @@ import urllib.request
 import boto3
 from botocore.config import Config
 from backend.shared.cloud_errors import BackendError
-from backend.shared.runtime import cached_boto_client, is_access_denied, redact_sensitive
+from backend.shared.runtime import cached_boto_client, is_access_denied, sanitize_model_data
 from backend.shared.http_api import reject_constant
 
 _SECRET_CACHE = {}
@@ -56,7 +56,7 @@ def complete(messages, tools=None, model=None):
     if selected_model not in SUPPORTED_MODELS:
         raise BackendError("InvalidModel", "Model Gemini không được hỗ trợ.", 400)
     payload = {"model": selected_model,
-               "messages": redact_sensitive(messages),
+               "messages": sanitize_model_data(messages),
                "max_tokens": 2048}
     if tools:
         payload.update(tools=tools, tool_choice="auto", parallel_tool_calls=False)

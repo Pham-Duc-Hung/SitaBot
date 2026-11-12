@@ -46,13 +46,13 @@ class AuthStack(Stack):
         data_stack: Optional[DataStack] = None,
         iam_stack: Optional[IamStack] = None,
         admin_emails: Optional[str] = None,
+        post_confirmation_code: Optional[lambda_.Code] = None,
         **kwargs,
     ) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
         root = Path(__file__).resolve().parents[2]
-        backend_dir = root / "backend"
-        zip_path = root / "dist" / "backend" / "auth_post_confirmation.zip"
+        zip_path = root / "dist" / "backend" / "auth_handler.zip"
 
         # 1. Lambda Post-Confirmation Execution Role
         if iam_stack and "auth_post_confirmation" in getattr(iam_stack, "roles", {}):
@@ -90,11 +90,11 @@ class AuthStack(Stack):
             else "SatiBot-Users"
         )
 
-        lambda_code = (
-            lambda_.Code.from_asset(str(zip_path))
-            if zip_path.exists()
-            else lambda_.Code.from_asset(str(backend_dir))
-        )
+        if post_confirmation_code is None and not zip_path.is_file():
+            raise FileNotFoundError(
+                "Missing dist/backend/auth_handler.zip. Run python scripts/package_backend.py --with-dependencies."
+            )
+        lambda_code = post_confirmation_code or lambda_.Code.from_asset(str(zip_path))
 
         self.post_confirmation_fn = lambda_.Function(
             self,
@@ -108,7 +108,7 @@ class AuthStack(Stack):
             memory_size=256,
             environment={
                 "USERS_TABLE_NAME": users_table_name,
-                "ADMIN_EMAILS": admin_emails or "duchuy@uet.vnu.edu.vn,caoanhminh@uet.vnu.edu.vn",
+                "ADMIN_EMAILS": admin_emails or os.environ.get("ADMIN_EMAILS", ""),
             },
             description="Triggered after Cognito ConfirmSignUp to provision user profile in DynamoDB",
         )
@@ -149,6 +149,9 @@ class AuthStack(Stack):
             "WebUserPoolClient",
             user_pool_client_name="SatiBot-WebClient",
             generate_secret=False,
+            write_attributes=cognito.ClientAttributes().with_standard_attributes(
+                email=True, fullname=True,
+            ),
             auth_flows=cognito.AuthFlow(
                 user_password=True,
                 user_srp=True,

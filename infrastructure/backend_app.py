@@ -157,6 +157,10 @@ codedeploy_role = iam.Role.from_role_arn(
 codedeploy_app = codedeploy.LambdaApplication(stack, "BackendCodeDeployApplication")
 cdk.CfnOutput(stack, "CodeDeployApplicationName", value=codedeploy_app.application_name)
 
+frontend_origin = cdk.CfnParameter(
+    stack, "FrontendOrigin", type="String", default="",
+    allowed_pattern=r"^$|https?://[A-Za-z0-9.-]+(:[0-9]+)?",
+)
 live_aliases = {}
 for name in FUNCTIONS:
     title = name.title()
@@ -179,6 +183,8 @@ for name in FUNCTIONS:
         "SATIBOT_CONFIGURATION_VERSION": config_version.value_as_string,
         "SATIBOT_CONFIG_VERSION": config_version.value_as_string,
     }
+    if name in HTTP_FUNCTIONS:
+        environment["FRONTEND_ORIGIN"] = frontend_origin.value_as_string
     if name == "connector":
         environment["AWS_CONNECTIONS_TABLE"] = connections.value_as_string
         environment["SATIBOT_CONNECTOR_ROLE_ARN"] = role_arns["connector"]

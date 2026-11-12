@@ -7,6 +7,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import sys
 import time
 from typing import Any, Callable, Dict, Optional
@@ -287,3 +288,22 @@ def runtime_cache_stats() -> Dict[str, int]:
 def platform_fault_counts() -> Dict[str, int]:
     """Return recorded platform fault counts keyed by '<function>:<error_code>'."""
     return dict(_FAULT_COUNTS)
+
+
+def sanitize_model_data(value):
+    """Remove signed links from model input without changing the public result."""
+    value = redact_sensitive(value)
+    if isinstance(value, dict):
+        return {key: sanitize_model_data(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [sanitize_model_data(item) for item in value]
+    if isinstance(value, str):
+        return re.sub(
+            r'https?://[^\s<>"\\]+',
+            lambda match: "[signed URL withheld]" if re.search(
+                r"x-amz-(signature|credential|security-token)=|[?&]signature=",
+                match.group(), re.IGNORECASE,
+            ) else match.group(),
+            value,
+        )
+    return value
