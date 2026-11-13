@@ -99,11 +99,34 @@ def _validate_python_source(code_content: str, handler: str, filename: str) -> O
         return "HandlerNotFound", f"Không tìm thấy hàm handler '{handler_name}' trong mã nguồn."
 
     unsupported = set()
+    defined_names = {
+        node.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del))
+    }
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            defined_names.add(node.name)
+        elif isinstance(node, ast.arg):
+            defined_names.add(node.arg)
+        elif isinstance(node, ast.ExceptHandler) and isinstance(node.name, str):
+            defined_names.add(node.name)
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            for alias in node.names:
+                defined_names.add((alias.asname or alias.name).split(".", 1)[0])
+
+    json_literal_map = {"true": "True", "false": "False", "null": "None"}
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             unsupported.update(alias.name.split(".", 1)[0] for alias in node.names)
         elif isinstance(node, ast.ImportFrom) and node.module:
             unsupported.add(node.module.split(".", 1)[0])
+        elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
+            if node.id in json_literal_map and node.id not in defined_names:
+                return (
+                    "PythonSyntaxError",
+                    f"Mã nguồn Python dùng hằng số JSON '{node.id}' chưa định nghĩa; hãy dùng '{json_literal_map[node.id]}' của Python.",
+                )
         elif isinstance(node, ast.Call):
             if isinstance(node.func, ast.Name) and node.func.id in {"eval", "exec", "compile", "__import__"}:
                 return "UnsafePythonCode", f"Không cho phép gọi {node.func.id} trong code được deploy tự động."
@@ -138,24 +161,28 @@ class LambdaService:
             region_name=region_name,
             retries={"max_attempts": 3, "mode": "standard"},
             connect_timeout=10,
-            read_timeout=60,
+            read_timeout=25,
             max_pool_connections=25,
         )
 
         if boto3_session is not None:
             self.session = boto3_session
+            self.client = self.session.client("lambda", config=retry_config)
         elif aws_access_key_id and aws_secret_access_key:
-            self.session = boto3.Session(
+            self.session = None
+            self.client = boto3.client(
+                "lambda",
+                region_name=region_name,
                 aws_access_key_id=aws_access_key_id,
                 aws_secret_access_key=aws_secret_access_key,
                 aws_session_token=aws_session_token,
-                region_name=region_name,
+                config=retry_config,
             )
         else:
-            self.session = boto3.Session(region_name=region_name)
+            self.session = None
+            self.client = boto3.client("lambda", region_name=region_name, config=retry_config)
 
         self.region_name = region_name
-        self.client = self.session.client("lambda", config=retry_config)
 
     @classmethod
     def from_assumed_role(
@@ -1310,7 +1337,10 @@ class LambdaService:
             except ClientError as concurrency_error:
                 code = concurrency_error.response.get("Error", {}).get("Code")
                 message = concurrency_error.response.get("Error", {}).get("Message", "")
-                if code == "InvalidParameterValueException" and "UnreservedConcurrentExecution" in message:
+                if (
+                    (code == "InvalidParameterValueException" and ("UnreservedConcurrentExecution" in message or "minimum value" in message))
+                    or code == "LimitExceededException"
+                ):
                     warnings.append(
                         "Không đặt reserved concurrency vì quota tài khoản phải giữ tối thiểu 10 unreserved executions."
                     )
@@ -1645,6 +1675,7 @@ LAMBDA_TOOL_SCHEMAS = [
 # =============================================================================
 # HÀM ENTRYPOINT CỦA DISPATCHER DÀNH CHO LAMBDA_SERVICE (CÓ GLOBAL CONTEXT CACHE)
 # =============================================================================
+_MAX_LAMBDA_SERVICE_CACHE_ENTRIES = 8
 _GLOBAL_LAMBDA_SERVICE_CACHE: Dict[str, "LambdaService"] = {}
 
 
@@ -1688,6 +1719,9 @@ def get_cached_lambda_service(
         return _GLOBAL_LAMBDA_SERVICE_CACHE[cache_key]
 
     service = _create_lambda_service(credentials, region)
+    if len(_GLOBAL_LAMBDA_SERVICE_CACHE) >= _MAX_LAMBDA_SERVICE_CACHE_ENTRIES:
+        oldest_key = next(iter(_GLOBAL_LAMBDA_SERVICE_CACHE))
+        _GLOBAL_LAMBDA_SERVICE_CACHE.pop(oldest_key, None)
     _GLOBAL_LAMBDA_SERVICE_CACHE[cache_key] = service
     return service
 

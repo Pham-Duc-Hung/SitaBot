@@ -121,21 +121,23 @@ def deploy(app, stack, params, output_file, env, *, cdk_out=None, context=None):
     return values
 
 
-def existing_backend(client):
+def existing_backend(client, stack_name="SatiBotBackend"):
     """Reuse deployed aliases; never reset a functioning release to bootstrap."""
     try:
-        stack = client.describe_stacks(StackName="SatiBotBackend")["Stacks"][0]
+        stack = client.describe_stacks(StackName=stack_name)["Stacks"][0]
     except ClientError as exc:
         error = exc.response["Error"]
         if error["Code"] == "ValidationError" and "does not exist" in error.get("Message", ""):
-            try:
-                client.describe_stacks(StackName="SatiBotBackendSprint2")
-            except ClientError as legacy_error:
-                detail = legacy_error.response["Error"]
-                if detail["Code"] == "ValidationError" and "does not exist" in detail.get("Message", ""):
-                    return None
-                raise
-            raise RuntimeError("Legacy SatiBotBackendSprint2 exists. Review stack migration before creating SatiBotBackend.")
+            if stack_name == "SatiBotBackend":
+                try:
+                    client.describe_stacks(StackName="SatiBotBackendSprint2")
+                except ClientError as legacy_error:
+                    detail = legacy_error.response["Error"]
+                    if detail["Code"] == "ValidationError" and "does not exist" in detail.get("Message", ""):
+                        return None
+                    raise
+                raise RuntimeError("Legacy SatiBotBackendSprint2 exists. Review stack migration before creating SatiBotBackend.")
+            return None
         raise
     if stack["StackStatus"] not in {"CREATE_COMPLETE", "UPDATE_COMPLETE", "UPDATE_ROLLBACK_COMPLETE"}:
         raise RuntimeError(f"Resolve backend stack status before deployment: {stack['StackStatus']}")
@@ -145,6 +147,11 @@ def existing_backend(client):
 def main():
     parser = argparse.ArgumentParser(description="Package, validate and deploy the SatiBot backend release.")
     parser.add_argument("--profile", help="AWS CLI profile used by SDK and CDK")
+    parser.add_argument(
+        "--backend-stack-name",
+        default="SatiBotBackend",
+        help="Target CloudFormation backend stack name (e.g. SatiBotBackend or SatiBotBackendSprint2)",
+    )
     parser.add_argument("--gemini-secret-arn", required=True)
     parser.add_argument(
         "--expected-account-id",
@@ -236,7 +243,10 @@ def main():
     allowed = backend_template["Parameters"]["CanaryDeploymentConfig"]["AllowedValues"]
     if args.canary_config not in allowed:
         parser.error(f"Unsupported canary configuration: {args.canary_config}")
-    previous = existing_backend(session.client("cloudformation"))
+    try:
+        previous = existing_backend(session.client("cloudformation"), args.backend_stack_name)
+    except TypeError:
+        previous = existing_backend(session.client("cloudformation"))
     if args.integration_outputs and previous is None:
         raise RuntimeError("Bootstrap SatiBotBackend first, then deploy the integration stack and rerun with its outputs")
     activated = previous is not None and any(
@@ -293,7 +303,7 @@ def main():
             )["Parameters"]
             aliases = deploy(
                 backend_app,
-                "SatiBotBackend",
+                args.backend_stack_name,
                 {k: v for k, v in bootstrap_cfg.items() if v != ""},
                 output_file,
                 env,
@@ -301,8 +311,8 @@ def main():
             )
 
         if args.bootstrap_only:
-            record_outputs("SatiBotBackend", aliases)
-            print(json.dumps({"SatiBotBackend": aliases}, indent=2))
+            record_outputs(args.backend_stack_name, aliases)
+            print(json.dumps({args.backend_stack_name: aliases}, indent=2))
             return
         if args.deploy_integrations:
             auth = deploy(foundation_app, "AuthStack", {
@@ -336,7 +346,7 @@ def main():
         )["Parameters"]
         deploy(
             backend_app,
-            "SatiBotBackend",
+            args.backend_stack_name,
             {k: v for k, v in release_cfg.items() if v != ""},
             output_file,
             env,

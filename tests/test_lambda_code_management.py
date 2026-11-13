@@ -48,6 +48,16 @@ class TestLambdaCodeManagement(unittest.TestCase):
         self.assertEqual(res["error_code"], "PythonSyntaxError")
         self.service.client.create_function.assert_not_called()
 
+    def test_create_lambda_function_rejects_unbound_json_literals(self):
+        bad_code = "def lambda_handler(event, context):\n    return {'ok': true, 'error': null}"
+        res = self.service.create_lambda_function(
+            "json-literal-func", bad_code, role_arn="arn:aws:iam::12345:role/sample-role"
+        )
+        self.assertEqual(res["status"], "ERROR")
+        self.assertEqual(res["error_code"], "PythonSyntaxError")
+        self.assertIn("True", res["message"])
+        self.service.client.create_function.assert_not_called()
+
     def test_create_lambda_function_does_not_guess_execution_role(self):
         good_code = "def lambda_handler(event, context):\n    return {'statusCode': 200}"
         res = self.service.create_lambda_function("safe-func", good_code)

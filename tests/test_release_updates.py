@@ -41,6 +41,14 @@ def test_legacy_stack_requires_migration_instead_of_duplicate_backend():
     assert client.describe_stacks.call_args.kwargs["StackName"] == "SatiBotBackendSprint2"
 
 
+def test_explicit_sprint2_stack_name_reuses_deployed_backend():
+    stack = {"StackStatus": "UPDATE_COMPLETE", "Outputs": [{"OutputKey": "ChatbotLiveAliasArn", "OutputValue": "alias"}]}
+    client = Mock()
+    client.describe_stacks.return_value = {"Stacks": [stack]}
+    assert existing_backend(client, stack_name="SatiBotBackendSprint2") == stack
+    assert client.describe_stacks.call_args.kwargs["StackName"] == "SatiBotBackendSprint2"
+
+
 @pytest.mark.parametrize("already_active", [False, True])
 def test_release_bootstraps_only_new_stack(monkeypatch, tmp_path, already_active):
     import json

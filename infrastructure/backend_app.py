@@ -226,7 +226,7 @@ for name in FUNCTIONS:
         role=role,
         code=lambda_.Code.from_asset(str(zip_path)),
         timeout=cdk.Duration.seconds(60 if name in {"chatbot", "dispatcher"} else 30),
-        memory_size=256,
+        memory_size=512 if name == "dispatcher" else 256,
         environment=environment,
         current_version_options=lambda_.VersionOptions(
             removal_policy=cdk.RemovalPolicy.RETAIN,
