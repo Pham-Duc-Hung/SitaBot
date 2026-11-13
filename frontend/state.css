@@ -130,6 +130,26 @@ textarea:disabled {
   display: none;
 }
 
+.auth-button-icon {
+  flex-shrink: 0;
+}
+
+.sidebar.collapsed .connection-nav-button {
+  width: 38px;
+  height: 38px;
+  margin: 8px auto;
+  padding: 0;
+  justify-content: center;
+}
+
+.sidebar.collapsed .auth-button-label {
+  display: none;
+}
+
+.sidebar.collapsed .auth-message {
+  display: none;
+}
+
 .auth-message {
   color: #fbbf24;
   font-size: 0.8rem;

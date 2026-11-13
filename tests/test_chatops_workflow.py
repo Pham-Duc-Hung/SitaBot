@@ -86,11 +86,12 @@ def test_chat_persists_intent_and_ignores_client_identity_history_credentials(cl
 def test_cloud_chat_validates_and_passes_selected_model(cloud, monkeypatch):
     model = Mock(return_value={"content": "Xin chào"})
     monkeypatch.setattr(chat.gemini, "complete", model)
-    ok = chat.handle(request({"message": "hi", "model": "gemini-3.7-flash"}), None)
+    ok = chat.handle(request({"message": "hi", "model": "gemini-3.8-flash"}), None)
     assert ok["statusCode"] == 200
-    assert model.call_args.kwargs["model"] == "gemini-3.7-flash"
-    rejected = chat.handle(request({"message": "hi", "model": "gemini-2.5-flash"}), None)
+    assert model.call_args.kwargs["model"] == "gemini-3.8-flash"
+    rejected = chat.handle(request({"message": "hi", "model": "gemini-3.7-flash"}), None)
     assert rejected["statusCode"] == 400
+    assert chat.handle(request({"message": "hi", "model": "gemini-3.6-flash"}), None)["statusCode"] == 400
     assert model.call_count == 1
 
 

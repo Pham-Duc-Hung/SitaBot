@@ -20,7 +20,7 @@ from backend.shared.http_api import reject_constant
 _SECRET_CACHE = {}
 _SM_CONFIG = Config(connect_timeout=2, read_timeout=2, retries={"total_max_attempts": 2})
 ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
-SUPPORTED_MODELS = ("gemini-3.5-flash-lite", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash")
+SUPPORTED_MODELS = ("gemini-3.5-flash-lite", "gemini-3.8-flash")
 REQUEST_TIMEOUT_SECONDS = 8
 _LOGGER = logging.getLogger(__name__)
 

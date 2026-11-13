@@ -37,7 +37,10 @@
         </div>
       </div>
 
-      <button type="button" class="connection-nav-button" id="authButton" hidden>Đăng nhập SatiBot</button>
+      <button type="button" class="connection-nav-button" id="authButton" title="Đăng nhập SatiBot" aria-label="Đăng nhập SatiBot" hidden>
+        <svg class="auth-button-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 17l5-5-5-5"></path><path d="M15 12H3"></path><path d="M12 3h6a3 3 0 0 1 3 3v12a3 3 0 0 1-3 3h-6"></path></svg>
+        <span class="auth-button-label">Đăng nhập SatiBot</span>
+      </button>
       <p class="auth-message" id="authMessage" role="status" aria-live="polite"></p>
       <button type="button" class="connection-nav-button" id="awsConnectionOpen" aria-haspopup="dialog" aria-controls="awsConnectionDialog">
         <span aria-hidden="true">☁</span>
@@ -120,12 +123,6 @@
                   </div>
                   <div class="model-option" data-value="gemini-3.8-flash" role="option" tabindex="0">
                     <span class="model-option-name">gemini-3.8-flash</span>
-                    <svg class="model-check-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                      <polyline points="20 6 9 17 4 12"></polyline>
-                    </svg>
-                  </div>
-                  <div class="model-option" data-value="gemini-3.7-flash" role="option" tabindex="0">
-                    <span class="model-option-name">gemini-3.7-flash</span>
                     <svg class="model-check-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                       <polyline points="20 6 9 17 4 12"></polyline>
                     </svg>
