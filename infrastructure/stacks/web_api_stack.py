@@ -1,6 +1,6 @@
 """Authenticated HTTP routes between the website and the live backend aliases."""
 
-from aws_cdk import Aws, CfnOutput, CfnParameter, Fn, Stack
+from aws_cdk import Aws, CfnOutput, CfnParameter, Duration, Fn, Stack
 from aws_cdk import aws_apigatewayv2 as apigwv2
 from aws_cdk import aws_lambda as lambda_
 from constructs import Construct
@@ -59,6 +59,8 @@ class WebApiStack(Stack):
             self, "HealthFunction",
             runtime=lambda_.Runtime.PYTHON_3_12,
             handler="index.lambda_handler",
+            memory_size=256,
+            timeout=Duration.seconds(15),
             code=lambda_.Code.from_inline(
                 "import json\nimport os\n"
                 "def lambda_handler(event, context):\n"

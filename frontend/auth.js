@@ -71,7 +71,12 @@ export function createBrowserAuth({ win = window, fetchImpl = fetch } = {}) {
   function refreshButton() {
     if (!button) return;
     button.hidden = !config;
-    button.textContent = getStoredToken() ? "Đăng xuất SatiBot" : "Đăng nhập SatiBot";
+    const label = getStoredToken() ? "Đăng xuất SatiBot" : "Đăng nhập SatiBot";
+    const labelElement = button.querySelector?.(".auth-button-label");
+    if (labelElement) labelElement.textContent = label;
+    else button.textContent = label;
+    button.title = label;
+    button.setAttribute?.("aria-label", label);
   }
 
   async function handleCallback() {
@@ -114,6 +119,7 @@ export function createBrowserAuth({ win = window, fetchImpl = fetch } = {}) {
     try {
       const response = await fetchImpl("/site-config.json", { cache: "no-store" });
       if (!response.ok) return;
+      if (response.headers?.get?.("content-type")?.includes("text/html")) return;
       const siteConfig = await response.json();
       if (!siteConfig.auth) return;
       config = siteConfig.auth;

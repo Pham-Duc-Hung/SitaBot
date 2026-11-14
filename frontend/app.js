@@ -11,7 +11,7 @@ import { createAppSyncSubscription, mergeActionResult } from "./appsync.js";
 const $ = s => document.querySelector(s);
 const $$ = s => document.querySelectorAll(s);
 
-const VALID_MODELS = ["gemini-3.5-flash-lite", "gemini-3.8-flash", "gemini-3.7-flash"];
+const VALID_MODELS = ["gemini-3.5-flash-lite", "gemini-3.8-flash"];
 const initialModel = localStorage.getItem("satibot.model");
 
 const state = {

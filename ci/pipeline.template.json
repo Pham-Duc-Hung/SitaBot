@@ -7,19 +7,24 @@
       "Default": ""
     },
     "RepositoryId": {
-      "Type": "String"
+      "Type": "String",
+      "Default": "TrinhThienQuang/SitaBot"
     },
     "PipelineRoleArn": {
-      "Type": "String"
+      "Type": "String",
+      "Default": ""
     },
     "BuildRoleArn": {
-      "Type": "String"
+      "Type": "String",
+      "Default": ""
     },
     "CloudFormationExecutionRoleArn": {
-      "Type": "String"
+      "Type": "String",
+      "Default": "arn:aws:iam::789425597559:role/cdk-hnb659fds-cfn-exec-role-789425597559-ap-southeast-1"
     },
     "ArtifactBucket": {
-      "Type": "String"
+      "Type": "String",
+      "Default": "cdk-hnb659fds-assets-789425597559-ap-southeast-1"
     },
     "Branch": {
       "Type": "String",
@@ -31,7 +36,7 @@
     },
     "BackendStackName": {
       "Type": "String",
-      "Default": "SatiBotBackend"
+      "Default": "SatiBotBackendSprint2"
     },
     "BackendChangeSetName": {
       "Type": "String",
@@ -46,16 +51,20 @@
       "Default": "CodeDeployDefault.LambdaCanary10Percent5Minutes"
     },
     "ConnectionsTableName": {
-      "Type": "String"
+      "Type": "String",
+      "Default": "SatiBot-AwsConnections"
     },
     "HistoryTableName": {
-      "Type": "String"
+      "Type": "String",
+      "Default": "SatiBot-ActionHistory"
     },
     "SessionStateTableName": {
-      "Type": "String"
+      "Type": "String",
+      "Default": "SatiBot-SessionState"
     },
     "PendingActionTableName": {
-      "Type": "String"
+      "Type": "String",
+      "Default": "SatiBot-PendingAction"
     },
     "GeminiSecretArn": {
       "Type": "String",
@@ -65,18 +74,19 @@
     },
     "AppSyncGraphqlUrl": {
       "Type": "String",
-      "Default": ""
+      "Default": "https://3d7ef2bfnrgv5ebv3ca5cadkbu.appsync-api.ap-southeast-1.amazonaws.com/graphql"
     },
     "AppSyncApiArn": {
       "Type": "String",
-      "Default": ""
+      "Default": "arn:aws:appsync:ap-southeast-1:789425597559:apis/psmswy64qvba5pkfse2iuh44dm"
     },
     "ApiGatewaySourceArn": {
       "Type": "String",
-      "Default": ""
+      "Default": "arn:aws:execute-api:ap-southeast-1:789425597559:nbpr08jzuh/prod/*/*"
     },
     "FrontendOrigin": {
       "Type": "String",
+      "Default": "https://satibot.id.vn",
       "AllowedPattern": "https?://[A-Za-z0-9.-]+(:[0-9]+)?",
       "Description": "Exact frontend origin matching CoreApiStack"
     },
@@ -89,22 +99,28 @@
       ]
     },
     "ChatbotRoleArn": {
-      "Type": "String"
+      "Type": "String",
+      "Default": "arn:aws:iam::789425597559:role/SatiBot-Chatbot-ExecutionRole"
     },
     "DispatcherRoleArn": {
-      "Type": "String"
+      "Type": "String",
+      "Default": "arn:aws:iam::789425597559:role/SatiBot-Dispatcher-ExecutionRole"
     },
     "FormatterRoleArn": {
-      "Type": "String"
+      "Type": "String",
+      "Default": "arn:aws:iam::789425597559:role/SatiBot-Formatter-ExecutionRole"
     },
     "ConnectorRoleArn": {
-      "Type": "String"
+      "Type": "String",
+      "Default": "arn:aws:iam::789425597559:role/SatiBot-Connector-ExecutionRole"
     },
     "HistoryRoleArn": {
-      "Type": "String"
+      "Type": "String",
+      "Default": "arn:aws:iam::789425597559:role/SatiBot-History-ExecutionRole"
     },
     "CodeDeployRoleArn": {
-      "Type": "String"
+      "Type": "String",
+      "Default": "arn:aws:iam::789425597559:role/SatiBot-CodeDeploy-LambdaRole"
     },
     "ChatbotAlarmName": {
       "Type": "String",
@@ -136,6 +152,22 @@
         ""
       ]
     },
+    "CreatePipelineRole": {
+      "Fn::Equals": [
+        {
+          "Ref": "PipelineRoleArn"
+        },
+        ""
+      ]
+    },
+    "CreateBuildRole": {
+      "Fn::Equals": [
+        {
+          "Ref": "BuildRoleArn"
+        },
+        ""
+      ]
+    },
     "HasApprovalNotificationTopic": {
       "Fn::Not": [
         {
@@ -158,11 +190,187 @@
       },
       "Condition": "CreateConnection"
     },
+    "DefaultBuildRole": {
+      "Type": "AWS::IAM::Role",
+      "Condition": "CreateBuildRole",
+      "Properties": {
+        "RoleName": "SatiBot-CodeBuild-ServiceRole",
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "codebuild.amazonaws.com"
+              },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        },
+        "Policies": [
+          {
+            "PolicyName": "SatiBotCodeBuildPolicy",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "logs:CreateLogGroup",
+                    "logs:CreateLogStream",
+                    "logs:PutLogEvents"
+                  ],
+                  "Resource": "*"
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:GetObject",
+                    "s3:GetObjectVersion",
+                    "s3:PutObject",
+                    "s3:GetBucketLocation",
+                    "s3:ListBucket"
+                  ],
+                  "Resource": [
+                    {
+                      "Fn::Sub": "arn:aws:s3:::${ArtifactBucket}"
+                    },
+                    {
+                      "Fn::Sub": "arn:aws:s3:::${ArtifactBucket}/*"
+                    }
+                  ]
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "sts:AssumeRole"
+                  ],
+                  "Resource": [
+                    {
+                      "Fn::Sub": "arn:aws:iam::${AWS::AccountId}:role/cdk-hnb659fds-*"
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "DefaultPipelineRole": {
+      "Type": "AWS::IAM::Role",
+      "Condition": "CreatePipelineRole",
+      "Properties": {
+        "RoleName": "SatiBot-CodePipeline-ServiceRole",
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "codepipeline.amazonaws.com"
+              },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        },
+        "Policies": [
+          {
+            "PolicyName": "SatiBotCodePipelinePolicy",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:GetObject",
+                    "s3:GetObjectVersion",
+                    "s3:PutObject",
+                    "s3:GetBucketVersioning",
+                    "s3:ListBucket"
+                  ],
+                  "Resource": [
+                    {
+                      "Fn::Sub": "arn:aws:s3:::${ArtifactBucket}"
+                    },
+                    {
+                      "Fn::Sub": "arn:aws:s3:::${ArtifactBucket}/*"
+                    }
+                  ]
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "codestar-connections:UseConnection",
+                    "codeconnections:UseConnection"
+                  ],
+                  "Resource": "*"
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "codebuild:BatchGetBuilds",
+                    "codebuild:StartBuild"
+                  ],
+                  "Resource": [
+                    {
+                      "Fn::GetAtt": [
+                        "Build",
+                        "Arn"
+                      ]
+                    },
+                    {
+                      "Fn::GetAtt": [
+                        "PublishAssets",
+                        "Arn"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "cloudformation:DescribeStacks",
+                    "cloudformation:CreateChangeSet",
+                    "cloudformation:DescribeChangeSet",
+                    "cloudformation:ExecuteChangeSet",
+                    "cloudformation:DeleteChangeSet"
+                  ],
+                  "Resource": "*"
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "iam:PassRole"
+                  ],
+                  "Resource": [
+                    {
+                      "Ref": "CloudFormationExecutionRoleArn"
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
     "Build": {
       "Type": "AWS::CodeBuild::Project",
       "Properties": {
         "ServiceRole": {
-          "Ref": "BuildRoleArn"
+          "Fn::If": [
+            "CreateBuildRole",
+            {
+              "Fn::GetAtt": [
+                "DefaultBuildRole",
+                "Arn"
+              ]
+            },
+            {
+              "Ref": "BuildRoleArn"
+            }
+          ]
         },
         "Artifacts": {
           "Type": "CODEPIPELINE"
@@ -193,7 +401,18 @@
       "Type": "AWS::CodeBuild::Project",
       "Properties": {
         "ServiceRole": {
-          "Ref": "BuildRoleArn"
+          "Fn::If": [
+            "CreateBuildRole",
+            {
+              "Fn::GetAtt": [
+                "DefaultBuildRole",
+                "Arn"
+              ]
+            },
+            {
+              "Ref": "BuildRoleArn"
+            }
+          ]
         },
         "Artifacts": {
           "Type": "CODEPIPELINE"
@@ -358,7 +577,18 @@
       "Type": "AWS::CodePipeline::Pipeline",
       "Properties": {
         "RoleArn": {
-          "Ref": "PipelineRoleArn"
+          "Fn::If": [
+            "CreatePipelineRole",
+            {
+              "Fn::GetAtt": [
+                "DefaultPipelineRole",
+                "Arn"
+              ]
+            },
+            {
+              "Ref": "PipelineRoleArn"
+            }
+          ]
         },
         "ArtifactStore": {
           "Type": "S3",

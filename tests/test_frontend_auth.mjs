@@ -22,7 +22,15 @@ test("Cognito callback verifies state, clears URL code and stores ID token for A
   const changes = [];
   const payload = Buffer.from(JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 3600 })).toString("base64url");
   const idToken = `header.${payload}.signature`;
-  const button = { hidden: true, textContent: "", addEventListener() {} };
+  const label = { textContent: "Đăng nhập SatiBot" };
+  const button = {
+    hidden: true,
+    title: "",
+    attributes: {},
+    querySelector: selector => selector === ".auth-button-label" ? label : null,
+    setAttribute(name, value) { this.attributes[name] = value; },
+    addEventListener() {}
+  };
   const win = {
     document: { getElementById: id => id === "authButton" ? button : null },
     location: {
@@ -49,8 +57,27 @@ test("Cognito callback verifies state, clears URL code and stores ID token for A
   assert.equal(await auth.getIdToken(), idToken);
   assert.deepEqual(changes, ["/"]);
   assert.equal(new URLSearchParams(requests[1].options.body).get("code_verifier"), "secret-verifier");
-  assert.equal(button.textContent, "Đăng xuất SatiBot");
+  assert.equal(label.textContent, "Đăng xuất SatiBot");
+  assert.equal(button.attributes["aria-label"], "Đăng xuất SatiBot");
   assert.equal(values.has("satibot.auth.flow"), false);
+});
+
+test("local Vite HTML fallback does not display a JSON parsing error", async () => {
+  const button = { hidden: true, addEventListener() {} };
+  const message = { textContent: "" };
+  const win = {
+    document: { getElementById: id => ({ authButton: button, authMessage: message })[id] },
+    location: { search: "" },
+    sessionStorage: { getItem: () => null, removeItem() {} }
+  };
+  const auth = createBrowserAuth({ win, fetchImpl: async () => ({
+    ok: true,
+    headers: { get: () => "text/html; charset=utf-8" },
+    json: async () => { throw new Error("Unexpected token '<'"); }
+  }) });
+  assert.equal(await auth.getIdToken(), null);
+  assert.equal(button.hidden, true);
+  assert.equal(message.textContent, "");
 });
 
 
