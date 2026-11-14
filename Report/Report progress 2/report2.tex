@@ -101,14 +101,14 @@
 % ===== 5. THÔNG TIN TRANG BÌA =====
 \newcommand{\DonViChuQuan}{ĐẠI HỌC QUỐC GIA HÀ NỘI}
 \newcommand{\TenTruong}{TRƯỜNG ĐẠI HỌC CÔNG NGHỆ}
-\newcommand{\LoaiBaoCao}{BÁO CÁO TIẾN ĐỘ DỰ ÁN 2}
+\newcommand{\LoaiBaoCao}{BÁO CÁO CUỐI KỲ}
 \newcommand{\TenMonHoc}{ĐIỆN TOÁN ĐÁM MÂY}
 \newcommand{\TenDeTai}{SatiBot -- Quản lý và tương tác với các tài nguyên AWS bằng ngôn ngữ tự nhiên}
 \newcommand{\GiangVien}{TS. Hoàng Xuân Tùng}
 \newcommand{\SoNhom}{Nhóm 10}
 \newcommand{\LopMonHoc}{INT3319 1}
-\newcommand{\DiaDiemThoiGian}{Hà Nội, Tháng 10/2026}
-\hypersetup{pdftitle={BÁO CÁO TIẾN ĐỘ DỰ ÁN 2 - SATIBOT},pdfauthor={Nhóm 10}}
+\newcommand{\DiaDiemThoiGian}{Hà Nội, Tháng 11/2026}
+\hypersetup{pdftitle={BÁO CÁO CUỐI KỲ - SATIBOT},pdfauthor={Nhóm 10}}
 
 \begin{document}
 
@@ -185,7 +185,7 @@
 
 % ===== 8. NỘI DUNG BÁO CÁO =====
 
-\section{TỔNG QUAN VỀ DỰ ÁN \textit{(không thay đổi)}}
+\section{TỔNG QUAN VỀ DỰ ÁN}
 
 \subsection{Giới thiệu chung về tính năng dự án}
 
@@ -203,7 +203,7 @@ Hệ thống SatiBot hướng tới 03 nhóm người dùng chính với nhu c�
   \item \textbf{Quản lý kỹ thuật và chủ dự án (Tech Leads / Project Managers):} Cần theo dõi nhanh tình trạng hoạt động của tài nguyên, kiểm tra phân quyền (IAM Audit) và kiểm soát chi phí sử dụng hàng tháng (FinOps) bằng ngôn ngữ tự nhiên mà không cần thành thạo cú pháp dòng lệnh AWS CLI.
 \end{itemize}
 
-\subsection{Cách thức và quy trình người dùng sử dụng sản phẩm để đạt mục đích}
+\subsection{Các dịch vụ AWS được hỗ trợ trong dự án}
 
 \begingroup
 \setlist{topsep=2pt,itemsep=1pt,parsep=0pt,leftmargin=*}
@@ -211,194 +211,140 @@ Hệ thống SatiBot hướng tới 03 nhóm người dùng chính với nhu c�
 
 Để đáp ứng nhu cầu quản trị hạ tầng cơ bản, SatiBot hỗ trợ 04 dịch vụ chính của AWS gồm: Amazon EC2, Amazon S3, AWS IAM và AWS Lambda. Dưới đây là chi tiết về mục đích và quy trình tương tác thực tế của người dùng đối với từng nhóm tính năng của 04 dịch vụ AWS nòng cốt.
 
-\subsubsection{Nhóm kịch bản và quy trình quản trị Amazon EC2}
+\subsubsection{Nhóm kịch bản Amazon EC2}
 
 Dịch vụ máy chủ ảo (Amazon Elastic Compute Cloud - EC2) là hạ tầng phục vụ việc triển khai và chạy ứng dụng. SatiBot hỗ trợ 05 quy trình quản lý trạng thái và cấu hình máy ảo như sau:
 
 \begin{enumerate}
   \item \textbf{Khởi tạo máy chủ chuẩn hóa và xử lý trùng lặp tên:}
-  \begin{itemize}
-    \item \textit{Mục đích:} Tạo nhanh máy ảo để thử nghiệm hoặc triển khai website mà không phải cấu hình thủ công nhiều bước, đồng thời xử lý trường hợp tên máy bị trùng.
-    \item \textit{Quy trình người dùng:} 
-    \begin{itemize}
-      \item Nhắn yêu cầu tạo máy kèm mục đích sử dụng (ví dụ: "Tạo cho tôi một máy chủ Ubuntu để chạy web demo, mở cổng SSH và HTTP").
-      \item Nếu tên máy đã tồn tại, hệ thống đưa ra 3 lựa chọn: tiếp tục sử dụng máy cũ, đổi tên máy mới hoặc xóa máy cũ để tạo lại.
-      \item Nhận mã máy chủ và trạng thái khởi tạo (pending); tra cứu chi tiết sau khi máy chạy để xem địa chỉ IP. Khi cần SSH, sử dụng Key Pair đã có trong region đích và giữ file khóa riêng tại máy người dùng.
-    \end{itemize}
-  \end{itemize}
+
+Tạo nhanh máy ảo để thử nghiệm hoặc triển khai website mà không phải cấu hình thủ công nhiều bước, đồng thời xử lý trường hợp tên máy bị trùng.
 
   \item \textbf{Kiểm soát chi phí và xử lý vượt hạn mức tài nguyên (Cost Guardrails \& Quota):}
-  \begin{itemize}
-    \item \textit{Mục đích:} Tránh việc chọn nhầm máy cấu hình cao gây phát sinh chi phí lớn, đồng thời hướng dẫn cách xử lý khi tài khoản chạm ngưỡng hạn mức tạo máy ảo (vCPU quota).
-    \item \textit{Quy trình người dùng:}
-    \begin{itemize}
-      \item Nhắn yêu cầu loại máy mong muốn (ví dụ: \textit{''Tạo máy ảo c5.4xlarge 16 vCPU''} hoặc \textit{''Tạo thêm 1 máy ảo Ubuntu''}).
-      \item Xem phản hồi từ hệ thống:
-      \begin{itemize}
-        \item \textit{Nếu yêu cầu máy cấu hình cao, chi phí lớn:} Hệ thống cảnh báo chi phí ước tính hàng tháng, tạm dừng thao tác và yêu cầu người dùng xác nhận nếu vẫn muốn tiếp tục khởi tạo.
-        \item \textit{Nếu tài khoản chạm giới hạn vCPU:} Hệ thống giải thích nguyên nhân và liệt kê danh sách các máy ảo đang chạy để người dùng cân nhắc tắt bớt máy không dùng.
-      \end{itemize}
-      \item Người dùng chọn phương án: chuyển về gói miễn phí (Free Tier), tắt bớt máy cũ hoặc gửi yêu cầu nâng hạn mức lên AWS.
-    \end{itemize}
-  \end{itemize}
+
+Tránh việc chọn nhầm máy cấu hình cao gây phát sinh chi phí lớn, đồng thời hướng dẫn cách xử lý khi tài khoản chạm ngưỡng hạn mức tạo máy ảo (vCPU quota).
+  
 
   \item \textbf{Tra cứu và điều khiển vòng đời máy chủ (Bật / Tắt / Khởi động lại / Xóa):}
-  \begin{itemize}
-    \item \textit{Mục đích:} Theo dõi danh sách máy ảo và điều khiển trạng thái bật/tắt kịp thời nhằm tránh lãng phí tài nguyên và kiểm soát chi phí vận hành.
-    \item \textit{Quy trình người dùng:}
-    \begin{itemize}
-      \item Nhắn câu lệnh tra cứu hoặc điều khiển (ví dụ: \textit{''Liệt kê các máy ảo đang chạy''}, \textit{''Tắt máy ảo web-demo''}, \textit{''Khởi động lại máy i-0abc123''}, \textit{''Xóa máy ảo staging''}).
-      \item Xem bảng thông tin gồm ID, tên máy, trạng thái, IP công khai và thời gian chạy; nhận thông báo trạng thái cập nhật (kèm IP mới khi bật lại máy).
-      \item Với thao tác xóa: Hệ thống cảnh báo mất dữ liệu và yêu cầu người dùng gõ xác nhận trước khi thực hiện xóa máy.
-    \end{itemize}
-  \end{itemize}
+
+  Theo dõi danh sách máy ảo và điều khiển trạng thái bật/tắt kịp thời nhằm tránh lãng phí tài nguyên và kiểm soát chi phí vận hành.
 
   \item \textbf{Giám sát hiệu năng và phát hiện máy chủ lãng phí (FinOps \& CloudWatch):}
-  \begin{itemize}
-    \item \textit{Mục đích:} Theo dõi mức độ sử dụng tài nguyên để tắt các máy nhàn rỗi nhằm tiết kiệm chi phí, hoặc nhận biết máy bị quá tải để kịp thời nâng cấp.
-    \item \textit{Quy trình người dùng:}
-    \begin{itemize}
-      \item Nhắn câu hỏi kiểm tra (ví dụ: \textit{''Kiểm tra CPU máy i-0abc123 trong 24 giờ qua''}).
-      \item Nhận số liệu đánh giá chi tiết:
-      \begin{itemize}
-        \item \textit{Cảnh báo lãng phí:} Nếu máy chạy không tải kéo dài, hệ thống đưa ra gợi ý tắt máy để tiết kiệm chi phí.
-        \item \textit{Cảnh báo nghẽn tải:} Nếu mức sử dụng CPU liên tục ở mức cao, hệ thống cảnh báo quá tải và gợi ý nâng cấp loại máy.
-      \end{itemize}
-      \item Người dùng nhắn đồng ý nếu muốn hệ thống tự động xử lý theo khuyến nghị.
-    \end{itemize}
-  \end{itemize}
+
+Theo dõi mức độ sử dụng tài nguyên để tắt các máy nhàn rỗi nhằm tiết kiệm chi phí, hoặc nhận biết máy bị quá tải để kịp thời nâng cấp.
 
   \item \textbf{Thiết lập tường lửa an toàn và hỗ trợ sự cố kết nối (SecOps):}
-  \begin{itemize}
-    \item \textit{Mục đích:} Bảo vệ máy chủ khỏi nguy cơ bị quét dò mật khẩu từ Internet (brute-force attack) và hỗ trợ chẩn đoán nhanh nguyên nhân khi không kết nối SSH được vào máy ảo.
-    \item \textit{Quy trình người dùng:}
-    \begin{itemize}
-      \item Người dùng gửi yêu cầu mở cổng hoặc hỏi nguyên nhân sự cố (ví dụ: \textit{''Mở port 22 cho mọi người truy cập''} hoặc \textit{''Tôi không SSH được vào máy ảo i-0abc123, sao vậy?''}).
-      \item \textit{Kiểm tra an toàn tường lửa:} Hệ thống từ chối mở port 22 cho toàn bộ dải mạng công khai (0.0.0.0/0), giải thích nguy cơ bị tấn công dò quét và gợi ý chỉ mở riêng cho địa chỉ IP hiện tại của người dùng.
-      \item \textit{Chẩn đoán kết nối:} Nếu phát hiện người dùng mất file khóa SSH (.pem), hệ thống giải thích nguyên nhân và hướng dẫn sử dụng các kênh truy cập thay thế (như AWS Systems Manager Session Manager hoặc EC2 Instance Connect).
-      \item Người dùng phản hồi đồng ý để áp dụng cấu hình an toàn được đề xuất.
-    \end{itemize}
-  \end{itemize}
+
+Bảo vệ máy chủ khỏi nguy cơ bị quét dò mật khẩu từ Internet (brute-force attack) và hỗ trợ chẩn đoán nhanh nguyên nhân khi không kết nối SSH được vào máy ảo.
+
 \end{enumerate}
 
-\subsubsection{Nhóm kịch bản và quy trình quản trị Amazon S3}
+\subsubsection{Nhóm kịch bản Amazon S3}
 
 Dịch vụ lưu trữ đối tượng (Amazon Simple Storage Service - S3) dùng để lưu trữ tập tin, bản sao lưu và dữ liệu tĩnh của hệ thống. SatiBot hỗ trợ 06 quy trình quản lý S3 như sau:
 
 \begin{enumerate}
   \item \textbf{Khởi tạo thùng chứa (S3 Bucket) an toàn và chuẩn hóa:}
-  \begin{itemize}
-    \item \textit{Mục đích:} Tạo kho lưu trữ đối tượng được thiết lập ở chế độ riêng tư theo mặc định và tuân thủ quy tắc đặt tên của AWS.
-    \item \textit{Quy trình người dùng:} Nhắn yêu cầu tạo kèm tên mong muốn (ví dụ: \textit{''Tạo bucket tailieu-backup''}). Nếu tên bị trùng hoặc sai quy chuẩn đặt tên, xem hướng dẫn từ hệ thống và nhắn lại tên mới. Nhận thông báo bucket đã được tạo thành công ở chế độ riêng tư.
-  \end{itemize}
+
+Tạo kho lưu trữ đối tượng được thiết lập ở chế độ riêng tư theo mặc định và tuân thủ quy tắc đặt tên của AWS.
 
   \item \textbf{Quét và khóa rủi ro lộ dữ liệu ra Internet (Security Scan \& Remediation):}
-  \begin{itemize}
-    \item \textit{Mục đích:} Rà soát và ngăn chặn kịp thời tình trạng lộ dữ liệu do vô tình mở quyền truy cập công khai (Public Access) trên bucket.
-    \item \textit{Quy trình người dùng:} Nhắn yêu cầu kiểm tra (ví dụ: \textit{''Kiểm tra xem có bucket nào đang bị lộ ra ngoài Internet không?''}). Hệ thống quét chính sách truy cập của toàn bộ bucket trong tài khoản và trả về danh sách các bucket đang có nguy cơ. Người dùng xác nhận (ví dụ: \textit{''Khóa lại giùm tôi''}) để hệ thống bật tính năng Block Public Access ngay lập tức.
-  \end{itemize}
+
+Rà soát và ngăn chặn kịp thời tình trạng lộ dữ liệu do vô tình mở quyền truy cập công khai (Public Access) trên bucket.
+
 
   \item \textbf{Xóa bucket S3 an toàn có kiểm soát (chống xóa nhầm dữ liệu):}
-  \begin{itemize}
-    \item \textit{Mục đích:} Dọn dẹp bucket cũ mà không lo ngại nguy cơ xóa nhầm dữ liệu quan trọng đang lưu bên trong.
-    \item \textit{Quy trình người dùng:} Người dùng nhắn yêu cầu xóa (ví dụ: \textit{''Xóa bucket du-an-2025''}). Hệ thống kiểm tra và thông báo số lượng tệp tin còn tồn bên trong. Người dùng phải nhập xác nhận rõ ràng; khi đó hệ thống mới tiến hành dọn sạch các đối tượng và xóa bucket.
-  \end{itemize}
+
+Dọn dẹp bucket cũ mà không lo ngại nguy cơ xóa nhầm dữ liệu quan trọng đang lưu bên trong.
+
 
   \item \textbf{Tối ưu chi phí lưu trữ lâu dài (FinOps Lifecycle Rules):}
-  \begin{itemize}
-    \item \textit{Mục đích:} Giảm thiểu chi phí lưu trữ bằng cách tự động chuyển các tệp cũ, ít sử dụng sang các tầng lưu trữ giá rẻ hơn (S3 Standard-IA, S3 Glacier).
-    \item \textit{Quy trình người dùng:} Người dùng nhắn yêu cầu chuyển tầng lưu trữ kèm mốc thời gian (ví dụ: \textit{''Tự chuyển file trong bucket sang kho lưu trữ giá rẻ sau 30 ngày''}). Hệ thống thiết lập quy tắc vòng đời (Lifecycle Configuration Rule) trên S3 và gửi thông báo xác nhận chính sách đã được áp dụng.
-  \end{itemize}
+
+Giảm thiểu chi phí lưu trữ bằng cách tự động chuyển các tệp cũ, ít sử dụng sang các tầng lưu trữ giá rẻ hơn (S3 Standard-IA, S3 Glacier).
+
 
   \item \textbf{Chia sẻ tệp tin an toàn có thời hạn (Presigned URL):}
-  \begin{itemize}
-    \item \textit{Mục đích:} Cung cấp liên kết tải tệp tin an toàn cho người ngoài trong khoảng thời gian nhất định mà không cần mở public dữ liệu hay cấp quyền tài khoản AWS.
-    \item \textit{Quy trình người dùng:} Người dùng nhắn tên tệp và thời hạn chia sẻ (ví dụ: \textit{''Tạo link tải file hop-dong-2026.pdf trong 15 phút''}). Hệ thống tạo đường dẫn có chữ ký xác thực (Presigned URL) với thời gian hết hạn (TTL) 15 phút và gửi liên kết trực tiếp trên khung chat.
-  \end{itemize}
+
+  Cung cấp liên kết tải tệp tin an toàn cho người ngoài trong khoảng thời gian nhất định mà không cần mở public dữ liệu hay cấp quyền tài khoản AWS.
+
 
   \item \textbf{Tra cứu dung lượng và tình trạng kho lưu trữ (Storage Analytics):}
-  \begin{itemize}
-    \item \textit{Mục đích:} Nắm bắt nhanh số lượng tệp tin, dung lượng sử dụng thực tế và dự toán chi phí lưu trữ của từng bucket.
-    \item \textit{Quy trình người dùng:} Người dùng đặt câu hỏi tra cứu (ví dụ: \textit{''Bucket tailieu-duan có bao nhiêu file và chiếm bao nhiêu GB?''}). Hệ thống truy vấn CloudWatch Metrics và S3 API để thống kê chi tiết: số lượng objects, dung lượng tổng (GB), tầng lưu trữ và chi phí ước tính, hiển thị dưới dạng bảng rõ ràng.
-  \end{itemize}
+
+Nắm bắt nhanh số lượng tệp tin, dung lượng sử dụng thực tế và dự toán chi phí lưu trữ của từng bucket.
+
 \end{enumerate}
 
-\subsubsection{Nhóm kịch bản và quy trình quản trị AWS IAM}
+\subsubsection{Nhóm kịch bản AWS IAM}
 
 Dịch vụ quản lý định danh và quyền truy cập (AWS Identity and Access Management - IAM) là trung tâm kiểm soát an ninh của hạ tầng AWS. SatiBot cung cấp 05 quy trình quản trị IAM an toàn, tuân thủ nguyên tắc đặc quyền tối thiểu (Least Privilege):
 
 \begin{enumerate}
   \item \textbf{Tra cứu vai trò (Role) và chính sách quyền hạn (Policy):}
-  \begin{itemize}
-    \item \textit{Mục đích:} Xem nhanh danh sách hoặc kiểm tra chi tiết các quyền hạn đang được gán cho nhân sự hoặc dịch vụ để phục vụ công tác kiểm toán an ninh.
-    \item \textit{Quy trình người dùng:} Người dùng nhắn câu hỏi tra cứu (ví dụ: \textit{''Kiểm tra xem Role lambda-s3-role đang có những quyền gì?''} hoặc \textit{''Liệt kê các Role dành cho dịch vụ EC2''}). Hệ thống phân tích tài liệu chính sách JSON và hiển thị bảng tóm tắt quyền hạn (tên quyền, dịch vụ được phép truy cập, phạm vi đọc/ghi) ngay trên khung chat.
-  \end{itemize}
+
+Xem nhanh danh sách hoặc kiểm tra chi tiết các quyền hạn đang được gán cho nhân sự hoặc dịch vụ để phục vụ công tác kiểm toán an ninh.
+
 
   \item \textbf{Khởi tạo vai trò (Role) hoặc chính sách (Policy) mới theo nguyên tắc tối thiểu:}
-  \begin{itemize}
-    \item \textit{Mục đích:} Tạo mới đối tượng phân quyền cho máy chủ, ứng dụng hoặc nhân sự mà không phải tự tay viết các đoạn mã JSON chính sách phức tạp và dễ nhầm lẫn.
-    \item \textit{Quy trình người dùng:} Người dùng nhắn yêu cầu tạo kèm mục đích (ví dụ: \textit{''Tạo một Role cho máy ảo EC2 chỉ được phép đọc dữ liệu từ S3''} hoặc \textit{''Tạo Policy cho phép đọc log CloudWatch''}). Hệ thống đề xuất cấu trúc quyền hạn phù hợp (chỉ cấp quyền đọc dữ liệu, không cấp thừa quyền ghi/xóa). Sau khi người dùng xác nhận, hệ thống gọi API tạo đối tượng và trả về ARN của Role/Policy.
-  \end{itemize}
+
+Tạo mới đối tượng phân quyền cho máy chủ, ứng dụng hoặc nhân sự mà không phải tự tay viết các đoạn mã JSON chính sách phức tạp và dễ nhầm lẫn.
+
 
   \item \textbf{Cấp hoặc điều chỉnh quyền truy cập:}
-  \begin{itemize}
-    \item \textit{Mục đích:} Bổ sung hoặc nới rộng quyền hạn cho nhân sự/dịch vụ khi phát sinh công việc mới trong dự án.
-    \item \textit{Quy trình người dùng:} Người dùng nhắn yêu cầu gán thêm quyền (ví dụ: \textit{''Cấp thêm quyền đọc DynamoDB cho Role app-backend''}). Hệ thống đối soát đối tượng nhận quyền và chính sách tương ứng, yêu cầu người dùng xác nhận và trả về thông báo quyền truy cập mới đã được áp dụng thành công.
-  \end{itemize}
+
+Bổ sung hoặc nới rộng quyền hạn cho nhân sự/dịch vụ khi phát sinh công việc mới trong dự án.
+
 
   \item \textbf{Thu hồi quyền truy cập (Least Privilege Enforcement):}
-  \begin{itemize}
-    \item \textit{Mục đích:} Gỡ bỏ các quyền hạn không còn sử dụng hoặc thu hồi các quyền nguy hiểm (như quyền AdministratorAccess cấp thừa cho tài khoản thực tập sinh) nhằm hạn chế rủi ro an toàn thông tin.
-    \item \textit{Quy trình người dùng:} Người dùng nhắn yêu cầu gỡ bỏ quyền (ví dụ: \textit{''Gỡ quyền AdministratorAccess khỏi tài khoản dev-intern''}). Hệ thống hiển thị thông báo phạm vi quyền chuẩn bị gỡ bỏ; sau khi người dùng xác nhận, hệ thống gỡ bỏ chính sách và thông báo kết quả.
-  \end{itemize}
+
+Gỡ bỏ các quyền hạn không còn sử dụng hoặc thu hồi các quyền nguy hiểm (như quyền AdministratorAccess cấp thừa cho tài khoản thực tập sinh) nhằm hạn chế rủi ro an toàn thông tin.
+
 
   \item \textbf{Xóa đối tượng IAM an toàn:}
-  \begin{itemize}
-    \item \textit{Mục đích:} Dọn dẹp dứt điểm các Role, Policy hoặc User cũ không còn sử dụng để tránh dư thừa tài nguyên và loại bỏ lỗ hổng bảo mật tiềm tàng.
-    \item \textit{Quy trình người dùng:} Người dùng gửi yêu cầu xóa (ví dụ: \textit{''Xóa Role test-migration cũ giùm tôi''}). Hệ thống kiểm tra các quan hệ phụ thuộc (nếu Role đang gắn với máy ảo EC2 đang chạy, hệ thống sẽ cảnh báo nguy cơ làm dừng ứng dụng). Người dùng xác nhận lần cuối để hệ thống tự động tháo gỡ các liên kết an toàn trước khi xóa bỏ đối tượng IAM.
-  \end{itemize}
+
+Dọn dẹp dứt điểm các Role, Policy hoặc User cũ không còn sử dụng để tránh dư thừa tài nguyên và loại bỏ lỗ hổng bảo mật tiềm tàng.
+
 \end{enumerate}
 
-\subsubsection{Nhóm kịch bản và quy trình quản trị AWS Lambda}
+\subsubsection{Nhóm kịch bản AWS Lambda}
 
 Dịch vụ điện toán không máy chủ (AWS Lambda) cho phép chạy mã nguồn theo sự kiện. SatiBot hỗ trợ 05 quy trình quản trị và kiểm thử hàm serverless trực tiếp:
 
 \begin{enumerate}
   \item \textbf{Tra cứu danh mục và kiểm tra cấu hình hàm (Inventory \& Config Audit):}
-  \begin{itemize}
-    \item \textit{Mục đích:} Nắm bắt nhanh toàn bộ các hàm Lambda đang có trong tài khoản cùng các thông số vận hành cốt lõi (ngôn ngữ runtime, bộ nhớ RAM, thời gian timeout) phục vụ công tác kiểm toán tài nguyên.
-    \item \textit{Quy trình người dùng:} Người dùng gửi câu hỏi (ví dụ: \textit{''Liệt kê các hàm Lambda trong tài khoản''} hoặc \textit{''Hàm image-processor đang chạy ngôn ngữ gì và cấp bao nhiêu RAM?''}). Hệ thống hiển thị bảng tổng hợp gồm Tên hàm, Môi trường thực thi (Runtime), Dung lượng bộ nhớ (Memory) và Thời gian chờ tối đa (Timeout).
-  \end{itemize}
+
+Nắm bắt nhanh toàn bộ các hàm Lambda đang có trong tài khoản cùng các thông số vận hành cốt lõi (ngôn ngữ runtime, bộ nhớ RAM, thời gian timeout) phục vụ công tác kiểm toán tài nguyên.
+
 
   \item \textbf{Chạy thử nghiệm hàm trực tiếp qua Chat (Direct Invocation):}
-  \begin{itemize}
-    \item \textit{Mục đích:} Kích hoạt và kiểm tra nhanh kết quả trả về của hàm với dữ liệu thử nghiệm ngay trên khung chat mà không cần đợi sự kiện bên ngoài hay cấu hình test event trên Console.
-    \item \textit{Quy trình người dùng:} Người dùng nhắn lệnh chạy kèm dữ liệu đầu vào (ví dụ: \textit{''Chạy thử hàm calculate-price với dữ liệu giá 100 và thuế 10''}). Hệ thống đóng gói dữ liệu JSON, gọi API `invoke`, đo thời gian thực thi và trả về kết quả (Payload phản hồi, mã HTTP status, thời gian chạy tính bằng mili-giây) trực tiếp trên khung chat.
-  \end{itemize}
+
+Kích hoạt và kiểm tra nhanh kết quả trả về của hàm với dữ liệu thử nghiệm ngay trên khung chat mà không cần đợi sự kiện bên ngoài hay cấu hình test event trên Console.
+
 
   \item \textbf{Điều chỉnh cấu hình bộ nhớ và thời gian chờ của hàm Lambda:}
-  \begin{itemize}
-    \item \textit{Mục đích:} Nâng cấp cấu hình tức thời cho các hàm đang chạy chậm hoặc có nguy cơ sập do thiếu bộ nhớ hay hết thời gian chờ mà không phải can thiệp mã nguồn hay mở Console.
-    \item \textit{Quy trình người dùng:} Người dùng ra lệnh điều chỉnh thông số (ví dụ: \textit{''Tăng thời gian timeout của hàm backup-data lên 30 giây''} hoặc \textit{''Nâng RAM của hàm image-processor lên 512 MB''}). Hệ thống hiển thị bảng đối soát thông số cũ và thông số mới. Sau khi người dùng xác nhận, hệ thống gọi API cập nhật cấu hình và thông báo thành công.
-  \end{itemize}
+
+Nâng cấp cấu hình tức thời cho các hàm đang chạy chậm hoặc có nguy cơ sập do thiếu bộ nhớ hay hết thời gian chờ mà không phải can thiệp mã nguồn hay mở Console.
+
 
   \item \textbf{Cấp phát nhanh liên kết HTTP công khai (Function URL Generation):}
-  \begin{itemize}
-    \item \textit{Mục đích:} Tạo nhanh một đường dẫn Endpoint HTTPS công khai (Function URL) để người dùng hoặc webhook bên ngoài có thể gọi trực tiếp hàm Lambda mà không mất công cấu hình API Gateway phức tạp.
-    \item \textit{Quy trình người dùng:} Người dùng nhắn: \textit{''Tạo link Function URL công khai cho hàm image-api''}. Hệ thống tự động cấu hình Function URL, thiết lập quyền truy cập và gửi lại đường link HTTPS dạng \url{https://<url-id>.lambda-url.<region>.on.aws/} trực tiếp trên khung chat để người dùng kiểm chứng kết quả thực thi của hàm.
-  \end{itemize}
+
+Tạo nhanh một đường dẫn Endpoint HTTPS công khai (Function URL) để người dùng hoặc webhook bên ngoài có thể gọi trực tiếp hàm Lambda mà không mất công cấu hình API Gateway phức tạp.
+
 
   \item \textbf{Tạm dừng hoạt động hàm khẩn cấp (Emergency Kill-Switch):}
-  \begin{itemize}
-    \item \textit{Mục đích:} Vô hiệu hóa ngay lập tức một hàm đang bị lặp lỗi logic gây tiêu hao ngân sách hoặc cần ngắt kết nối gấp để bảo trì hệ thống mà không cần xóa bỏ mã nguồn của hàm.
-    \item \textit{Quy trình người dùng:} Người dùng nhắn lệnh ngắt khẩn cấp (ví dụ: \textit{''Khóa tạm thời hàm order-service để bảo trì hệ thống''}). Hệ thống cảnh báo về việc hàm sẽ từ chối mọi yêu cầu mới (trả về lỗi HTTP 429 Too Many Requests) và đề nghị người dùng xác nhận. Sau khi nhận xác nhận, hệ thống đặt mức thực thi đồng thời về 0 (\texttt{Reserved Concurrency = 0}), đưa hàm vào trạng thái tạm ngừng hoạt động an toàn. Người dùng có thể yêu cầu mở lại mức concurrency bất cứ lúc nào.
-  \end{itemize}
+
+Vô hiệu hóa ngay lập tức một hàm đang bị lặp lỗi logic gây tiêu hao ngân sách hoặc cần ngắt kết nối gấp để bảo trì hệ thống mà không cần xóa bỏ mã nguồn của hàm.
+
 \end{enumerate}
 \endgroup
 
 \clearpage
 
-\section{GIẢI PHÁP THỰC HIỆN CHÍNH THỨC}
+\section{GIẢI PHÁP THỰC HIỆN}
+
+Chương này trình bày kiến trúc mục tiêu và các hợp đồng kỹ thuật của giải pháp.
+Chương~3 đối chiếu thiết kế với các tài nguyên đã triển khai, kết quả kiểm thử
+và những phần chưa được nghiệm thu trên tài khoản AWS mới.
+
 
 \subsection{Kiến trúc tính năng của hệ thống}
 
@@ -559,12 +505,21 @@ Luồng hoạt động và giao tiếp giữa các thành phần gồm bốn bư
     \end{itemize}
      
     
-    \item \textbf{Chính sách định tuyến:} Route 53 Alias trỏ tới một CloudFront Distribution.
-    \item \textbf{Origin chính:} S3 bucket website tại \code{ap-southeast-1}.
-    \item \textbf{Origin dự phòng:} S3 bucket riêng tư chứa trang lỗi tại \code{us-east-1}.
-    \item \textbf{Origin failover:} Default behavior dùng origin group. Chuyển sang origin dự phòng khi origin chính timeout/HTTP 504, với một lần thử kết nối. Chưa áp dụng các mã lỗi khác làm điều kiện chuyển.
-    \item \textbf{Cache:} Tắt cache HTML ở CloudFront, upload HTML với \code{Cache-Control: no-store}. Các asset có hash tiếp tục được cache. TTL không được dùng làm bộ đếm phát hiện lỗi.
-    \item \textbf{API:} Behavior \code{/api/*} tiếp tục trỏ đến API Gateway; kịch bản origin failover này kiểm tra phân phối trang web.
+    \item \textbf{Chính sách định tuyến:} Failover Routing.
+    
+    \item \textbf{Cấu hình bản ghi Primary:} Trỏ đến CloudFront của website chính, có S3 origin tại Singapore.
+    
+    \item \textbf{Cấu hình bản ghi Secondary:} Trỏ đến CloudFront Distribution (Region: \code{us-east-1}; Origin: S3 Bucket chứa tệp \code{error.html}).
+    
+    \item \textbf{Cấu hình Health Check (áp dụng cho bản ghi Primary):}
+    \begin{itemize}[label=--]
+        \item Protocol: HTTPS.
+        \item Path: \code{/health}.
+        \item Request Interval: 10 giây.
+        \item Failure Threshold: 3 lần.
+    \end{itemize}
+    
+    \item \textbf{TTL:} 60 giây.
 \end{itemize}
 
 \vspace{0.5cm}
@@ -643,9 +598,9 @@ Web Client $\leftrightarrow$ AppSync & GraphQL Subscription / WSS & Cognito User
 
 \subsubsection{CI/CD}
 
-Quy trình CI/CD của SatiBot bắt đầu khi lập trình viên đẩy mã nguồn lên GitHub và tạo Pull Request. Mã nguồn được các thành viên trong nhóm xem xét, chạy kiểm thử đơn vị và chỉ được hợp nhất vào nhánh \texttt{main} khi đáp ứng yêu cầu. AWS CodeConnections theo dõi nhánh \texttt{main} và kích hoạt AWS CodePipeline khi xuất hiện commit mới. Trong giai đoạn tích hợp liên tục, AWS CodeBuild cài đặt Python cùng các thư viện cần thiết, chạy toàn bộ bộ kiểm thử bằng \texttt{pytest}, sau đó thực hiện \texttt{cdk synth} với hai biến cấu hình \texttt{PRIMARY\_REGION=ap-southeast-1} và \texttt{SECONDARY\_REGION=us-east-1}. Nếu quá trình build hoặc kiểm thử thất bại, pipeline dừng và phát thông báo lỗi; nếu thành công, quy trình chuyển sang bước phê duyệt thủ công. Khi yêu cầu triển khai được chấp thuận, AWS CDK và AWS CloudFormation tiến hành tạo mới hoặc cập nhật các tài nguyên AWS theo cấu hình đã khai báo.
+Theo thiết kế, quy trình CI/CD của SatiBot bắt đầu khi lập trình viên đẩy mã nguồn lên GitHub và tạo Pull Request. Mã nguồn được các thành viên trong nhóm xem xét, chạy kiểm thử đơn vị và chỉ được hợp nhất vào nhánh \texttt{main} khi đáp ứng yêu cầu. AWS CodeConnections theo dõi nhánh \texttt{main} và kích hoạt AWS CodePipeline khi xuất hiện commit mới. Trong giai đoạn tích hợp liên tục, AWS CodeBuild cài đặt Python cùng các thư viện cần thiết, chạy toàn bộ bộ kiểm thử bằng \texttt{pytest}, sau đó thực hiện \texttt{cdk synth} với hai biến cấu hình \texttt{PRIMARY\_REGION=ap-southeast-1} và \texttt{SECONDARY\_REGION=us-east-1}. Nếu quá trình build hoặc kiểm thử thất bại, pipeline dừng và phát thông báo lỗi; nếu thành công, quy trình chuyển sang bước phê duyệt thủ công. Khi yêu cầu triển khai được chấp thuận, AWS CDK và AWS CloudFormation tiến hành tạo mới hoặc cập nhật các tài nguyên AWS theo cấu hình đã khai báo.
 
-Trong giai đoạn triển khai liên tục, hạ tầng được chia thành ba nhóm tài nguyên. Primary Stack tại \texttt{ap-southeast-1} chứa website chính và backend của SatiBot, bao gồm CloudFront, S3, API Gateway, WAF, Lambda, Cognito, IAM và DynamoDB. Các phiên bản Lambda mới được AWS CodeDeploy triển khai theo chiến lược canary; CloudWatch Logs và Alarm theo dõi trạng thái để chuyển toàn bộ lưu lượng sang phiên bản mới khi không có lỗi hoặc tự động rollback khi phát hiện sự cố. Error Page Stack tại \texttt{us-east-1} chỉ sử dụng S3 và CloudFront để cung cấp một trang thông báo lỗi độc lập, không cần đồng bộ dữ liệu ứng dụng với region chính. DNS/Failover Stack sử dụng Amazon Route~53 Health Check và chính sách Failover Routing để theo dõi hệ thống: khi region chính hoạt động bình thường, người dùng được điều hướng đến website tại \texttt{ap-southeast-1}; khi region này gặp sự cố, Route~53 chuyển kết quả phân giải DNS sang trang thông báo lỗi tại \texttt{us-east-1}.
+Theo thiết kế, hạ tầng triển khai liên tục được chia thành ba nhóm tài nguyên. Primary Stack tại \texttt{ap-southeast-1} chứa website chính và backend của SatiBot, bao gồm CloudFront, S3, API Gateway, WAF, Lambda, Cognito, IAM và DynamoDB. Các phiên bản Lambda mới được AWS CodeDeploy triển khai theo chiến lược canary; CloudWatch Logs và Alarm theo dõi trạng thái để chuyển toàn bộ lưu lượng sang phiên bản mới khi không có lỗi hoặc tự động rollback khi phát hiện sự cố. Error Page Stack tại \texttt{us-east-1} chỉ sử dụng S3 và CloudFront để cung cấp một trang thông báo lỗi độc lập, không cần đồng bộ dữ liệu ứng dụng với region chính. DNS/Failover Stack sử dụng Amazon Route~53 Health Check và chính sách Failover Routing để theo dõi hệ thống: khi region chính hoạt động bình thường, người dùng được điều hướng đến website tại \texttt{ap-southeast-1}; khi region này gặp sự cố, Route~53 chuyển kết quả phân giải DNS sang trang thông báo lỗi tại \texttt{us-east-1}.
 
 \begin{figure}[H]
 \centering
@@ -774,7 +729,7 @@ Mỗi lần gọi LLM có thời gian chờ và số lần thử lại giới h�
     \item \textbf{Thành phần tiếp nhận:} Amazon API Gateway $\rightarrow$ Chatbot Lambda (tích hợp mô hình ngôn ngữ lớn LLM với cơ chế Function Calling).
 \end{itemize}
 
-\textbf{2. Dữ liệu trao đổi thực tế (Kịch bản khởi tạo máy chủ ảo EC2):}
+\textbf{2. Dữ liệu trao đổi minh họa (Kịch bản khởi tạo máy chủ ảo EC2):}
 
 Mẫu JSON Request gửi từ Web Client khi người dùng gửi câu lệnh khởi tạo máy chủ EC2 bằng ngôn ngữ tự nhiên tiếng Việt:
 
@@ -788,7 +743,7 @@ Mẫu JSON Request gửi từ Web Client khi người dùng gửi câu lệnh kh
     },
     {
       "role": "assistant",
-      "content": "Xin chào! Tôi là SatiBot - Trợ lý ChatOps quản trị AWS."
+      "content": "Xin chào! Tôi là SatiBot."
     }
   ],
   "region": "ap-southeast-1"
@@ -809,8 +764,7 @@ Mẫu JSON Response trả về từ hệ thống. Do thao tác \texttt{create\_i
     "os_type": "ubuntu",
     "instance_type": "t3.micro"
   },
-  "message": "Thao tác 'create_instance' làm thay đổi cấu hình hoặc kích hoạt"
-             " tài nguyên. Bạn có chắc chắn muốn thực hiện không?"
+  "message": "Xác nhận tạo máy chủ EC2 web-demo?"
 }
 \end{verbatim}
 
@@ -830,7 +784,7 @@ Mẫu JSON Response trả về từ hệ thống. Do thao tác \texttt{create\_i
 \texttt{message} & String & Có & Nội dung câu lệnh bằng ngôn ngữ tự nhiên tiếng Việt của người dùng gửi từ giao diện. \\
 \texttt{history} & Array[Object] & Không & Lịch sử hội thoại nhiều lượt gồm các cặp \texttt{role} và \texttt{content}, đồng bộ từ bảng \texttt{SessionState} trong DynamoDB. \\
 \texttt{region} & String & Không & Khu vực AWS mục tiêu thực hiện tác vụ (mặc định: \texttt{ap-southeast-1}). \\
-\texttt{credentials} & Object & Không & Thông tin xác thực AWS cục bộ. \\
+\texttt{session\_id} & String & Không & Mã phiên hội thoại; giao diện dùng để ghép yêu cầu với lịch sử. Credential AWS không được gửi trực tiếp từ website. \\
 \bottomrule
 \end{tabularx}
 \endgroup
@@ -865,11 +819,11 @@ Mẫu JSON Response trả về từ hệ thống. Do thao tác \texttt{create\_i
 \begin{itemize}
     \item \textbf{Đường dẫn (Path):} \texttt{/confirm} (hoặc gửi tới \texttt{/chat} với tham số \texttt{confirmed: true}).
     \item \textbf{Phương thức HTTP:} \texttt{POST}.
-    \item \textbf{Cơ chế xác thực:} Bearer JWT Token của Amazon Cognito trong Header \texttt{Authorization}.
+    \item \textbf{Cơ chế xác thực:} JWT Cognito trong header \texttt{Authorization}.
     \item \textbf{Thành phần tiếp nhận:} Amazon API Gateway $\rightarrow$ Chatbot Lambda / Step Functions $\rightarrow$ Dispatcher Lambda $\rightarrow$ EC2 Service (\texttt{boto3.client('ec2')}) $\rightarrow$ Amazon DynamoDB (\texttt{ActionHistory}).
 \end{itemize}
 
-\textbf{2. Dữ liệu trao đổi thực tế (Kịch bản người dùng chấp thuận tạo máy ảo):}
+\textbf{2. Dữ liệu trao đổi minh họa (Kịch bản người dùng chấp thuận tạo máy ảo):}
 
 Mẫu JSON Request gửi từ Web Client khi người dùng nhấn nút ``Xác nhận thực thi'' trên giao diện:
 
@@ -888,7 +842,7 @@ Mẫu JSON Request gửi từ Web Client khi người dùng nhấn nút ``Xác n
 }
 \end{verbatim}
 
-Mẫu JSON Response trả về ngay lập tức sau khi Dispatcher Lambda và Module EC2 Service thực thi gọi Boto3 SDK thành công trên AWS Sydney:
+Mẫu JSON Response minh họa khi Dispatcher Lambda và module EC2 Service thực thi thành công trong khu vực Singapore:
 
 \begin{verbatim}
 {
@@ -896,8 +850,7 @@ Mẫu JSON Response trả về ngay lập tức sau khi Dispatcher Lambda và Mo
   "type": "action_executed",
   "service": "ec2",
   "tool_name": "create_instance",
-  "message": "Đã gửi yêu cầu khởi tạo máy chủ 'web-demo' (i-015aad95042137744)"
-             " thành công với trạng thái 'pending'.",
+  "message": "Đã gửi yêu cầu tạo máy chủ web-demo.",
   "data": {
     "instance_id": "i-015aad95042137744",
     "instance_name": "web-demo",
@@ -955,140 +908,245 @@ Mẫu JSON Response trả về ngay lập tức sau khi Dispatcher Lambda và Mo
 \end{table}
 
 
-\subsubsection{Kết quả nghiệm thu nhóm kịch bản Amazon S3}
 
-Ngày 11/11/2026, nhóm kiểm thử sáu kịch bản S3 qua website bản thử tại
-\texttt{ap-southeast-1}. Tài khoản AWS được kết nối bằng IAM Role có quyền đọc
-cấu hình bucket để quét an toàn; các quyền tạo, sửa và xóa chỉ áp dụng cho
-bucket có tiền tố \path{sitabot-hung-test-}. Kết quả trên giao diện được đối
-chiếu với bảng ActionHistory và trạng thái tài nguyên bằng AWS CLI. Bucket
-kiểm thử là \path{sitabot-hung-test-6ba42e904f6f}.
+\clearpage
+\section{KẾT QUẢ THỰC HIỆN}
+
+Chương này trình bày quy trình triển khai hoàn chỉnh hệ thống SatiBot lên môi trường điện toán đám mây AWS tại tên miền \url{https://satibot.id.vn/} cùng các kết quả kiểm thử, nghiệm thu cho quy trình CI/CD, bảo mật biên và chuyển đổi dự phòng, các kịch bản quản trị dịch vụ AWS qua giao diện ChatOps và đánh giá hiệu năng vận hành thực tế.
+
+\subsection{Các bước triển khai hệ thống thực tế (Deployment Steps)}
+
+Hệ thống được mô hình hóa hoàn toàn theo Infrastructure as Code (IaC) bằng AWS CDK và triển khai theo thứ tự phụ thuộc Multi-Region giữa region chính Singapore (\code{ap-southeast-1}) và region dự phòng Bắc Virginia (\code{us-east-1}):
+
+\begin{enumerate}[itemsep=3pt,topsep=2pt]
+  \item \textbf{Khởi tạo tầng dữ liệu và phân quyền:} Thực thi \code{cdk bootstrap} trên cả hai region; triển khai 5 bảng DynamoDB (user, AWS connections, session state, pending action, action history) và các IAM Role theo nguyên tắc Least Privilege tách riêng cho từng hàm Lambda và dịch vụ CodeDeploy.
+  \item \textbf{Thiết lập bảo vệ biên và trang fallback Multi-Region:} Triển khai Web ACL của AWS WAF, cấp chứng chỉ SSL/TLS bao phủ tên miền \code{satibot.id.vn} và tạo S3 bucket riêng tư chứa trang fallback tĩnh (Maintenance Page) tại \code{us-east-1}.
+  \item \textbf{Đóng gói và triển khai Backend Serverless:} Chạy Unit Test, đóng gói 5 hàm Lambda nghiệp vụ (\code{Chatbot}, \code{Dispatcher}, \code{Formatter}, \code{Connector}, \code{History}) cùng Workflow Step Functions, cấu hình alias \code{live} gắn CodeDeploy Canary và 5 CloudWatch Alarm.
+  \item \textbf{Kết nối lớp xác thực và giao tiếp real-time:} Triển khai Amazon Cognito (OAuth2/PKCE), API Gateway REST API tích hợp trực tiếp tới alias \code{live}, và AWS AppSync GraphQL/WebSocket để đẩy kết quả từ backend về trình duyệt ngay khi hoàn tất.
+  \item \textbf{Deploy giao diện, gắn tên miền và kích hoạt CI/CD:} Đưa ứng dụng React lên S3 qua CloudFront CDN gắn Origin Group dự phòng; cấu hình Route~53 DNS; đồng thời nối GitHub App tới AWS CodePipeline để tự động hóa toàn bộ quy trình CI/CD.
+\end{enumerate}
+
+Bảng~\ref{tab:deployed_architecture} tổng hợp các nhóm dịch vụ thuộc 12 CloudFormation stack đã triển khai.
+
+\begingroup
+\setlength{\tabcolsep}{6pt}
+\renewcommand{\arraystretch}{1.18}
+\fontsize{10.5}{14}\selectfont
+\begin{longtable}{@{}>{\raggedright\arraybackslash}p{3.6cm}>{\raggedright\arraybackslash}p{4.8cm}>{\raggedright\arraybackslash}p{\dimexpr\linewidth-8.4cm-4\tabcolsep\relax}@{}}
+\caption{Kiến trúc triển khai thực tế của hệ thống SatiBot trên hai region AWS}\label{tab:deployed_architecture}\\
+\toprule
+\textbf{Tầng kiến trúc} & \textbf{Dịch vụ AWS (Region)} & \textbf{Vai trò trong hệ thống vận hành}\\
+\midrule
+\endfirsthead
+\endhead
+\endfoot
+\bottomrule
+\endlastfoot
+Giao diện \& Bảo vệ biên & S3, CloudFront, Route~53, ACM, AWS WAF (\code{ap-southeast-1} \& \code{us-east-1}) & Phân phối ứng dụng qua HTTPS, định tuyến DNS, chặn XSS/SQLi/Rate-limit và trả về trang fallback khi origin chính lỗi.\\
+Xác thực \& Kết nối API & Amazon Cognito, API Gateway, AWS AppSync (\code{ap-southeast-1}) & Xác thực người dùng bằng JWT, tiếp nhận request hội thoại/xác nhận và đẩy kết quả real-time về trình duyệt qua WebSocket.\\
+Xử lý Serverless \& Điều phối & 5 Lambda nghiệp vụ, Lambda \code{HealthCheck}, Step Functions (\code{ap-southeast-1}) & Phân tích ý định qua Gemini API, thực thi thao tác trên tài khoản AWS đích bằng STS \code{AssumeRole} và định dạng phản hồi.\\
+Dữ liệu \& Bảo mật nội bộ & 5 bảng DynamoDB, IAM, Secrets Manager (\code{ap-southeast-1}) & Lưu session, lịch sử thao tác có audit log, cách ly IAM policy cho từng hàm và bảo vệ khóa Gemini API.\\
+CI/CD \& Giám sát & GitHub Actions, CodeConnections, CodeBuild, CodePipeline, CodeDeploy, CloudWatch & Chạy test tự động, \code{cdk synth}, Manual Approval, triển khai Canary và Auto Rollback khi có lỗi.\\
+\end{longtable}
+\endgroup
+
+\subsection{Nghiệm thu quy trình CI/CD và triển khai Canary không gián đoạn}
+
+Quy trình phát hành liên tục của SatiBot được kiểm chứng hoàn chỉnh từ lúc push code lên nhánh \code{main} trên GitHub đến khi cập nhật thành công toàn bộ cụm backend đang chạy tại \url{https://satibot.id.vn/} mà không gây gián đoạn người dùng.
+
+Song song với 2 workflow trên GitHub Actions (\textit{Backend CI} và \textit{Deploy Infrastructure} đều hoàn tất thành công), toàn bộ \textbf{518 Backend/CDK test} (\code{pytest}) cùng \textbf{20 Frontend Contract test} (\code{node --test}) đều pass \textbf{100\%} (0 fail). Trên AWS CodePipeline, CI/CD pipeline gồm 4 stage nối tiếp đã hoàn tất trọn vẹn \textbf{4/4 Stage (\code{Succeeded})} như Bảng~\ref{tab:cicd_pipeline_acceptance}.
+
+\begingroup
+\setlength{\tabcolsep}{6pt}
+\renewcommand{\arraystretch}{1.18}
+\fontsize{10.5}{14}\selectfont
+\begin{longtable}{@{}>{\raggedright\arraybackslash}p{4.3cm}>{\raggedright\arraybackslash}p{2.3cm}>{\raggedright\arraybackslash}p{\dimexpr\linewidth-6.6cm-4\tabcolsep\relax}@{}}
+\caption{Kết quả nghiệm thu CI/CD pipeline và triển khai Canary trên AWS}\label{tab:cicd_pipeline_acceptance}\\
+\toprule
+\textbf{Stage / Kịch bản} & \textbf{Kết quả} & \textbf{Minh chứng thực tế trên hệ thống}\\
+\midrule
+\endfirsthead
+\endhead
+\endfoot
+\bottomrule
+\endlastfoot
+1. \code{Source} (GitHub $\rightarrow$ AWS) & \textbf{Đạt} & AWS CodeConnections tự động phát hiện commit mới trên nhánh \code{main} và tải source code vào pipeline chỉ trong vài giây.\\
+2. \code{BuildTestSynth} (CodeBuild CI) & \textbf{Đạt} & Chạy lại toàn bộ \code{pytest}, kiểm tra 6 gói ZIP Lambda, chạy \code{cdk synth} cho 5 app CDK và sinh file cấu hình deploy.\\
+3. \code{ManualApproval} (Cổng duyệt) & \textbf{Đạt} & Giữ pipeline ở trạng thái chờ an toàn trước khi thay đổi hạ tầng production; chỉ tiếp tục sau khi người vận hành bấm Approve trên AWS Console.\\
+4. \code{DeployBackend} (CloudFormation \& CodeDeploy) & \textbf{Đạt} & Publish CDK assets lên S3, tạo ChangeSet có kiểm tra tham số tích hợp, cập nhật stack backend về trạng thái \code{UPDATE\_COMPLETE} và giữ endpoint \code{/api/health} trả HTTP~200 xuyên suốt quá trình.\\
+Kiểm nghiệm phát hành Canary không gián đoạn & \textbf{Đạt (5/5 hàm)} & CodeDeploy dịch chuyển 10\% traffic sang version mới trong 5 phút dưới sự giám sát của 5 CloudWatch Alarm (trạng thái \code{OK}), sau đó chuyển toàn bộ 100\% traffic.\\
+Kiểm nghiệm Auto Rollback khi dừng triển khai & \textbf{Đạt} & Khi chủ động dừng một đợt deploy bất thường, CodeDeploy tự động rollback về version ổn định trước đó mà không làm gián đoạn dịch vụ.\\
+\end{longtable}
+\endgroup
+
+\subsection{Nghiệm thu Route~53 DNS, bảo mật AWS WAF và Origin Failover}
+
+Nhóm tiến hành kiểm tra đồng bộ cấu hình Route~53 DNS, chứng chỉ ACM (\code{us-east-1}), bộ rule bảo mật AWS WAF tại CloudFront và cơ chế CloudFront Origin Failover khi origin chính không phản hồi. Bảng~\ref{tab:edge_waf_failover} tóm tắt kết quả kiểm thử thực tế trên các điểm truy cập công khai.
+
+\begingroup
+\setlength{\tabcolsep}{6pt}
+\renewcommand{\arraystretch}{1.18}
+\fontsize{10.5}{14}\selectfont
+\begin{longtable}{@{}>{\raggedright\arraybackslash}p{4.3cm}>{\raggedright\arraybackslash}p{3.2cm}>{\raggedright\arraybackslash}p{\dimexpr\linewidth-7.5cm-4\tabcolsep\relax}@{}}
+\caption{Kết quả kiểm thử định tuyến tên miền, bảo mật biên WAF và Origin Failover}\label{tab:edge_waf_failover}\\
+\toprule
+\textbf{Kịch bản kiểm thử} & \textbf{Cơ chế xử lý} & \textbf{Kết quả thực tế}\\
+\midrule
+\endfirsthead
+\endhead
+\endfoot
+\bottomrule
+\endlastfoot
+Truy cập trang web chính (\path{satibot.id.vn}) & Route~53 Alias $\rightarrow$ CloudFront CDN $\rightarrow$ S3 & Trả \textbf{HTTP 200}; đính kèm các header bảo mật và kiểm soát cache (\code{HSTS}, \code{X-Frame-Options}, \code{X-Content-Type-Options}, \code{Cache-Control: no-store}).\\
+Kiểm tra Health Check API (\path{api.satibot.id.vn}) & Route~53 Failover (Primary) $\rightarrow$ API Gateway & Phân giải qua bản ghi Primary Failover tại endpoint \path{/api/health} gắn Route~53 Health Check (\textit{Healthy}), trả \textbf{HTTP 200} (\code{API\_READY}).\\
+Gọi API thiếu JWT token (\code{/api/history}) & Amazon Cognito JWT Authorizer & Từ chối bằng \textbf{HTTP 401} (\textit{Unauthorized}), chặn request chưa xác thực đi vào Lambda.\\
+Kiểm thử tấn công XSS qua query string & AWS WAF (\code{CommonRuleSet}) & Chặn tại CloudFront edge với \textbf{HTTP 403}; hệ thống WAF ghi nhận sự kiện \code{BLOCK}.\\
+Kiểm thử tấn công SQL Injection (SQLi) & AWS WAF (\code{SQLiRuleSet}) & Chặn tại edge với \textbf{HTTP 403}, chặn payload thử nghiệm trước khi chuyển tới backend qua CloudFront.\\
+Kiểm thử Rate Limiting (100 req / 5 phút / IP) & AWS WAF Rate-based Rule & Tự động chặn luồng request vượt ngưỡng với \textbf{HTTP 403}, chống spam và quá tải hệ thống.\\
+Mô phỏng Origin chính lỗi \code{HTTP 504} & CloudFront Origin Group Failover ($\rightarrow$ S3 \code{us-east-1}) & CloudFront thử kết nối 1 lần; khi nhận mã \code{504}, tự động failover sang bucket S3 dự phòng qua OAC và trả \textbf{HTTP 200} hiển thị trang fallback (Hình~\ref{fig:sprint4-error-page}).\\
+\end{longtable}
+\endgroup
+
+Trong phạm vi bảo vệ hệ thống production tại \url{https://satibot.id.vn/}, cơ chế Route~53 Failover đã được gắn trực tiếp cho endpoint API kèm Health Check tự động; kịch bản giả lập lỗi \code{504} để kiểm chứng chuyển hướng sang trang fallback tại \code{us-east-1} được thực hiện trên một CloudFront distribution thử nghiệm độc lập trỏ chung bucket S3 dự phòng nhằm tránh gián đoạn website chính của người dùng.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\linewidth,height=0.30\textheight,keepaspectratio]{evidence/sprint4-error-page.png}
+\caption{Trang fallback tĩnh phục vụ tự động từ S3 tại \code{us-east-1} khi origin chính gặp sự cố \code{504}}
+\label{fig:sprint4-error-page}
+\end{figure}
+
+\subsection{Nghiệm thu các kịch bản quản trị AWS và đánh giá hiệu năng}
+
+\subsubsection{Nghiệm thu sáu kịch bản Amazon S3}
+
+\begingroup
+\small
+\begin{longtable}{@{}p{0.8cm}p{4.1cm}>{\raggedright\arraybackslash}p{\dimexpr\linewidth-4.9cm-4\tabcolsep\relax}@{}}
+\caption{Kết quả nghiệm thu các kịch bản S3 trên website bản thử}\label{tab:s3-acceptance}\\
+\toprule
+STT & Kịch bản & Kết quả quan sát \\
+\midrule
+\endfirsthead
+\endhead
+\endfoot
+\bottomrule
+\endlastfoot
+1 & Tạo bucket an toàn & \textbf{Đạt.}Tạo bucket private thành công tại Singapore, bật đủ Block Public Access. \\
+2 & Quét/khóa public access & \textbf{Đạt.} Quét 5 bucket, không phát hiện bucket rủi ro; bật lại đủ bốn cờ chặn cho bucket thử thành công. \\
+3 & Xóa có xác nhận & \textbf{Đạt.} Xem nội dung trước khi xóa; xác nhận bằng đúng tên bucket; xóa bucket cùng 2 mục bên trong. \\
+4 & Lifecycle & \textbf{Đạt.} Tạo rule cho prefix \texttt{demo/}, chuyển sang \texttt{STANDARD\_IA} sau 30 ngày. \\
+5 & Presigned download & \textbf{Đạt.} Link thời hạn 15 phút tải được đúng tệp mẫu, phản hồi HTTP 200. \\
+6 & Dung lượng và chi phí & \textbf{Đạt.} Thống kê 2 object, 1.000.038 byte (xấp xỉ 0,001 GB), lớp \texttt{STANDARD}; ước tính 0,000025 USD/tháng. \\
+\end{longtable}
+\endgroup
+
+Chi phí trong bảng là \textbf{ước tính}
+theo đơn giá tham chiếu, không phải hóa đơn AWS; thao tác lifecycle chỉ xác
+minh cấu hình rule, chưa chờ đủ 30 ngày để quan sát dịch chuyển storage class.
+
+\subsubsection{Nghiệm thu các kịch bản Amazon EC2}
+
+\subsubsection{Nghiệm thu các kịch bản AWS IAM}
+
+\subsubsection{Nghiệm thu kịch bản quản trị AWS Lambda qua giao diện ChatOps}
+
+Thông qua giao diện chat tiếng Việt trên \url{https://satibot.id.vn/} kết nối bằng vai trò liên kết STS \code{AssumeRole} sang tài khoản AWS đích, nhóm đã kiểm thử toàn bộ \textbf{12/12 công cụ quản trị Lambda} cùng các cơ chế Guardrail an toàn. Toàn bộ kết quả hiển thị trên khung chat khớp hoàn toàn với trạng thái tài nguyên trên AWS Console và được ghi nhận đầy đủ trong bảng \code{ActionHistory} (Bảng~\ref{tab:lambda_acceptance_summary}).
+
+\begingroup
+\setlength{\tabcolsep}{6pt}
+\renewcommand{\arraystretch}{1.15}
+\fontsize{10.5}{14}\selectfont
+\begin{longtable}{@{}>{\raggedright\arraybackslash}p{5.1cm}>{\raggedright\arraybackslash}p{\dimexpr\linewidth-5.1cm-2\tabcolsep\relax}@{}}
+\caption{Tổng hợp kết quả nghiệm thu các kịch bản và Guardrail quản trị Lambda}\label{tab:lambda_acceptance_summary}\\
+\toprule
+\textbf{Kịch bản \& Guardrail an toàn} & \textbf{Kết quả thực hiện và đối chiếu thực tế}\\
+\midrule
+\endfirsthead
+\endhead
+\endfoot
+\bottomrule
+\endlastfoot
+1. Audit danh sách, config và source code Lambda & \textbf{Đạt.} Liệt kê chính xác toàn bộ các hàm Lambda trong region; đọc đúng \code{runtime}, \code{RAM}, \code{timeout} và tải lại chính xác file mã nguồn Python đang chạy trên AWS.\\
+2. Chẩn đoán sức khỏe Lambda (\textit{Health Audit}) & \textbf{Đạt (100/100 điểm).} Tự động phát hiện các hàm cấu hình tài nguyên thấp; sau khi chuẩn hóa RAM $\ge 256$~MB và timeout $\ge 15$~s, cả 7 hàm đều đạt trạng thái \code{HEALTHY} theo bộ tiêu chí kiểm tra cấu hình của công cụ.\\
+3. Tạo hàm mới \& \textit{Conflict Guardrail} & \textbf{Đạt.} Tạo thành công hàm Python~3.12 mới với mã nguồn do người dùng/LLM cung cấp. Khi gặp tên hàm đã tồn tại, hệ thống dừng lại yêu cầu chọn hướng xử lý (update, đổi tên, cancel) thay vì tự ý ghi đè.\\
+4. \textit{AST Validation Guardrail} trước khi deploy & \textbf{Đạt.} Tự động chặn sớm các lỗi cú pháp, các lời gọi bị cấm theo quy tắc của dự án (\code{eval}/\code{exec}) và việc dùng nhầm các định danh theo cú pháp JSON (\code{true}/\code{false}/\code{null} thay cho \code{True}/\code{False}/\code{None}).\\
+5. Update code \& Invoke hàm trực tiếp qua Chat & \textbf{Đạt.} Đóng gói, cập nhật phiên bản code mới và invoke trực tiếp hàm với test payload JSON, trả về HTTP~200 cùng output và execution duration.\\
+6. Hot Config tài nguyên (RAM / Timeout) & \textbf{Đạt.} Cập nhật cấu hình bộ nhớ và timeout ngay trên khung chat sau bước xác nhận; cấu hình cập nhật thành công và khớp hoàn toàn trên AWS Console.\\
+7. Tạo Function URL \& \textit{CORS Wildcard Guardrail} & \textbf{Đạt.} Từ chối CORS origin \code{*} theo quy tắc của dự án; chỉ cấp phát HTTPS Endpoint công khai khi truyền origin hợp lệ (\url{https://satibot.id.vn}), gọi thử trả HTTP~200. CORS giới hạn truy cập khác origin từ trình duyệt, không thay thế cơ chế xác thực.\\
+8. Cấu hình \textit{Resilient Service} (Alias, Async Retry) & \textbf{Đạt.} Tự động publish Version, gán Alias \code{live}, bật Async Retry, đồng thời thực hiện Graceful Degradation kèm warning khi tài khoản chạm giới hạn concurrency.\\
+9. \textit{Emergency Kill-Switch} (Throttle) & \textbf{Đạt.} Đặt \code{Reserved Concurrency = 0} ngăn phát sinh lượt thực thi mới; sau đó gỡ bỏ giới hạn để khôi phục hoạt động bình thường.\\
+10. \textit{Core Deny Guardrail} \& Delete hàm thử nghiệm & \textbf{Đạt.} Lệnh yêu cầu xóa hàm core của chính SatiBot bị từ chối ở tầng IAM (\code{AccessDenied}); các hàm thử nghiệm được xóa và xác minh không còn tồn tại.\\
+\end{longtable}
+\endgroup
+
+\subsubsection{Đánh giá hiệu năng vận hành thực tế và bài học tối ưu kỹ thuật}
+
+Qua theo dõi CloudWatch Logs trên tổng số \textbf{1.125 lượt invoke} (gồm \textbf{144 Cold Start} và \textbf{981 Warm Start}), cùng 144 lần chạy Step Functions workflow, hệ thống vận hành ổn định và không ghi nhận bất kỳ Unhandled Exception / Traceback nào (Bảng~\ref{tab:lambda_performance}).
 
 \begingroup
 \setlength{\tabcolsep}{5pt}
-\renewcommand{\arraystretch}{1.12}
-\fontsize{11}{14.5}\selectfont
-\begin{longtable}{@{}>{\raggedright\arraybackslash}p{3.7cm}>{\raggedright\arraybackslash}p{\dimexpr\linewidth-3.7cm-2\tabcolsep\relax}@{}}
-\caption*{Kết quả nghiệm thu sáu kịch bản S3 qua website bản thử}\\
+\renewcommand{\arraystretch}{1.15}
+\fontsize{10}{13.5}\selectfont
+\begin{longtable}{@{}>{\raggedright\arraybackslash}p{2.6cm}>{\centering\arraybackslash}p{2.4cm}>{\raggedright\arraybackslash}p{3.0cm}>{\raggedright\arraybackslash}p{\dimexpr\linewidth-8.0cm-6\tabcolsep\relax}@{}}
+\caption{Hiệu năng vận hành thực tế của 6 hàm AWS Lambda trong hệ thống SatiBot}\label{tab:lambda_performance}\\
 \toprule
-\textbf{Kịch bản} & \textbf{Kết quả và bằng chứng} \\
+\textbf{Hàm Lambda} & \textbf{RAM / Timeout} & \textbf{Invoke \& Cold Start} & \textbf{Init Duration, Latency \& Đặc điểm vận hành}\\
 \midrule
 \endfirsthead
-\toprule
-\textbf{Kịch bản} & \textbf{Kết quả và bằng chứng} \\
-\midrule
 \endhead
-\midrule
 \endfoot
 \bottomrule
 \endlastfoot
-Tạo bucket an toàn & \textbf{Đạt.} Website tạo bucket tại Singapore; cả bốn cờ S3 Block Public Access đều ở trạng thái \texttt{true}. \\
-Quét và khóa public access & \textbf{Đạt.} Quét năm bucket, không có bucket rủi ro hay lỗi quét. Thao tác bật lại đầy đủ Block Public Access cho bucket thử thành công. \\
-Xóa bucket có xác nhận & \textbf{Đạt.} Bước kiểm tra ghi nhận hai object, hai version và hai mục cần xóa. Sau câu xác nhận \texttt{DELETE <bucket-name>}, website xóa hai mục và bucket; danh sách bucket AWS xác nhận không còn bucket thử. \\
-Lifecycle & \textbf{Đạt.} Rule \texttt{transition-demo-to-standard-ia} được bật, chỉ áp dụng cho tiền tố \texttt{demo/}, chuyển sang \texttt{STANDARD\_IA} sau 30 ngày; đọc lại cấu hình S3 khớp kết quả website. \\
-Presigned URL & \textbf{Đạt.} Website cấp URL tải \texttt{demo/hello.txt} có hiệu lực 900 giây. Truy cập URL trả HTTP 200 và đúng nội dung tệp mẫu; URL không được lưu trong báo cáo. \\
-Dung lượng và chi phí & \textbf{Đạt.} Hai object thuộc lớp \texttt{STANDARD}, tổng 1.000.038 byte (0,001000038 GB). Chi phí lưu trữ tham chiếu ở Singapore là 0,000025 USD/tháng. \\
+\code{Chatbot} & 256~MB / 60~s & 273 lượt (25 cold) & Init 128--181~ms; latency TB $\sim 3{,}1$~s (chủ yếu do chờ API Gemini LLM); Peak RAM 107~MB.\\
+\code{Dispatcher} & 512~MB / 60~s & 138 lượt (19 cold) & Init 272--394~ms; latency TB $\sim 2{,}1$~s (gồm lấy credential tạm qua STS và gọi Boto3 đa tài khoản); Peak RAM 255~MB.\\
+\code{Formatter} & 256~MB / 30~s & 132 lượt (17 cold) & Init 81--112~ms; latency TB $\sim 3{,}1$~s (chờ Gemini tổng hợp và phát AppSync GraphQL); Peak RAM 96~MB.\\
+\code{Connector} & 256~MB / 30~s & 94 lượt (32 cold) & Init 297--398~ms; latency TB $\sim 0{,}5$~s (kiểm tra kết nối STS và ghi cấu hình DynamoDB); Peak RAM 93~MB.\\
+\code{History} & 256~MB / 30~s & 403 lượt (18 cold) & Init 254--372~ms; Warm \textbf{2--9~ms} (TB 76~ms) khi query DynamoDB; Peak RAM 92~MB.\\
+\code{HealthCheck} & 256~MB / 15~s & 85 lượt (33 cold) & Init 66--101~ms; Warm \textbf{1--2~ms} (TB 7,6~ms) phục vụ Route~53 Health Check; Peak RAM 33~MB.\\
 \end{longtable}
-\addtocounter{table}{-1}% Longtable increments the counter even with an unnumbered caption.
 \endgroup
 
-Ca phân quyền bổ sung: yêu cầu tạo bucket ngoài tiền tố được cấp quyền trả
-\texttt{AccessDenied}; ActionHistory ghi \texttt{ERROR} và AWS xác nhận
-bucket đó không được tạo. Sau kiểm thử, bucket thử và hai object đã được xóa
-qua website. Mức chi phí ở trên chỉ là dự toán lưu trữ theo đơn giá tham
-chiếu, không bao gồm request, truyền dữ liệu hoặc các khoản trên hóa đơn AWS.
+Từ số liệu đo đạc thực tế, nhóm rút ra ba điểm cải tiến kỹ thuật cốt lõi đã được kiểm chứng và đưa vào hệ thống vận hành:
+\begin{enumerate}[itemsep=3pt,topsep=2pt]
+  \item \textbf{Phân tách rõ Latency Bottleneck:} Tầng serverless nội bộ phản hồi rất nhanh ở trạng thái Warm (\textbf{2--9~ms} ở \code{History} và \textbf{1--2~ms} ở \code{HealthCheck}); Chatbot và Formatter có latency trung bình khoảng 3,1 giây mỗi hàm, chủ yếu do gọi Gemini LLM API, nên kiến trúc bất đồng bộ Step Functions kết hợp AppSync WebSocket giúp UI không bị block trong lúc chờ xử lý.
+  \item \textbf{Giới hạn mức tăng bộ nhớ của \code{Dispatcher} cache:} Phân tích CloudWatch Logs phát hiện bộ nhớ sử dụng tăng dần khi lưu các session/client phục vụ STS \code{AssumeRole} tới sát ngưỡng 255/256~MB sau khoảng 10 lần gọi liên tiếp. Nhóm đã giới hạn kích thước cache tối đa 8 session, tái sử dụng \code{boto3.client} dùng chung tài nguyên và chuẩn hóa nâng RAM của \code{Dispatcher} lên \textbf{512~MB} qua CI/CD pipeline.
+  \item \textbf{\textit{AST Guardrail} khắc phục lỗi sinh code của LLM:} Bổ sung các quy tắc kiểm tra trên AST trước khi đóng gói giúp phát hiện việc dùng nhầm các định danh theo cú pháp JSON (\code{true}/\code{false}/\code{null}) và gợi ý sửa về chuẩn Python (\code{True}/\code{False}/\code{None}), nâng độ ổn định khi tạo và cập nhật Lambda bằng ngôn ngữ tự nhiên.
+\end{enumerate}
 
-
-\subsubsection{Nghiệm thu WAF và trang thông báo lỗi dự phòng}
-
-Ngày 12/11/2026, nhóm kiểm thử website bản thử trên CloudFront. Khu vực
-triển khai chính là \texttt{ap-southeast-1}. Web ACL của AWS WAF được gắn với
-distribution chính:
-request truy cập trang chủ hợp lệ trả HTTP 200, còn request thử mẫu XSS trong
-tham số truy vấn trả HTTP 403. Dữ liệu sampled request của WAF ghi nhận hành
-động \texttt{BLOCK} do nhóm \texttt{AWSManagedRulesCommonRuleSet},
-quy tắc chống XSS trong tham số truy vấn.
-Bằng chứng gồm mã HTTP, trạng thái CloudFront và tên quy tắc được lưu tại
-\path{evidence/sprint4-web-acceptance.json}; dữ liệu không lưu địa chỉ IP.
-
-Bằng chứng ở phiên nghiệm thu trước được thu trên cấu hình hai distribution độc lập.
-Kiến trúc demo hiện tại đã thống nhất một CloudFront với hai S3 origin.
-Bài nghiệm thu mới phải làm origin chính timeout và kiểm tra thông báo lỗi trên cùng URL chính.
-Lệnh \code{accept_frontend_sprint4.py --expect-failover} chỉ quan sát sau khi đã chủ động gây timeout;
-kết quả cũ bên dưới chưa chứng minh chuyển origin trên kiến trúc mới.
-
-\begin{figure}[!htbp]
-\centering
-\includegraphics[width=0.9\linewidth,height=0.42\textheight,keepaspectratio]{evidence/sprint4-error-page.png}
-\caption{Trang thông báo lỗi dự phòng trên CloudFront tại \texttt{us-east-1}}
-\label{fig:sprint4_error_page}
-\end{figure}
-
-\section{KẾ HOẠCH TRIỂN KHAI DỰ ÁN}
-
-\subsection{Kế hoạch triển khai theo từng giai đoạn (05 tuần)}
-
-Dự án được lên kế hoạch thực hiện trong 5 tuần theo mô hình Agile/Scrum, chia thành 5 Sprint tương ứng:
-
-\begin{itemize}
-  \item \textbf{Tuần 1 (Sprint 1) -- Chuẩn bị môi trường, chốt thiết kế và kiểm thử PoC:} Thống nhất quy trình GitHub, phân công và tiêu chí nghiệm thu; chuẩn bị tài khoản AWS và khung hạ tầng CDK. Kiểm thử độc lập Boto3 cho S3, EC2, Lambda, IAM; chốt giao diện, hợp đồng API và thử nghiệm Gemini Function Calling.
-  \item \textbf{Tuần 2 (Sprint 2) -- Dựng hạ tầng nền tảng và tích hợp Backend:} Triển khai React trên S3/CloudFront, Cognito và API Gateway; dựng khung năm Lambda Chatbot, Dispatcher, Formatter, Connector, History. Tạo 05 bảng DynamoDB, phân quyền riêng cho từng Lambda, lưu khóa Gemini trong Secrets Manager; triển khai kết nối AWS qua ExternalId/STS và pipeline build, test, synth hạ tầng.
-  \item \textbf{Tuần 3 (Sprint 3) -- Hoàn thiện ChatOps, Gemini và cập nhật thời gian thực:} Hoàn thiện bốn module quản trị và Tool Schema; tích hợp Gemini tại Chatbot và Formatter. Xây dựng luồng xác nhận qua PendingAction và Step Functions, Dispatcher thực thi bằng STS/Boto3, Formatter lưu ActionHistory và phát kết quả qua AppSync; bổ sung tra cứu lịch sử trên giao diện.
-  \item \textbf{Tuần 4 (Sprint 4) -- Bổ sung bảo vệ, dự phòng và kiểm thử toàn diện:} Cấu hình WAF, Route~53/ACM và chuyển hướng sang trang lỗi tại \texttt{us-east-1}. Hoàn thiện CDK/CloudFormation, phê duyệt triển khai, canary và rollback bằng CodeDeploy/CloudWatch. Kiểm thử nghiệp vụ, phân quyền, xác nhận, lỗi Gemini, kết nối thời gian thực và tối ưu thời gian phản hồi.
-  \item \textbf{Tuần 5 (Sprint 5) -- Nghiệm thu, bàn giao và tổng kết:} Nghiệm thu toàn bộ kịch bản của bốn dịch vụ, luồng ChatOps, pipeline triển khai và failover; hoàn thiện hướng dẫn sử dụng, vận hành, báo cáo và slide. Rà soát, dọn tài nguyên thử nghiệm cùng các cấu hình phát sinh chi phí sau khi hoàn tất demo.
-\end{itemize}
-
-\clearpage
-\subsection{Kế hoạch hành động chi tiết theo từng Sprint}
+\subsection{Vai trò và đóng góp của các thành viên}
 
 \begingroup
-\setlength{\tabcolsep}{4pt}
-\renewcommand{\arraystretch}{1.13}
-\fontsize{11}{14.5}\selectfont
-\begin{longtable}{@{}>{\centering\arraybackslash}p{0.75cm}>{\raggedright\arraybackslash}p{4.6cm}>{\raggedright\arraybackslash}p{3.2cm}>{\raggedright\arraybackslash}p{\dimexpr\linewidth-8.55cm-6\tabcolsep\relax}@{}}
-\caption{Kế hoạch hành động và phân công công việc chi tiết theo từng Sprint}\label{tab:action_plan}\\
+\setlength{\tabcolsep}{6pt}
+\renewcommand{\arraystretch}{1.15}
+\fontsize{10.5}{14}\selectfont
+\begin{longtable}{@{}>{\raggedright\arraybackslash}p{4.0cm}>{\raggedright\arraybackslash}p{\dimexpr\linewidth-4.0cm-2\tabcolsep\relax}@{}}
+\caption{Phân công và kết quả đóng góp của Nhóm 10}\label{tab:team-roles}\\
 \toprule
-\textbf{STT} & \textbf{Hạng mục công việc} & \textbf{Người phụ trách} & \textbf{Kết quả bàn giao}\\
+\textbf{Thành viên} & \textbf{Vai trò phụ trách và kết quả bàn giao} \\
 \midrule
 \endfirsthead
-\toprule
-\textbf{STT} & \textbf{Hạng mục công việc} & \textbf{Người phụ trách} & \textbf{Kết quả bàn giao}\\
-\midrule
 \endhead
-\midrule
 \endfoot
 \bottomrule
 \endlastfoot
-\multicolumn{4}{@{}p{\linewidth}@{}}{\textbf{Giai đoạn 1: Tuần 1 -- Thiết lập quy trình, hạ tầng ban đầu và PoC Boto3 độc lập}}\\*
-1 & Viết và kiểm thử độc lập module Boto3 cho dịch vụ S3 & \mbox{Phạm Đức Hùng} & Module \texttt{s3\_service} (tạo bucket, presign, block public).\\
-2 & Thống nhất kịch bản và kiểm thử module Boto3 cho dịch vụ EC2 & \mbox{Nguyễn Đức Huy} & Module \texttt{ec2\_service} (khởi tạo, bật/tắt, describe).\\
-3 & Thống nhất kịch bản và kiểm thử module Boto3 cho Lambda & \mbox{Trịnh Thiên Quang} & Module \texttt{lambda\_service} (list, invoke, hot config).\\
-4 & Thống nhất quy tắc làm việc, tạo tài khoản AWS và module IAM\par Chuẩn bị khung hạ tầng AWS CDK cho mô hình mở rộng. & \mbox{Cao Anh Minh} & Quy chuẩn mã nguồn, AWS Account chung, module \texttt{iam\_service}.\par Khung Primary Stack, Error Page Stack và DNS/Failover Stack; cấu hình region chính và region trang lỗi.\\
-\midrule
-\multicolumn{4}{@{}p{\linewidth}@{}}{\textbf{Giai đoạn 2: Tuần 2 -- Dựng hạ tầng nền tảng Serverless, Giao diện và Tích hợp Backend}}\\*
-5 & Phát triển khung giao diện React cơ bản trên S3/CloudFront\par Cấu hình AWS WAF cho CloudFront; dựng trang thông báo lỗi trên S3/CloudFront ở region phụ. & \mbox{Phạm Đức Hùng} & Giao diện Web Chat responsive, CDN CloudFront với HTTPS.\par Web ACL với managed rules và rate limit theo đặc tả; trang error.html tại us-east-1; script build frontend dùng trong CI/CD.\\
-6 & Cấu hình luồng đăng nhập và quản lý danh tính qua Cognito\par Cấu hình tên miền web/API qua Route 53 và chứng chỉ ACM; chuẩn bị health check. & \mbox{Nguyễn Đức Huy} & Luồng Login/Register qua Cognito, JWT Authorizer trên Gateway.\par Bản ghi DNS, chứng chỉ cho tên miền web/API và cấu hình kiểm tra /health phục vụ failover.\\
-7 & Dựng Lambda Backend trung tâm và tích hợp các module Boto3\par Mở rộng Backend theo các vai trò Chatbot, Dispatcher, Formatter, Connector, History; thiết lập CI. & \mbox{Trịnh Thiên Quang} & Lambda Backend tiếp nhận request và tích hợp các module Boto3.\par Khung năm Lambda, API kết nối AWS/tra cứu lịch sử; CodeConnections, CodePipeline, CodeBuild chạy pytest, build frontend và cdk synth.\\
-8 & Cấu hình IAM Role cho Backend và thiết kế 05 bảng DynamoDB\par Cấp quyền riêng cho từng Lambda, Step Functions và pipeline; quản lý khóa Gemini bằng Secrets Manager. & \mbox{Cao Anh Minh} & IAM Execution Role, 05 bảng DynamoDB cơ sở.\par Policy theo chức năng, quyền đọc/ghi đúng bảng; chỉ Chatbot/Formatter đọc khóa Gemini; mẫu role đích có ExternalId và cấu hình CDK nền tảng.\\
-\midrule
-\multicolumn{4}{@{}p{\linewidth}@{}}{\textbf{Giai đoạn 3: Tuần 3 -- Tích hợp AI Chatbot, Step Functions và AppSync}}\\*
-9 & Định nghĩa Function Calling và Prompt cho dịch vụ S3\par Ghép thẻ xác nhận, kết quả thực thi và lịch sử trên giao diện với Backend mở rộng. & \mbox{Phạm Đức Hùng} & Bộ Tool Schema cho S3, hỗ trợ kênh WebSocket AppSync.\par Giao diện nhận sự kiện AppSync theo người dùng/phiên; hiển thị kết quả và lịch sử từ API Backend.\\
-10 & Định nghĩa Function Calling cho EC2 và ghép luồng LLM\par Hoàn thiện DNS failover giữa website chính và trang thông báo lỗi. & \mbox{Nguyễn Đức Huy} & Bộ Tool Schema cho EC2, hoàn thiện ghép luồng LLM.\par Health check và bản ghi Primary/Secondary; kết quả thử chuyển sang trang lỗi và phục hồi website chính.\\
-11 & Tích hợp API LLM, xử lý phản hồi Function Calling tại Backend\par Tích hợp Gemini vào Chatbot/Formatter; hoàn thiện các Lambda nghiệp vụ của Backend mở rộng. & \mbox{Trịnh Thiên Quang} & Xử lý phản hồi Function Calling và tích hợp LLM vào Backend.\par Chatbot lưu phiên/hành động chờ; Dispatcher thực thi Boto3; Formatter lưu lịch sử, phát AppSync và có lời đáp dự phòng; Connector kiểm tra STS, History truy vấn lịch sử.\\
-12 & Hoàn thiện Prompt IAM, xây dựng Step Functions State Machine\par Ghép State Machine với Backend mở rộng và luồng xác nhận hành động. & \mbox{Cao Anh Minh} & State Machine điều phối luồng thực thi, xác thực STS.\par Workflow gọi các Lambda đúng thứ tự; đối soát hành động, chủ sở hữu và hạn xác nhận; phối hợp Backend chống thực thi lặp.\\
-\midrule
-\multicolumn{4}{@{}p{\linewidth}@{}}{\textbf{Giai đoạn 4: Tuần 4 -- Kiểm thử toàn diện, Phân quyền và Tối ưu hóa}}\\*
-13 & Kiểm thử hệ thống, tối ưu hóa module S3\par Kiểm thử WAF, trang lỗi và cập nhật giao diện qua AppSync. & \mbox{Phạm Đức Hùng} & Báo cáo kiểm thử S3, tối ưu giao diện truyền tải file.\par Kết quả kiểm thử request hợp lệ/bị chặn; hiển thị trang lỗi, kết nối lại AppSync và đối soát kết quả trên giao diện.\\
-14 & Kiểm thử hệ thống, tối ưu module EC2, dọn dẹp tài nguyên\par Kiểm thử DNS/TLS, health check và failover. & \mbox{Nguyễn Đức Huy} & Báo cáo kiểm thử EC2, kịch bản FinOps cảnh báo máy ảo.\par Bằng chứng chuyển sang trang lỗi khi hệ thống chính lỗi và phục hồi khi hoạt động lại; kiểm tra tên miền/chứng chỉ web/API.\\
-15 & Kiểm thử phân quyền, tối ưu hệ thống Backend\par Hoàn thiện và kiểm thử CI/CD, triển khai canary/rollback; kiểm thử các Lambda mở rộng. & \mbox{Trịnh Thiên Quang} & Báo cáo kiểm thử phân quyền, tối ưu Cold-start của Lambda.\par Pipeline phê duyệt thủ công, triển khai CDK/CloudFormation và CodeDeploy; kiểm thử lỗi Gemini, Connector, History và xác nhận lặp; bằng chứng canary/rollback.\\
-16 & Kiểm thử trường hợp thiếu quyền (AccessDenied), CloudWatch Log\par Cấu hình CloudWatch Alarm cho CodeDeploy; rà soát quyền secret, workflow và pipeline. & \mbox{Cao Anh Minh} & Xử lý lỗi phân quyền, tập trung hóa log trên CloudWatch.\par Alarm phục vụ rollback; báo cáo AccessDenied, quyền giữa các Lambda và truy cập chéo người dùng; log truy vết cho Backend mở rộng.\\
-\midrule
-\multicolumn{4}{@{}p{\linewidth}@{}}{\textbf{Giai đoạn 5: Tuần 5 -- Nghiệm thu, Tổng kết dự án và Đóng gói báo cáo}}\\*
-17 & Hoàn thiện báo cáo phần S3\par Bổ sung nội dung WAF, giao diện mở rộng và trang thông báo lỗi vào báo cáo/demo. & \mbox{Phạm Đức Hùng} & Nội dung báo cáo S3.\par Tài liệu cấu hình WAF, S3/CloudFront dự phòng; hình ảnh và kịch bản demo giao diện mới.\\
-18 & Tổng hợp kết quả nghiệm thu EC2\par Tổng hợp nghiệm thu Route 53/ACM và failover; ghi nhận dọn tài nguyên thử nghiệm. & \mbox{Nguyễn Đức Huy} & Nội dung báo cáo EC2.\par Kết quả DNS/TLS, health check, chuyển hướng/phục hồi; danh sách tài nguyên EC2/DNS thử nghiệm đã xử lý.\\
-19 & Nghiệm thu luồng Lambda, hoàn thiện tài liệu hướng dẫn\par Bổ sung tài liệu Backend mở rộng, Gemini và CI/CD. & \mbox{Trịnh Thiên Quang} & Nội dung báo cáo Lambda, tài liệu vận hành.\par Hướng dẫn năm Lambda, cấu hình Gemini, build/deploy, canary/rollback và xử lý lỗi; kết quả nghiệm thu pipeline.\\
-20 & Tổng kết dự án, hoàn thiện báo cáo tổng thể\par Tổng hợp phần kiến trúc mở rộng và rà soát chi phí sau demo. & \mbox{Cao Anh Minh} & Bản báo cáo hoàn chỉnh.\par Nội dung tổng hợp ba stack, phân quyền, bảo mật và dự phòng; checklist dọn tài nguyên thử nghiệm và đối soát chi phí của cả nhóm.\\
+Cao Anh Minh \textbf{(Trưởng nhóm)} & Thiết kế kiến trúc tổng thể, phân quyền IAM, mô hình 5 bảng DynamoDB, điều phối tích hợp đa dịch vụ (Step Functions, AppSync, nền tảng CDK Data/IAM) và tổng hợp báo cáo. \\
+Trịnh Thiên Quang & Phát triển cụm 5 Lambda backend, tích hợp Gemini API, thiết lập CI/CD Pipeline (\textit{CodePipeline/CodeDeploy Canary}), tối ưu memory cache và nghiệm thu 12/12 công cụ quản trị AWS Lambda. \\
+Phạm Đức Hùng & Xây dựng module quản trị và nghiệm thu 6 kịch bản Amazon S3; phát triển giao diện React, kết nối frontend AppSync, cấu hình AWS WAF và trang fallback tại \code{us-east-1}. \\
+Nguyễn Đức Huy & Xây dựng module quản trị Amazon EC2, lớp xác thực Amazon Cognito / API Gateway, cấu hình tên miền \code{satibot.id.vn}, chứng chỉ ACM và định tuyến Route~53 Health Check / Failover. \\
 \end{longtable}
 \endgroup
+
+\subsection{Liên kết sản phẩm, tài liệu bổ trợ và kết luận}
+
+\begin{itemize}[itemsep=3pt,topsep=2pt]
+  \item \textbf{Ứng dụng đã triển khai:} \url{https://satibot.id.vn/} (API Health Check: \url{https://api.satibot.id.vn/api/health}).
+  \item \textbf{Mã nguồn GitHub:} \url{https://github.com/minhcaoj/SitaBot}.
+  \item \textbf{Slide báo cáo cuối kỳ:} \textit{[Bổ sung đường dẫn slide khi nộp bài]}.
+  \item \textbf{Video trình bày và demo hệ thống:} \textit{[Bổ sung đường dẫn video sau khi quay và tải lên]}.
+  \item \textbf{Tài liệu bổ trợ \& Nhật ký công việc:} Báo cáo Progress~1, Progress~2, bộ test tự động (\path{tests/}, \path{frontend/}), dữ liệu đối chiếu WAF (\path{evidence/}) và lịch sử commit/Pull Request trên GitHub (biên bản họp nhóm đính kèm khi nộp).
+\end{itemize}
+
+\noindent\textbf{Kết luận.} Nhóm đã triển khai và đưa vào vận hành hoàn chỉnh hệ thống SatiBot tại \url{https://satibot.id.vn/} với hạ tầng khai báo bằng AWS CDK, backend tại region chính và trang thông báo dự phòng tại region thứ hai, quy trình CI/CD kết hợp CodeDeploy Canary từ GitHub lên AWS có bước phê duyệt thủ công, lớp bảo mật biên WAF và Origin Failover hoạt động ổn định, cùng phân hệ quản trị ChatOps an toàn qua AWS Lambda và Amazon S3.
 
 \end{document}
